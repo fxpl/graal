@@ -294,6 +294,34 @@ public final class EspressoOptions {
                     usageSyntax = "hotspot|strict") //
     public static final OptionKey<SpecComplianceMode> SpecCompliance = new OptionKey<>(SpecComplianceMode.HOTSPOT, SPEC_COMPLIANCE_OPTION_TYPE);
 
+    /**
+     * Selects the memory model used for shared-memory accesses and synchronisation (Sync-as-Share).
+     * {@code SHARED} is the stock, sequentially-consistent shared-memory behaviour (identity: the
+     * seam folds away under partial evaluation, so there is zero overhead). {@code LINEAR} selects
+     * the Linear version-controlled memory model.
+     */
+    public enum MemoryModelMode {
+        SHARED,
+        LINEAR
+    }
+
+    private static final OptionType<MemoryModelMode> MEMORY_MODEL_OPTION_TYPE = new OptionType<>("MemoryModel", new Function<String, MemoryModelMode>() {
+        @Override
+        public MemoryModelMode apply(String s) {
+            try {
+                return MemoryModelMode.valueOf(s.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("--java.MemoryModel: Mode can be 'shared' or 'linear'.");
+            }
+        }
+    });
+
+    @Option(help = "Selects the memory model: 'shared' (stock sequentially-consistent shared memory) or 'linear' (Sync-as-Share Linear version-controlled memory).", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "shared|linear") //
+    public static final OptionKey<MemoryModelMode> MemoryModel = new OptionKey<>(MemoryModelMode.SHARED, MEMORY_MODEL_OPTION_TYPE);
+
     public enum VerifyMode {
         NONE,
         REMOTE, // Verifies all bytecodes not loaded by the bootstrap class loader.

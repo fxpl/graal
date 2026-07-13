@@ -105,6 +105,8 @@ import com.oracle.truffle.espresso.libs.LibsMeta;
 import com.oracle.truffle.espresso.libs.LibsState;
 import com.oracle.truffle.espresso.libs.libzip.LibZipState;
 import com.oracle.truffle.espresso.libs.libzip.PureJavaLibZipFilter;
+import com.oracle.truffle.espresso.memory.MemoryModel;
+import com.oracle.truffle.espresso.memory.SharedMemoryModel;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.interop.EspressoForeignProxyGenerator;
@@ -195,6 +197,7 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
     @CompilationFinal private VM vm;
     @CompilationFinal private JniEnv jniEnv;
     @CompilationFinal private InterpreterToVM interpreterToVM;
+    @CompilationFinal private MemoryModel memoryModel;
     @CompilationFinal private JImageLibrary jimageLibrary;
     @CompilationFinal private EspressoProperties vmProperties;
     @CompilationFinal private AgentLibraries agents;
@@ -431,6 +434,18 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
         try (DebugCloseable spawn = SPAWN_VM.scope(espressoEnv.getTimers())) {
 
             long initStartTimeNanos = System.nanoTime();
+
+            // Select the memory model (Sync-as-Share). SHARED is the stock identity; LINEAR arrives
+            // at milestone M2. The per-thread views and version history are not wired yet.
+            switch (getLanguage().getMemoryModelMode()) {
+                case SHARED:
+                    this.memoryModel = SharedMemoryModel.INSTANCE;
+                    break;
+                case LINEAR:
+                    throw EspressoError.unimplemented("The Linear memory model (--java.MemoryModel=linear) is not yet implemented; it arrives at milestone M2.");
+                default:
+                    throw EspressoError.shouldNotReachHere("Unknown memory model: " + getLanguage().getMemoryModelMode());
+            }
 
             nativeAccess = spawnNativeAccess();
             if (getLanguage().useEspressoLibs()) {
@@ -868,6 +883,10 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
 
     public InterpreterToVM getInterpreterToVM() {
         return interpreterToVM;
+    }
+
+    public MemoryModel getMemoryModel() {
+        return memoryModel;
     }
 
     public VM getVM() {

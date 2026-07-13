@@ -1982,6 +1982,11 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     private void arrayLoad(VirtualFrame frame, int top, int curBCI, int loadOpcode) {
         assert IALOAD <= loadOpcode && loadOpcode <= SALOAD;
         CompilerAsserts.partialEvaluationConstant(loadOpcode);
+        if (getLanguage().isMemoryModelEnabled()) {
+            // Sync-as-Share seam. Folds away under --java.MemoryModel=shared (PE-constant false).
+            // M2 routes the array element read through the version-controlled MemoryModel.
+            throw EspressoError.unimplemented("Sync-as-Share arrayLoad hook (milestone M2)");
+        }
         int index = popInt(frame, top - 1);
         StaticObject array = nullCheck(popObject(frame, top - 2));
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
@@ -2014,6 +2019,11 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     private void arrayStore(VirtualFrame frame, int top, int curBCI, int storeOpcode) {
         assert IASTORE <= storeOpcode && storeOpcode <= SASTORE;
         CompilerAsserts.partialEvaluationConstant(storeOpcode);
+        if (getLanguage().isMemoryModelEnabled()) {
+            // Sync-as-Share seam. Folds away under --java.MemoryModel=shared (PE-constant false).
+            // M2 stages the array element write into the thread-local view.
+            throw EspressoError.unimplemented("Sync-as-Share arrayStore hook (milestone M2)");
+        }
         int offset = (storeOpcode == LASTORE || storeOpcode == DASTORE) ? 2 : 1;
         int index = popInt(frame, top - 1 - offset);
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
@@ -2045,6 +2055,11 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     }
 
     private void referenceArrayStore(VirtualFrame frame, int top, int index, StaticObject array) {
+        if (getLanguage().isMemoryModelEnabled()) {
+            // Sync-as-Share seam (object-array store, AASTORE always routes here). Folds away under
+            // --java.MemoryModel=shared (PE-constant false). M2 stages the store into the thread-local view.
+            throw EspressoError.unimplemented("Sync-as-Share referenceArrayStore hook (milestone M2)");
+        }
         if (refArrayStoreNode == null) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             atomic(() -> {
@@ -2757,6 +2772,12 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         CompilerAsserts.partialEvaluationConstant(field);
         CompilerAsserts.partialEvaluationConstant(mode);
 
+        if (getLanguage().isMemoryModelEnabled()) {
+            // Sync-as-Share seam. Folds away under --java.MemoryModel=shared (PE-constant false).
+            // M2 stages the field write into the thread-local view instead of the InterpreterToVM path.
+            throw EspressoError.unimplemented("Sync-as-Share putField hook (milestone M2)");
+        }
+
         Method method = getMethod();
         EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
 
@@ -2873,6 +2894,13 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
 
         Method method = getMethod();
         EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
+
+        if (getLanguage().isMemoryModelEnabled()) {
+            // Sync-as-Share seam. Folds away entirely under --java.MemoryModel=shared (the flag is a
+            // partial-evaluation constant false). M2 routes the field read through the version-controlled
+            // MemoryModel (staging into the thread-local view) instead of the InterpreterToVM path below.
+            throw EspressoError.unimplemented("Sync-as-Share getField hook (milestone M2)");
+        }
 
         int slot = top - 1;
         StaticObject receiver;
