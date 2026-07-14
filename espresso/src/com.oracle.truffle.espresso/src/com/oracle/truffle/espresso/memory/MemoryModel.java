@@ -70,11 +70,8 @@ public interface MemoryModel {
     /** Stage a write of a field of {@code holder} into the calling thread's view (boxed value). */
     void writeField(StaticObject holder, Field field, Object value);
 
-    /** As {@link #readField} but for an array element (staged, else base snapshot, else {@link #ABSENT}). */
-    Object readArray(StaticObject array, int index);
-
-    /** As {@link #writeField} but for an array element. */
-    void writeArray(StaticObject array, int index, Object value);
+    // Array elements are intentionally NOT part of the interface: Sync-as-Share does not define array
+    // semantics, so versioned array access errors out (see BytecodeNode.arraysUnsupported).
 
     // --- Synchronisation actions (Table 1). May report a conflict. ---
 
