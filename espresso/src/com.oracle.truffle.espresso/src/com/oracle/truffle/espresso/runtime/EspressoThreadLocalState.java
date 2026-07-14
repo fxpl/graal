@@ -32,6 +32,7 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.memory.LinearLocalView;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.vm.VM;
 
@@ -59,11 +60,23 @@ public class EspressoThreadLocalState {
 
     private List<PinnedObject> pinnedObjects;
 
+    // Sync-as-Share: this thread's private view of memory (staging area + base version). Lazily
+    // created; only ever touched under a non-stock memory model, so it costs nothing under shared.
+    private LinearLocalView memoryView;
+
     @SuppressWarnings("unused")
     public EspressoThreadLocalState(EspressoContext context, Thread t) {
         typeStack = new ClassRegistry.TypeStack();
         privilegedStack = new VM.PrivilegedStack(context);
         assert ((hostThread = new WeakReference<>(t)) != null);
+    }
+
+    /** This guest thread's Sync-as-Share memory view, created on first use. */
+    public LinearLocalView getMemoryView() {
+        if (memoryView == null) {
+            memoryView = new LinearLocalView();
+        }
+        return memoryView;
     }
 
     public StaticObject getPendingExceptionObject() {

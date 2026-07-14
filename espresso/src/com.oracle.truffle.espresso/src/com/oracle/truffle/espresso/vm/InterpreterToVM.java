@@ -396,17 +396,17 @@ public final class InterpreterToVM extends ContextAccessImpl {
     // region Monitor enter/exit
 
     public static void monitorEnter(@JavaType(Object.class) StaticObject obj, Meta meta) {
-        if (meta.getContext().getLanguage().isMemoryModelEnabled()) {
-            // Sync-as-Share seam (union choke for monitor bytecodes + synchronized methods). Folds away
-            // under --java.MemoryModel=shared (PE-constant false). M2 performs the lock pull (import +
-            // conflict check) against the version history here.
-            throw EspressoError.unimplemented("Sync-as-Share monitorEnter hook (milestone M2)");
-        }
         meta.getContext().getLanguage().getThreadLocalState().blockContinuationSuspension();
         final EspressoLock lock = obj.getLock(meta.getContext());
         EspressoContext context = meta.getContext();
         if (!monitorTryLock(lock)) {
             contendedMonitorEnter(obj, meta, lock, context);
+        }
+        if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+            // Sync-as-Share: lock = pull. After acquiring, import updates published to g by the previous
+            // holder's unlock and conflict-check this thread's staged writes. Folds away under shared;
+            // off during JDK bootstrap.
+            context.getMemoryModel().onMonitorEnter();
         }
     }
 
@@ -438,16 +438,16 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public static void monitorExit(@JavaType(Object.class) StaticObject obj, Meta meta) {
-        if (meta.getContext().getLanguage().isMemoryModelEnabled()) {
-            // Sync-as-Share seam. Folds away under --java.MemoryModel=shared (PE-constant false).
-            // M2 performs the unlock pull+push (publish the thread's view to the monitor) here.
-            throw EspressoError.unimplemented("Sync-as-Share monitorExit hook (milestone M2)");
-        }
         final EspressoLock lock = obj.getLock(meta.getContext());
         if (!holdsLock(lock)) {
             // No owner checks in SVM. This is a safeguard against unbalanced monitor accesses until
             // Espresso has its own monitor handling.
             throw meta.throwException(meta.java_lang_IllegalMonitorStateException);
+        }
+        if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive()) {
+            // Sync-as-Share: unlock = push. Publish this thread's view to g while still holding the
+            // lock (may raise a conflict). Folds away under shared; off during JDK bootstrap.
+            meta.getContext().getMemoryModel().onMonitorExit();
         }
         meta.getContext().getLanguage().getThreadLocalState().unblockContinuationSuspension();
         monitorUnsafeExit(lock);

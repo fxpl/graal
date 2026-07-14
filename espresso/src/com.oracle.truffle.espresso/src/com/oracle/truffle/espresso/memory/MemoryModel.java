@@ -22,6 +22,9 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+
 /**
  * Per-context memory-model service for Sync-as-Share.
  *
@@ -41,9 +44,56 @@ package com.oracle.truffle.espresso.memory;
 public interface MemoryModel {
 
     /**
+     * Sentinel returned by {@link #readField} when a location has no versioned value visible to the
+     * calling thread. The caller then reads through to the real heap (the pre-main heap is the
+     * implicit initial committed version). Distinct from every real value: boxed primitives and
+     * {@code StaticObject} (incl. {@code StaticObject.NULL}) are never {@code == ABSENT}.
+     */
+    Object ABSENT = new Object();
+
+    /**
      * Whether this model changes shared-memory semantics. {@code false} for the stock
      * {@link SharedMemoryModel}; {@code true} for version-controlled models. Mirrors
      * {@link com.oracle.truffle.espresso.EspressoLanguage#isMemoryModelEnabled()}.
      */
     boolean isEnabled();
+
+    // --- Ordinary field access (called only when enabled; the hot-path guard folds under shared) ---
+
+    /**
+     * Read a field of {@code holder} through the calling thread's view: the staged value, else the
+     * value visible at the thread's base version, else {@link #ABSENT} (read through to the heap).
+     * The result is boxed for primitives, a {@code StaticObject} for reference fields.
+     */
+    Object readField(StaticObject holder, Field field);
+
+    /** Stage a write of a field of {@code holder} into the calling thread's view (boxed value). */
+    void writeField(StaticObject holder, Field field, Object value);
+
+    // --- Synchronisation actions (Table 1). May raise a guest conflict exception. ---
+
+    void onThreadStart();
+
+    void onThreadEnd();
+
+    void onMonitorEnter();
+
+    void onMonitorExit();
+
+    // --- Activation gate ---
+
+    /**
+     * Whether versioning is live. It is <em>off</em> during JDK bootstrap — the pre-main heap is the
+     * initial committed version, and versioning it would both be pointless and break VM substitutions
+     * that read fields directly off the heap — and flipped on before user {@code main}. The hot-path
+     * hooks test {@code isMemoryModelEnabled() && model.isActive()}; the first conjunct is the
+     * PE-constant, so the whole hook still folds away under {@code shared}.
+     */
+    default boolean isActive() {
+        return false;
+    }
+
+    /** Turn versioning on. Called once, after context bootstrap completes and before user code runs. */
+    default void activate() {
+    }
 }

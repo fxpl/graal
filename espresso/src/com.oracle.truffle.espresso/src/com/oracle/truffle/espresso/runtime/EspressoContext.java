@@ -105,6 +105,7 @@ import com.oracle.truffle.espresso.libs.LibsMeta;
 import com.oracle.truffle.espresso.libs.LibsState;
 import com.oracle.truffle.espresso.libs.libzip.LibZipState;
 import com.oracle.truffle.espresso.libs.libzip.PureJavaLibZipFilter;
+import com.oracle.truffle.espresso.memory.LinearMemoryModel;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.SharedMemoryModel;
 import com.oracle.truffle.espresso.meta.EspressoError;
@@ -361,6 +362,11 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
             espressoEnv.getJdwpContext().jdwpInit(getEnv(), getMainThread(), espressoEnv.getEventListener());
         }
 
+        // Sync-as-Share: bootstrap is complete, so the current heap is the initial committed version.
+        // Turn versioning on now, so user code (from main onward) is versioned while the JDK bootstrap
+        // is not. No-op under shared.
+        getMemoryModel().activate();
+
         if (EspressoOptions.CDS.getValue(getEnv().getOptions()) == XShareOption.dump) {
             CDSSupport cds = getCDS();
             if (cds != null && cds.isDumpingStaticArchive()) {
@@ -442,7 +448,8 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
                     this.memoryModel = SharedMemoryModel.INSTANCE;
                     break;
                 case LINEAR:
-                    throw EspressoError.unimplemented("The Linear memory model (--java.MemoryModel=linear) is not yet implemented; it arrives at milestone M2.");
+                    this.memoryModel = new LinearMemoryModel(this);
+                    break;
                 default:
                     throw EspressoError.shouldNotReachHere("Unknown memory model: " + getLanguage().getMemoryModelMode());
             }

@@ -60,10 +60,19 @@ final class GuestRunnable implements Runnable {
             context.registerCurrentThread(thread);
             context.getVM().attachThread(Thread.currentThread());
             try {
+                // Sync-as-Share: thread start = pull g into this thread's view (cannot conflict).
+                if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+                    context.getMemoryModel().onThreadStart();
+                }
                 // Execute the payload
                 context.getThreadAccess().checkDeprecatedThreadStatus(thread);
                 context.getMeta().java_lang_Thread_run.invokeDirectVirtual(thread);
                 context.getThreadAccess().checkDeprecatedThreadStatus(thread);
+                // Sync-as-Share: thread end = push this thread's view to g (may raise a conflict,
+                // which then surfaces via the uncaught-exception path below).
+                if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+                    context.getMemoryModel().onThreadEnd();
+                }
             } catch (EspressoException uncaught) {
                 dispatchUncaught.call(thread, uncaught.getGuestException());
             }

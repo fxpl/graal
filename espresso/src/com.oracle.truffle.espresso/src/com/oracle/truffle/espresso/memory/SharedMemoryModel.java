@@ -22,6 +22,10 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.meta.EspressoError;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+
 /**
  * The stock, sequentially-consistent shared-memory model (the identity). This is the default and is
  * never consulted on the interpreter hot path: the Sync-as-Share hooks are guarded by the
@@ -39,5 +43,38 @@ public final class SharedMemoryModel implements MemoryModel {
     @Override
     public boolean isEnabled() {
         return false;
+    }
+
+    // None of the following are ever reached: the hot-path hooks are guarded by the PE-constant
+    // EspressoLanguage.isMemoryModelEnabled() (false for shared), so they fold away before any call.
+
+    @Override
+    public Object readField(StaticObject holder, Field field) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.readField: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void writeField(StaticObject holder, Field field, Object value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.writeField: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onThreadStart() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onThreadStart: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onThreadEnd() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onThreadEnd: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onMonitorEnter() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onMonitorEnter: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onMonitorExit() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onMonitorExit: memory-model hooks must be folded under shared");
     }
 }

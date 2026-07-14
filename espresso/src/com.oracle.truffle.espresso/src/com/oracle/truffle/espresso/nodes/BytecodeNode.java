@@ -335,6 +335,7 @@ import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.impl.Method.MethodVersion;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
+import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.helper.EspressoReferenceArrayStoreNode;
@@ -1982,11 +1983,8 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     private void arrayLoad(VirtualFrame frame, int top, int curBCI, int loadOpcode) {
         assert IALOAD <= loadOpcode && loadOpcode <= SALOAD;
         CompilerAsserts.partialEvaluationConstant(loadOpcode);
-        if (getLanguage().isMemoryModelEnabled()) {
-            // Sync-as-Share seam. Folds away under --java.MemoryModel=shared (PE-constant false).
-            // M2 routes the array element read through the version-controlled MemoryModel.
-            throw EspressoError.unimplemented("Sync-as-Share arrayLoad hook (milestone M2)");
-        }
+        // Sync-as-Share: array element locations are M3; arrays are not intercepted in M2 (they use
+        // the stock heap path below under every model).
         int index = popInt(frame, top - 1);
         StaticObject array = nullCheck(popObject(frame, top - 2));
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
@@ -2019,11 +2017,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     private void arrayStore(VirtualFrame frame, int top, int curBCI, int storeOpcode) {
         assert IASTORE <= storeOpcode && storeOpcode <= SASTORE;
         CompilerAsserts.partialEvaluationConstant(storeOpcode);
-        if (getLanguage().isMemoryModelEnabled()) {
-            // Sync-as-Share seam. Folds away under --java.MemoryModel=shared (PE-constant false).
-            // M2 stages the array element write into the thread-local view.
-            throw EspressoError.unimplemented("Sync-as-Share arrayStore hook (milestone M2)");
-        }
+        // Sync-as-Share: array element locations are M3; not intercepted in M2 (stock heap path below).
         int offset = (storeOpcode == LASTORE || storeOpcode == DASTORE) ? 2 : 1;
         int index = popInt(frame, top - 1 - offset);
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
@@ -2055,11 +2049,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     }
 
     private void referenceArrayStore(VirtualFrame frame, int top, int index, StaticObject array) {
-        if (getLanguage().isMemoryModelEnabled()) {
-            // Sync-as-Share seam (object-array store, AASTORE always routes here). Folds away under
-            // --java.MemoryModel=shared (PE-constant false). M2 stages the store into the thread-local view.
-            throw EspressoError.unimplemented("Sync-as-Share referenceArrayStore hook (milestone M2)");
-        }
+        // Sync-as-Share: array element locations are M3; not intercepted in M2 (stock path below).
         if (refArrayStoreNode == null) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             atomic(() -> {
@@ -2772,10 +2762,10 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         CompilerAsserts.partialEvaluationConstant(field);
         CompilerAsserts.partialEvaluationConstant(mode);
 
-        if (getLanguage().isMemoryModelEnabled()) {
-            // Sync-as-Share seam. Folds away under --java.MemoryModel=shared (PE-constant false).
-            // M2 stages the field write into the thread-local view instead of the InterpreterToVM path.
-            throw EspressoError.unimplemented("Sync-as-Share putField hook (milestone M2)");
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && isVersionedField(field)) {
+            // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap;
+            // scoped to application classes.
+            return putFieldViaModel(frame, top, field, statementIndex, mode);
         }
 
         Method method = getMethod();
@@ -2887,6 +2877,160 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
      *   curBCI = bs.next(curBCI);
      * </pre>
      */
+    // Sync-as-Share: only version fields of application (non-boot-loaded) classes. JDK core classes
+    // stay on the stock heap path, so library code, VM substitutions, and daemon threads keep reading
+    // and writing real fields (versioning them causes spurious conflicts and stale reads via native).
+    // `field` is a partial-evaluation constant, so this resolves to a per-site constant.
+    private static boolean isVersionedField(Field field) {
+        return !StaticObject.isNull(field.getDeclaringKlass().getDefiningClassLoader());
+    }
+
+    // Sync-as-Share (versioned model): read a field through the calling thread's view. Mirrors the
+    // stock getField per-kind switch, but sources each value from the MemoryModel, falling back to the
+    // real heap when the location has no versioned value (MemoryModel.ABSENT). Assumes Espresso-object
+    // receivers (implicit interop is off under a versioned model in Phase 1).
+    private int getFieldViaModel(VirtualFrame frame, int top, Field field, int statementIndex, FieldAccessType mode) {
+        CompilerAsserts.partialEvaluationConstant(field);
+        Method method = getMethod();
+        EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
+
+        int slot = top - 1;
+        StaticObject receiver = mode.isStatic()
+                        ? initializeAndGetStatics(field)
+                        : nullCheck(popObject(frame, slot));
+
+        MemoryModel model = getContext().getMemoryModel();
+        Object staged = model.readField(receiver, field);
+
+        if (instrumentation != null) {
+            instrumentation.notifyFieldAccess(frame, statementIndex, field, this, receiver);
+        }
+
+        int resultAt = mode.isStatic() ? top : (top - 1);
+        byte typeHeader = field.getType().byteAt(0);
+        // @formatter:off
+        switch (typeHeader) {
+            case 'Z' : putInt(frame, resultAt, (staged != MemoryModel.ABSENT ? ((Boolean) staged ? 1 : 0) : (InterpreterToVM.getFieldBoolean(receiver, field) ? 1 : 0))); break;
+            case 'B' : putInt(frame, resultAt, staged != MemoryModel.ABSENT ? (Byte) staged      : InterpreterToVM.getFieldByte(receiver, field));   break;
+            case 'C' : putInt(frame, resultAt, staged != MemoryModel.ABSENT ? (Character) staged : InterpreterToVM.getFieldChar(receiver, field));   break;
+            case 'S' : putInt(frame, resultAt, staged != MemoryModel.ABSENT ? (Short) staged     : InterpreterToVM.getFieldShort(receiver, field));  break;
+            case 'I' : putInt(frame, resultAt, staged != MemoryModel.ABSENT ? (Integer) staged   : InterpreterToVM.getFieldInt(receiver, field));    break;
+            case 'D' : putDouble(frame, resultAt, staged != MemoryModel.ABSENT ? (Double) staged : InterpreterToVM.getFieldDouble(receiver, field)); break;
+            case 'F' : putFloat(frame, resultAt, staged != MemoryModel.ABSENT ? (Float) staged   : InterpreterToVM.getFieldFloat(receiver, field));  break;
+            case 'J' : putLong(frame, resultAt, staged != MemoryModel.ABSENT ? (Long) staged     : InterpreterToVM.getFieldLong(receiver, field));   break;
+            case '[' : // fall through
+            case 'L' : {
+                StaticObject value = staged != MemoryModel.ABSENT ? (StaticObject) staged : InterpreterToVM.getFieldObject(receiver, field);
+                putObject(frame, resultAt, value);
+                checkNoForeignObjectAssumption(value);
+                break;
+            }
+            default:
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw EspressoError.shouldNotReachHere("unexpected kind");
+        }
+        // @formatter:on
+        int slotCount = (typeHeader == 'J' || typeHeader == 'D') ? 2 : 1;
+        return slotCount;
+    }
+
+    // Sync-as-Share (versioned model): stage a field write into the calling thread's view. Mirrors the
+    // stock putField per-kind switch, staging a boxed value instead of writing the heap.
+    private int putFieldViaModel(VirtualFrame frame, int top, Field field, int statementIndex, FieldAccessType mode) {
+        CompilerAsserts.partialEvaluationConstant(field);
+        CompilerAsserts.partialEvaluationConstant(mode);
+        Method method = getMethod();
+        EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
+
+        byte typeHeader = field.getType().byteAt(0);
+        int slotCount = (typeHeader == 'J' || typeHeader == 'D') ? 2 : 1;
+        int slot = top - slotCount - 1; // -receiver
+        StaticObject receiver = mode.isStatic()
+                        ? initializeAndGetStatics(field)
+                        : nullCheck(popObject(frame, slot));
+
+        MemoryModel model = getContext().getMemoryModel();
+        switch (typeHeader) {
+            case 'Z': {
+                boolean value = stackIntToBoolean(popInt(frame, top - 1));
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, Boolean.valueOf(value));
+                break;
+            }
+            case 'B': {
+                byte value = (byte) popInt(frame, top - 1);
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, Byte.valueOf(value));
+                break;
+            }
+            case 'C': {
+                char value = (char) popInt(frame, top - 1);
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, Character.valueOf(value));
+                break;
+            }
+            case 'S': {
+                short value = (short) popInt(frame, top - 1);
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, Short.valueOf(value));
+                break;
+            }
+            case 'I': {
+                int value = popInt(frame, top - 1);
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, Integer.valueOf(value));
+                break;
+            }
+            case 'D': {
+                double value = popDouble(frame, top - 1);
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, Double.valueOf(value));
+                break;
+            }
+            case 'F': {
+                float value = popFloat(frame, top - 1);
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, Float.valueOf(value));
+                break;
+            }
+            case 'J': {
+                long value = popLong(frame, top - 1);
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, Long.valueOf(value));
+                break;
+            }
+            case '[': // fall through
+            case 'L': {
+                StaticObject value = popObject(frame, top - 1);
+                if (instrumentation != null) {
+                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
+                }
+                model.writeField(receiver, field, value);
+                break;
+            }
+            default:
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw EspressoError.shouldNotReachHere("unexpected kind");
+        }
+        return -slotCount;
+    }
+
     private int getField(VirtualFrame frame, int top, Field field, int curBCI, int opcode, int statementIndex, FieldAccessType mode) {
         assert opcode == GETFIELD || opcode == GETSTATIC;
 
@@ -2895,11 +3039,11 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         Method method = getMethod();
         EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
 
-        if (getLanguage().isMemoryModelEnabled()) {
-            // Sync-as-Share seam. Folds away entirely under --java.MemoryModel=shared (the flag is a
-            // partial-evaluation constant false). M2 routes the field read through the version-controlled
-            // MemoryModel (staging into the thread-local view) instead of the InterpreterToVM path below.
-            throw EspressoError.unimplemented("Sync-as-Share getField hook (milestone M2)");
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && isVersionedField(field)) {
+            // Sync-as-Share seam. isMemoryModelEnabled() is the PE-constant, so the whole hook folds
+            // away under --java.MemoryModel=shared; isActive() keeps it off during JDK bootstrap;
+            // isVersionedField scopes it to application classes.
+            return getFieldViaModel(frame, top, field, statementIndex, mode);
         }
 
         int slot = top - 1;
