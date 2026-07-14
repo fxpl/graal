@@ -35,6 +35,9 @@ public final class LinearLocalView {
 
     private long base;
     private final Map<LinearLocation, Object> staging = new HashMap<>();
+    // A conflict detected during a synchronisation action, to be raised at the next safe point (the
+    // top of the bytecode loop) rather than from inside the sync op. Null if none pending.
+    private String pendingConflict;
 
     public long base() {
         return base;
@@ -63,5 +66,20 @@ public final class LinearLocalView {
 
     public void clearStaging() {
         staging.clear();
+    }
+
+    public boolean hasPendingConflict() {
+        return pendingConflict != null;
+    }
+
+    public void setPendingConflict(String description) {
+        this.pendingConflict = description;
+    }
+
+    /** Returns the pending conflict description and clears it. */
+    public String takePendingConflict() {
+        String c = pendingConflict;
+        pendingConflict = null;
+        return c;
     }
 }

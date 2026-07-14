@@ -68,10 +68,16 @@ final class GuestRunnable implements Runnable {
                 context.getThreadAccess().checkDeprecatedThreadStatus(thread);
                 context.getMeta().java_lang_Thread_run.invokeDirectVirtual(thread);
                 context.getThreadAccess().checkDeprecatedThreadStatus(thread);
-                // Sync-as-Share: thread end = push this thread's view to g (may raise a conflict,
-                // which then surfaces via the uncaught-exception path below).
+                // Sync-as-Share: thread end = push this thread's view to g.
                 if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
                     context.getMemoryModel().onThreadEnd();
+                    // A conflict in the thread's final push has no active guest frame to catch it, so
+                    // raise it as an uncaught exception on this terminating thread (dispatched below).
+                    // Paper §4.5 leaves recover-vs-terminate open; we terminate.
+                    if (context.getLanguage().getThreadLocalState().getMemoryView().hasPendingConflict()) {
+                        String msg = context.getLanguage().getThreadLocalState().getMemoryView().takePendingConflict();
+                        throw context.getMeta().throwExceptionWithMessage(context.getMeta().java_lang_Error, msg);
+                    }
                 }
             } catch (EspressoException uncaught) {
                 dispatchUncaught.call(thread, uncaught.getGuestException());

@@ -154,12 +154,12 @@ public final class LinearMemoryModel implements MemoryModel {
         if (conflict == null) {
             return;
         }
-        // M2: report the conflict and recover so the VM stays stable. We deliberately do NOT throw
-        // here: raising a guest exception from inside a monitor operation corrupts the synchronized
-        // block's exit machinery (the implicit exception-path monitorexit re-runs and re-conflicts).
-        // M4 will introduce a catchable SyncConflictError raised at a safe point instead. Recovery
-        // drops the conflicting staged writes and resynchronises the view.
-        context.getLogger().warning("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict));
+        // Record a pending conflict; it is raised as a guest exception at the next safe point (the top
+        // of the bytecode loop, past any just-executed monitorexit), or by GuestRunnable if this was
+        // the thread's final push. We must NOT throw from inside the monitor op itself: that corrupts
+        // the synchronized block's exit machinery (the implicit exception-path monitorexit re-runs).
+        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict));
+        // Recover the view so it stays consistent if the conflict is caught and execution continues.
         view.clearStaging();
         view.advanceBase(global.currentCounter());
     }
