@@ -25,6 +25,7 @@ package com.oracle.truffle.espresso.memory;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+// FieldLocation / ArrayLocation / LinearLocation are in this package.
 
 /**
  * The Linear version-controlled memory model (paper &sect;3.1/&sect;4.3), ported from the {@code
@@ -66,10 +67,8 @@ public final class LinearMemoryModel implements MemoryModel {
         return context.getLanguage().getThreadLocalState().getMemoryView();
     }
 
-    @Override
-    public Object readField(StaticObject holder, Field field) {
+    private Object read(LinearLocation loc) {
         LinearLocalView view = currentView();
-        LinearLocation loc = new LinearLocation(holder, field);
         Object staged = view.getStaged(loc);
         if (staged != null) {
             return staged;
@@ -78,9 +77,28 @@ public final class LinearMemoryModel implements MemoryModel {
         return global.snapshot(loc, view.base());
     }
 
+    private void write(LinearLocation loc, Object value) {
+        currentView().stage(loc, value);
+    }
+
+    @Override
+    public Object readField(StaticObject holder, Field field) {
+        return read(new FieldLocation(holder, field));
+    }
+
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
-        currentView().stage(new LinearLocation(holder, field), value);
+        write(new FieldLocation(holder, field), value);
+    }
+
+    @Override
+    public Object readArray(StaticObject array, int index) {
+        return read(new ArrayLocation(array, index));
+    }
+
+    @Override
+    public void writeArray(StaticObject array, int index, Object value) {
+        write(new ArrayLocation(array, index), value);
     }
 
     @Override
@@ -98,6 +116,13 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
+    public void onSpawn() {
+        // Parent publishes its view so the child (which pulls on start) inherits the parent's writes.
+        LinearLocalView view = currentView();
+        handleConflict(global.push(view), view);
+    }
+
+    @Override
     public void onMonitorEnter() {
         LinearLocalView view = currentView();
         handleConflict(global.pull(view), view);
@@ -106,6 +131,22 @@ public final class LinearMemoryModel implements MemoryModel {
     @Override
     public void onMonitorExit() {
         LinearLocalView view = currentView();
+        handleConflict(global.push(view), view);
+    }
+
+    @Override
+    public void onVolatileRead() {
+        // Volatile read = pull: import the field's published history before reading.
+        LinearLocalView view = currentView();
+        handleConflict(global.pull(view), view);
+    }
+
+    @Override
+    public void onVolatileWrite() {
+        // Volatile write = pull then push (§6.4): import history, then publish this write. The value
+        // has already been staged by the caller.
+        LinearLocalView view = currentView();
+        handleConflict(global.pull(view), view);
         handleConflict(global.push(view), view);
     }
 
@@ -118,9 +159,17 @@ public final class LinearMemoryModel implements MemoryModel {
         // block's exit machinery (the implicit exception-path monitorexit re-runs and re-conflicts).
         // M4 will introduce a catchable SyncConflictError raised at a safe point instead. Recovery
         // drops the conflicting staged writes and resynchronises the view.
-        context.getLogger().warning("Sync-as-Share conflict: incompatible concurrent update to " +
-                        conflict.field().getDeclaringKlass().getName() + "." + conflict.field().getName());
+        context.getLogger().warning("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict));
         view.clearStaging();
         view.advanceBase(global.currentCounter());
+    }
+
+    private static String describe(LinearLocation loc) {
+        if (loc instanceof FieldLocation f) {
+            return f.field().getDeclaringKlass().getName() + "." + f.field().getName();
+        } else if (loc instanceof ArrayLocation a) {
+            return a.array().getKlass().getName() + "[" + a.index() + "]";
+        }
+        return String.valueOf(loc);
     }
 }

@@ -137,6 +137,12 @@ public final class Target_java_lang_Thread {
                     long guestId = threadAccess.getThreadId(self);
                     return String.format("Thread.start0: [HOST:%s, %d], [GUEST:%s, %d]", hostThread.getName(), getThreadId(hostThread), guestName, guestId);
                 });
+                // Sync-as-Share: spawn = the parent publishes its view so the child (which pulls on
+                // start) inherits the parent's pre-spawn writes. Runs on the parent, before the child
+                // starts. No-op/folded under shared; off during JDK bootstrap.
+                if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+                    context.getMemoryModel().onSpawn();
+                }
                 hostThread.start();
             } else {
                 String reason = context.getMultiThreadingDisabledReason();

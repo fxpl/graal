@@ -59,6 +59,16 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
+    public Object readArray(StaticObject array, int index) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.readArray: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void writeArray(StaticObject array, int index, Object value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.writeArray: memory-model hooks must be folded under shared");
+    }
+
+    @Override
     public void onThreadStart() {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onThreadStart: memory-model hooks must be folded under shared");
     }
@@ -69,6 +79,11 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
+    public void onSpawn() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onSpawn: memory-model hooks must be folded under shared");
+    }
+
+    @Override
     public void onMonitorEnter() {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onMonitorEnter: memory-model hooks must be folded under shared");
     }
@@ -76,5 +91,15 @@ public final class SharedMemoryModel implements MemoryModel {
     @Override
     public void onMonitorExit() {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onMonitorExit: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onVolatileRead() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onVolatileRead: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onVolatileWrite() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onVolatileWrite: memory-model hooks must be folded under shared");
     }
 }

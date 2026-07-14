@@ -22,16 +22,11 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import com.oracle.truffle.espresso.impl.Field;
-import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-
 /**
  * A versioned shared-memory location: the Espresso analogue of the prototype's {@code var} string.
- * For M2 this identifies a field slot on a holder object (instance fields: the receiver; static
- * fields: the klass's statics {@link StaticObject}). Array elements are M3.
- *
- * <p>Equality is by {@link StaticObject}/{@link Field} identity (both use reference equality), which
- * is exactly the shared-location identity we want for keying the version store.
+ * Either a field slot on a holder object ({@link FieldLocation}) or an element of an array
+ * ({@link ArrayLocation}). Equality is by {@code StaticObject}/{@code Field} identity plus index, so
+ * instances are usable as keys in the version store and the per-thread staging map.
  */
-public record LinearLocation(StaticObject holder, Field field) {
+public sealed interface LinearLocation permits FieldLocation, ArrayLocation {
 }
