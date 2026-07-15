@@ -92,6 +92,16 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
+    public Object readArray(StaticObject array, int index) {
+        return read(new ArrayLocation(array, index));
+    }
+
+    @Override
+    public void writeArray(StaticObject array, int index, Object value) {
+        write(new ArrayLocation(array, index), value);
+    }
+
+    @Override
     public void onThreadStart() {
         // Fresh thread with empty staging: pull can never conflict.
         LinearLocalView view = currentView();
@@ -157,6 +167,8 @@ public final class LinearMemoryModel implements MemoryModel {
     private static String describe(LinearLocation loc) {
         if (loc instanceof FieldLocation f) {
             return f.field().getDeclaringKlass().getName() + "." + f.field().getName();
+        } else if (loc instanceof ArrayLocation a) {
+            return a.array().getKlass().getName() + "[" + a.index() + "]";
         }
         return String.valueOf(loc);
     }

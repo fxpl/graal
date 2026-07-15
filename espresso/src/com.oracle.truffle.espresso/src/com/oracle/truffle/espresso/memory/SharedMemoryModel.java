@@ -59,6 +59,16 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
+    public Object readArray(StaticObject array, int index) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.readArray: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void writeArray(StaticObject array, int index, Object value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.writeArray: memory-model hooks must be folded under shared");
+    }
+
+    @Override
     public void onThreadStart() {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onThreadStart: memory-model hooks must be folded under shared");
     }

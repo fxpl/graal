@@ -24,9 +24,9 @@ package com.oracle.truffle.espresso.memory;
 
 /**
  * A versioned shared-memory location: the Espresso analogue of the prototype's {@code var} string.
- * Currently only field slots ({@link FieldLocation}); Sync-as-Share does not define array-element
- * semantics, so there is deliberately no array location (versioned array access errors out). Equality
- * is by {@code StaticObject}/{@code Field} identity, so instances key the version store and staging map.
+ * Either a field slot ({@link FieldLocation}) or an array element ({@link ArrayLocation}) — arrays are
+ * versioned per-index (the "cells" granularity; see array-design.md). Equality is by {@code
+ * StaticObject}/{@code Field} identity (plus index), so instances key the version store and staging map.
  */
-public sealed interface LinearLocation permits FieldLocation {
+public sealed interface LinearLocation permits FieldLocation, ArrayLocation {
 }

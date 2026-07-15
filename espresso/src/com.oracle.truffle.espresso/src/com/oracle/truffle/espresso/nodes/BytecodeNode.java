@@ -1998,14 +1998,66 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         return !StaticObject.isNull(getMethod().getDeclaringKlass().getDefiningClassLoader());
     }
 
-    // Sync-as-Share does NOT define array-element semantics (the paper models fields, monitors, threads
-    // and volatiles only). Rather than improvise a policy, fail loudly under the versioned model so the
-    // programmer knows they have hit undesigned territory. (M3 improvised write-through; reverted.)
-    private RuntimeException arraysUnsupported() {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        Meta meta = getMeta();
-        return meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
-                        "Sync-as-Share (--java.MemoryModel=linear): array-element access is not defined by the memory model");
+    // Sync-as-Share (versioned model): read an array element through the calling thread's view
+    // (per-index). Returns the versioned value if the element has one, else the stock frozen-heap read
+    // (= version 0), which also bounds-checks. Present values were written at a valid index.
+    private void arrayLoadViaModel(VirtualFrame frame, int top, int index, StaticObject array, int loadOpcode) {
+        EspressoLanguage language = getLanguage();
+        MemoryModel model = getContext().getMemoryModel();
+        Object v = model.readArray(array, index);
+        boolean absent = (v == MemoryModel.ABSENT);
+        // @formatter:off
+        switch (loadOpcode) {
+            case BALOAD: putInt(frame, top - 2, absent ? getInterpreterToVM().getArrayByte(language, index, array, this)      : (Byte) v);      break;
+            case SALOAD: putInt(frame, top - 2, absent ? getInterpreterToVM().getArrayShort(language, index, array, this)     : (Short) v);     break;
+            case CALOAD: putInt(frame, top - 2, absent ? getInterpreterToVM().getArrayChar(language, index, array, this)      : (Character) v); break;
+            case IALOAD: putInt(frame, top - 2, absent ? getInterpreterToVM().getArrayInt(language, index, array, this)       : (Integer) v);   break;
+            case FALOAD: putFloat(frame, top - 2, absent ? getInterpreterToVM().getArrayFloat(language, index, array, this)   : (Float) v);    break;
+            case LALOAD: putLong(frame, top - 2, absent ? getInterpreterToVM().getArrayLong(language, index, array, this)     : (Long) v);     break;
+            case DALOAD: putDouble(frame, top - 2, absent ? getInterpreterToVM().getArrayDouble(language, index, array, this) : (Double) v);   break;
+            case AALOAD: putObject(frame, top - 2, absent ? getInterpreterToVM().getArrayObject(language, index, array, this) : (StaticObject) v); break;
+            default:
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw EspressoError.shouldNotReachHere();
+        }
+        // @formatter:on
+    }
+
+    // Sync-as-Share (versioned model): stage an array-element write into the view (per-index, view-only
+    // -- the physical array stays frozen = version 0). We replicate the bounds check and (for AASTORE)
+    // the ArrayStoreException component-type check here, because we do NOT perform the stock store.
+    // NB known gap: BASTORE into a boolean[] is not masked to 0/1 (a rare edge; tests use int[]/Object[]).
+    private void arrayStoreViaModel(VirtualFrame frame, int top, int index, StaticObject array, int storeOpcode) {
+        EspressoLanguage language = getLanguage();
+        MemoryModel model = getContext().getMemoryModel();
+        int length = InterpreterToVM.arrayLength(array, language);
+        if (Integer.compareUnsigned(index, length) >= 0) {
+            enterImplicitExceptionProfile();
+            Meta meta = getMeta();
+            throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, "Index " + index + " out of bounds for length " + length);
+        }
+        switch (storeOpcode) {
+            case BASTORE: model.writeArray(array, index, Byte.valueOf((byte) popInt(frame, top - 1))); break;
+            case SASTORE: model.writeArray(array, index, Short.valueOf((short) popInt(frame, top - 1))); break;
+            case CASTORE: model.writeArray(array, index, Character.valueOf((char) popInt(frame, top - 1))); break;
+            case IASTORE: model.writeArray(array, index, Integer.valueOf(popInt(frame, top - 1))); break;
+            case FASTORE: model.writeArray(array, index, Float.valueOf(popFloat(frame, top - 1))); break;
+            case LASTORE: model.writeArray(array, index, Long.valueOf(popLong(frame, top - 1))); break;
+            case DASTORE: model.writeArray(array, index, Double.valueOf(popDouble(frame, top - 1))); break;
+            case AASTORE: {
+                StaticObject value = popObject(frame, top - 1);
+                if (!StaticObject.isNull(value) && !InterpreterToVM.instanceOf(value, ((ArrayKlass) array.getKlass()).getComponentType())) {
+                    enterImplicitExceptionProfile();
+                    Meta meta = getMeta();
+                    throw meta.throwExceptionWithMessage(meta.java_lang_ArrayStoreException, value.getKlass().getTypeAsString());
+                }
+                model.writeArray(array, index, value);
+                break;
+            }
+            default:
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw EspressoError.shouldNotReachHere();
+        }
     }
 
     private void arrayLoad(VirtualFrame frame, int top, int curBCI, int loadOpcode) {
@@ -2014,7 +2066,8 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         int index = popInt(frame, top - 1);
         StaticObject array = nullCheck(popObject(frame, top - 2));
         if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && isVersionedArrayAccess() && array.isEspressoObject()) {
-            throw arraysUnsupported();
+            arrayLoadViaModel(frame, top, index, array, loadOpcode);
+            return;
         }
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
             EspressoLanguage language = getLanguage();
@@ -2050,7 +2103,8 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         int index = popInt(frame, top - 1 - offset);
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
         if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && isVersionedArrayAccess() && array.isEspressoObject()) {
-            throw arraysUnsupported();
+            arrayStoreViaModel(frame, top, index, array, storeOpcode);
+            return;
         }
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
             EspressoLanguage language = getLanguage();
