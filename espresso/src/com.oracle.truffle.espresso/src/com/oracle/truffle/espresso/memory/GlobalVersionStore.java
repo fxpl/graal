@@ -24,25 +24,30 @@ package com.oracle.truffle.espresso.memory;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * The single global version history {@code g} of the Linear model (prototype: {@code
- * GlobalVersionStore}). A monotonic {@code counter} plus a per-location append-only version list.
+ * GlobalVersionStore}). A monotonic {@code counter} plus a per-location append-only version chain.
  *
  * <p><b>Concurrency (M2).</b> Unlike the prototype (single-threaded under a model checker), Espresso
  * runs real threads. {@link #pull}/{@link #push} — which conflict-check and (for push) append — run
  * under a single {@link ReentrantLock}, so all synchronisation actions serialise on {@code g}. That
  * is acceptable because ordinary reads/writes stay thread-local (the point of the model); only sync
- * points touch {@code g}. Snapshot reads ({@link #snapshot}) are lock-free over the append-only
- * {@link CopyOnWriteArrayList}. A lock-free {@code g} is a later optimisation; the interface is kept
- * narrow so it can drop in.
+ * points touch {@code g}. Snapshot reads ({@link #snapshot}) are lock-free: each location maps to the
+ * newest {@link Version} node of an immutable {@code prev}-linked chain, so a reader observes a fully
+ * built chain via {@code final}-field safe publication and never a torn structure. Appending a
+ * version is O(1) (a new head node); the map's {@link ConcurrentHashMap} is retained precisely
+ * because its {@code get} is genuinely concurrent with a locked {@code put} (and is O(1)) — unlike
+ * the previous {@code CopyOnWriteArrayList} value, whose per-append full copy made a hot location's
+ * pushes quadratic. A fully lock-free {@code g} is a later optimisation; the interface stays narrow.
  */
 public final class GlobalVersionStore {
 
-    private final ConcurrentHashMap<LinearLocation, CopyOnWriteArrayList<Version>> history = new ConcurrentHashMap<>();
+    // Value = newest version of the location (chain head); older versions via Version.prev(). null =
+    // no version yet. Mutated only under pushLock; read lock-free by snapshot/firstConflict.
+    private final ConcurrentHashMap<LinearLocation, Version> history = new ConcurrentHashMap<>();
     private final AtomicLong counter = new AtomicLong(0);
     private final ReentrantLock pushLock = new ReentrantLock();
 
@@ -56,13 +61,10 @@ public final class GlobalVersionStore {
      * reads through to the real heap — the pre-main state is the implicit initial committed version).
      */
     public Object snapshot(LinearLocation loc, long base) {
-        CopyOnWriteArrayList<Version> h = history.get(loc);
-        if (h != null) {
-            for (int i = h.size() - 1; i >= 0; i--) {
-                Version v = h.get(i);
-                if (v.counter() <= base) {
-                    return v.value();
-                }
+        // Walk the immutable chain newest-first; the first node at or below base is the visible value.
+        for (Version v = history.get(loc); v != null; v = v.prev()) {
+            if (v.counter() <= base) {
+                return v.value();
             }
         }
         return MemoryModel.ABSENT;
@@ -104,7 +106,8 @@ public final class GlobalVersionStore {
             } else {
                 long next = counter.incrementAndGet();
                 for (Map.Entry<LinearLocation, Object> e : view.staging().entrySet()) {
-                    history.computeIfAbsent(e.getKey(), k -> new CopyOnWriteArrayList<>()).add(new Version(next, e.getValue()));
+                    // New head whose prev is the old head (null if first): O(1), no copy.
+                    history.compute(e.getKey(), (k, old) -> new Version(next, e.getValue(), old));
                 }
                 view.clearStaging();
                 view.advanceBase(next);
@@ -123,8 +126,8 @@ public final class GlobalVersionStore {
     private LinearLocation firstConflict(LinearLocalView view) {
         long base = view.base();
         for (LinearLocation loc : view.staging().keySet()) {
-            CopyOnWriteArrayList<Version> h = history.get(loc);
-            if (h != null && !h.isEmpty() && h.get(h.size() - 1).counter() > base) {
+            Version head = history.get(loc);   // newest version; null if none
+            if (head != null && head.counter() > base) {
                 return loc;
             }
         }

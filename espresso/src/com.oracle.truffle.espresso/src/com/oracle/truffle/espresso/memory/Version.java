@@ -27,6 +27,14 @@ package com.oracle.truffle.espresso.memory;
  * value is boxed (M2 correctness-first; per-kind storage is a later optimisation). Object-typed
  * values are held as {@code StaticObject} (including {@code StaticObject.NULL}), so a boxed value is
  * never {@code null}.
+ *
+ * <p>A location's history is an append-only singly-linked chain: {@code prev} points to the
+ * immediately older version, or {@code null} for the first. {@link GlobalVersionStore} keeps only
+ * the newest node per location (the chain head) and walks {@code prev} newest-first. Nodes are
+ * immutable once constructed, so a lock-free reader that observes a head (published via the store's
+ * map) sees a fully-built chain via {@code final}-field safe publication. Appending is O(1) -- no
+ * array copy -- which is why this replaced a {@code CopyOnWriteArrayList} (whose per-append full copy
+ * made a hot location's pushes quadratic).
  */
-public record Version(long counter, Object value) {
+public record Version(long counter, Object value, Version prev) {
 }
