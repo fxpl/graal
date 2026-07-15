@@ -159,6 +159,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     @CompilationFinal private int maxStackTraceDepth;
     @CompilationFinal private boolean implicitInteropEnabled;
     @CompilationFinal private EspressoOptions.MemoryModelMode memoryModelMode;
+    @CompilationFinal private EspressoOptions.MemoryModelHistoryMode memoryModelHistoryMode;
     // {@code true} iff a non-stock memory model is active. Kept as a separate PE-constant so the
     // Sync-as-Share hooks on the hot path fold away entirely under {@code SHARED}.
     @CompilationFinal private boolean memoryModelEnabled;
@@ -265,6 +266,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         maxStackTraceDepth = env.getOptions().get(EspressoOptions.MaxJavaStackTraceDepth);
         implicitInteropEnabled = env.getOptions().get(EspressoOptions.EnableImplicitInterop);
         memoryModelMode = env.getOptions().get(EspressoOptions.MemoryModel);
+        memoryModelHistoryMode = env.getOptions().get(EspressoOptions.MemoryModelHistory);
         memoryModelEnabled = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
 
         useTRegex = env.getOptions().get(EspressoOptions.UseTRegex);
@@ -431,6 +433,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.EagerFrameAnalysis) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.SpecCompliance) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModel) &&
+                        isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelHistory) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.LivenessAnalysis) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.LivenessAnalysisMinimumLocals) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.EnablePreview) &&
@@ -647,6 +650,10 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
 
     public EspressoOptions.MemoryModelMode getMemoryModelMode() {
         return memoryModelMode;
+    }
+
+    public EspressoOptions.MemoryModelHistoryMode getMemoryModelHistoryMode() {
+        return memoryModelHistoryMode;
     }
 
     /**

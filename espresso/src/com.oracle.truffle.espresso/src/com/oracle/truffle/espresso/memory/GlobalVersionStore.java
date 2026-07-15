@@ -29,8 +29,8 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * The single global version history {@code g} of the Linear model (prototype: {@code
- * GlobalVersionStore}). A monotonic {@code counter} plus a per-location append-only version chain.
+ * The {@code rwlock} {@link GlobalHistory} strategy (default; {@code --java.MemoryModelHistory=rwlock}).
+ * A monotonic {@code counter} plus a per-location append-only version chain.
  *
  * <p><b>Concurrency (M2).</b> Unlike the prototype (single-threaded under a model checker), Espresso
  * runs real threads. {@link #pull}/{@link #push} conflict-check and (for a committing push) append,
@@ -55,7 +55,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * a write-locked {@code put} (and is O(1)) — unlike the previous {@code CopyOnWriteArrayList} value,
  * whose per-append full copy made a hot location's pushes quadratic.
  */
-public final class GlobalVersionStore {
+public final class GlobalVersionStore implements GlobalHistory {
 
     // Value = newest version of the location (chain head); older versions via Version.prev(). null =
     // no version yet. Mutated only under the write lock; read lock-free by snapshot, read-locked by
@@ -64,6 +64,7 @@ public final class GlobalVersionStore {
     private final AtomicLong counter = new AtomicLong(0);
     private final ReentrantReadWriteLock gLock = new ReentrantReadWriteLock();
 
+    @Override
     public long currentCounter() {
         return counter.get();
     }
@@ -73,6 +74,7 @@ public final class GlobalVersionStore {
      * {@link MemoryModel#ABSENT} if the location has no version at or before {@code base} (caller
      * reads through to the real heap — the pre-main state is the implicit initial committed version).
      */
+    @Override
     public Object snapshot(LinearLocation loc, long base) {
         // Walk the immutable chain newest-first; the first node at or below base is the visible value.
         for (Version v = history.get(loc); v != null; v = v.prev()) {
@@ -88,6 +90,7 @@ public final class GlobalVersionStore {
      * base to the current counter and return {@code null}. On conflict, return the offending location
      * and leave the view unchanged.
      */
+    @Override
     public LinearLocation pull(LinearLocalView view) {
         // Read-only over g: conflict-check heads, read the counter, advance the caller's own view.
         // The read lock excludes only committing pushes; concurrent pulls/empty-pushes run in parallel.
@@ -110,6 +113,7 @@ public final class GlobalVersionStore {
      * staging, and rebase. Returns {@code null} on success, or the offending location on conflict
      * (view left unchanged).
      */
+    @Override
     public LinearLocation push(LinearLocalView view) {
         // An empty-delta push publishes nothing -- it only fast-forwards this thread's base and cannot
         // conflict (no staged locations) -- so it does not mutate g and shares the read lock with pulls.

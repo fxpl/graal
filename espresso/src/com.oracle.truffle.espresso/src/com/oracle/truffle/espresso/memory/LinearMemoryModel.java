@@ -22,7 +22,9 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import com.oracle.truffle.espresso.EspressoOptions;
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 // FieldLocation / ArrayLocation / LinearLocation are in this package.
@@ -30,22 +32,35 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 /**
  * The Linear version-controlled memory model (paper &sect;3.1/&sect;4.3), ported from the {@code
  * gitmem} prototype's {@code linear::LinearMemoryModel}. All synchronisation actions communicate
- * through a single global history {@link GlobalVersionStore} {@code g}: {@code start}/{@code lock}
+ * through a single global history {@link GlobalHistory} {@code g}: {@code start}/{@code lock}
  * pull; {@code end}/{@code unlock} push. Ordinary reads/writes operate on the calling thread's
  * {@link LinearLocalView}. A conflict (an unseen update to a location this thread also changed)
  * surfaces at the synchronisation point as a guest exception.
  *
  * <p>Scope (M2): instance + static fields, monitor lock/unlock, thread start/end. Arrays, volatiles,
- * and spawn/join are M3.
+ * and spawn/join are M3. The {@code g} concurrency strategy is selected by
+ * {@code --java.MemoryModelHistory} (see {@link GlobalHistory}).
  */
 public final class LinearMemoryModel implements MemoryModel {
 
-    private final GlobalVersionStore global = new GlobalVersionStore();
+    private final GlobalHistory global;
     private final EspressoContext context;
     private volatile boolean active = false;
 
     public LinearMemoryModel(EspressoContext context) {
         this.context = context;
+        this.global = createHistory(context.getLanguage().getMemoryModelHistoryMode());
+    }
+
+    private static GlobalHistory createHistory(EspressoOptions.MemoryModelHistoryMode mode) {
+        switch (mode) {
+            case RWLOCK:
+                return new GlobalVersionStore();
+            case WATERMARK:
+                return new WatermarkHistory();
+            default:
+                throw EspressoError.shouldNotReachHere("Unknown memory-model history strategy: " + mode);
+        }
     }
 
     @Override

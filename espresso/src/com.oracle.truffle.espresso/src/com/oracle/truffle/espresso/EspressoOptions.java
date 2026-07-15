@@ -322,6 +322,36 @@ public final class EspressoOptions {
                     usageSyntax = "shared|linear") //
     public static final OptionKey<MemoryModelMode> MemoryModel = new OptionKey<>(MemoryModelMode.SHARED, MEMORY_MODEL_OPTION_TYPE);
 
+    /**
+     * Selects the concurrency strategy for the Linear model's global history {@code g} (ignored under
+     * {@code MemoryModel=shared}). A design-exploration knob: the strategies are behaviourally
+     * equivalent but trade differently under contention (see concurrency-design.md).
+     * {@code RWLOCK} is the read/write-split single lock (pulls + empty pushes concurrent; committing
+     * pushes serialise). {@code WATERMARK} is per-location stripe locks + a commit-order watermark
+     * (disjoint committing pushes run in parallel; only an O(1) retire is serial).
+     */
+    public enum MemoryModelHistoryMode {
+        RWLOCK,
+        WATERMARK
+    }
+
+    private static final OptionType<MemoryModelHistoryMode> MEMORY_MODEL_HISTORY_OPTION_TYPE = new OptionType<>("MemoryModelHistory", new Function<String, MemoryModelHistoryMode>() {
+        @Override
+        public MemoryModelHistoryMode apply(String s) {
+            try {
+                return MemoryModelHistoryMode.valueOf(s.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("--java.MemoryModelHistory: strategy can be 'rwlock' or 'watermark'.");
+            }
+        }
+    });
+
+    @Option(help = "Global-history concurrency strategy for MemoryModel=linear: 'rwlock' (read/write-split single lock) or 'watermark' (per-location stripe locks + commit-order watermark). A design-exploration knob; ignored under shared.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "rwlock|watermark") //
+    public static final OptionKey<MemoryModelHistoryMode> MemoryModelHistory = new OptionKey<>(MemoryModelHistoryMode.RWLOCK, MEMORY_MODEL_HISTORY_OPTION_TYPE);
+
     public enum VerifyMode {
         NONE,
         REMOTE, // Verifies all bytecodes not loaded by the bootstrap class loader.
