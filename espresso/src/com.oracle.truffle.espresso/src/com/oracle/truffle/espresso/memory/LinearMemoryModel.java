@@ -27,7 +27,7 @@ import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-// FieldLocation / ArrayLocation / LinearLocation are in this package.
+// FieldLocation / ArrayLocation / VersionedLocation are in this package.
 
 /**
  * The Linear version-controlled memory model (paper &sect;3.1/&sect;4.3), ported from the {@code
@@ -82,7 +82,7 @@ public final class LinearMemoryModel implements MemoryModel {
         return context.getLanguage().getThreadLocalState().getMemoryView();
     }
 
-    private Object read(LinearLocation loc) {
+    private Object read(VersionedLocation loc) {
         LinearLocalView view = currentView();
         Object staged = view.getStaged(loc);
         if (staged != null) {
@@ -92,7 +92,7 @@ public final class LinearMemoryModel implements MemoryModel {
         return global.snapshot(loc, view.base());
     }
 
-    private void write(LinearLocation loc, Object value) {
+    private void write(VersionedLocation loc, Object value) {
         currentView().stage(loc, value);
     }
 
@@ -120,7 +120,7 @@ public final class LinearMemoryModel implements MemoryModel {
     public void onThreadStart() {
         // Fresh thread with empty staging: pull can never conflict.
         LinearLocalView view = currentView();
-        LinearLocation conflict = global.pull(view);
+        VersionedLocation conflict = global.pull(view);
         assert conflict == null : "starting thread cannot conflict";
     }
 
@@ -165,7 +165,7 @@ public final class LinearMemoryModel implements MemoryModel {
         handleConflict(global.push(view), view);
     }
 
-    private void handleConflict(LinearLocation conflict, LinearLocalView view) {
+    private void handleConflict(VersionedLocation conflict, LinearLocalView view) {
         if (conflict == null) {
             return;
         }
@@ -179,7 +179,7 @@ public final class LinearMemoryModel implements MemoryModel {
         view.advanceBase(global.currentCounter());
     }
 
-    private static String describe(LinearLocation loc) {
+    private static String describe(VersionedLocation loc) {
         if (loc instanceof FieldLocation f) {
             return f.field().getDeclaringKlass().getName() + "." + f.field().getName();
         } else if (loc instanceof ArrayLocation a) {

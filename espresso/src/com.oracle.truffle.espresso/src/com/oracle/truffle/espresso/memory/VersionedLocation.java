@@ -28,5 +28,5 @@ package com.oracle.truffle.espresso.memory;
  * versioned per-index (the "cells" granularity; see array-design.md). Equality is by {@code
  * StaticObject}/{@code Field} identity (plus index), so instances key the version store and staging map.
  */
-public sealed interface LinearLocation permits FieldLocation, ArrayLocation {
+public sealed interface VersionedLocation permits FieldLocation, ArrayLocation {
 }

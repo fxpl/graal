@@ -56,7 +56,7 @@ public final class WatermarkHistory implements GlobalHistory {
 
     // Value = newest version of the location (chain head); older via Version.prev(). null = none.
     // Mutated only under the location's stripe lock; read lock-free by snapshot and by pull.
-    private final ConcurrentHashMap<LinearLocation, Version> history = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<VersionedLocation, Version> history = new ConcurrentHashMap<>();
     private final AtomicLong allocated = new AtomicLong(0);   // hands out unique ticks (total order)
     private volatile long committed = 0;                      // watermark: all ticks <= this are visible
     private final ReentrantLock[] stripes = new ReentrantLock[STRIPES];
@@ -74,12 +74,12 @@ public final class WatermarkHistory implements GlobalHistory {
         return committed;
     }
 
-    private static int stripeIndex(LinearLocation loc) {
+    private static int stripeIndex(VersionedLocation loc) {
         return (loc.hashCode() & 0x7fffffff) % STRIPES;
     }
 
     @Override
-    public Object snapshot(LinearLocation loc, long base) {
+    public Object snapshot(VersionedLocation loc, long base) {
         // Walk the immutable chain newest-first; the first node at or below base is the visible value.
         for (Version v = history.get(loc); v != null; v = v.prev()) {
             if (v.counter() <= base) {
@@ -95,9 +95,9 @@ public final class WatermarkHistory implements GlobalHistory {
      * in-flight tick above the watermark is invisible here and is caught at this thread's own push.
      */
     @Override
-    public LinearLocation pull(LinearLocalView view) {
+    public VersionedLocation pull(LinearLocalView view) {
         long t = committed;   // volatile read: the visible watermark
-        LinearLocation conflict = firstConflict(view, t);
+        VersionedLocation conflict = firstConflict(view, t);
         if (conflict != null) {
             return conflict;
         }
@@ -106,7 +106,7 @@ public final class WatermarkHistory implements GlobalHistory {
     }
 
     @Override
-    public LinearLocation push(LinearLocalView view) {
+    public VersionedLocation push(LinearLocalView view) {
         // Empty-delta push: publishes nothing and cannot conflict; just adopt the current watermark.
         // Lock-free (the view is owned by the calling thread, so stagingEmpty() needs no lock).
         if (view.stagingEmpty()) {
@@ -121,12 +121,12 @@ public final class WatermarkHistory implements GlobalHistory {
         lockAll(idx);
         long n;
         try {
-            LinearLocation conflict = firstConflict(view, Long.MAX_VALUE);
+            VersionedLocation conflict = firstConflict(view, Long.MAX_VALUE);
             if (conflict != null) {
                 return conflict;   // no tick allocated -> no gap in the sequence
             }
             n = allocated.incrementAndGet();
-            for (Map.Entry<LinearLocation, Object> e : view.staging().entrySet()) {
+            for (Map.Entry<VersionedLocation, Object> e : view.staging().entrySet()) {
                 // New head whose prev is the old head (null if first): O(1), no copy.
                 history.compute(e.getKey(), (k, old) -> new Version(n, e.getValue(), old));
             }
@@ -173,9 +173,9 @@ public final class WatermarkHistory implements GlobalHistory {
      * {@link Long#MAX_VALUE} for a committing push holding the locations' stripes (see any appended
      * head).
      */
-    private LinearLocation firstConflict(LinearLocalView view, long upperBound) {
+    private VersionedLocation firstConflict(LinearLocalView view, long upperBound) {
         long base = view.base();
-        for (LinearLocation loc : view.staging().keySet()) {
+        for (VersionedLocation loc : view.staging().keySet()) {
             for (Version v = history.get(loc); v != null; v = v.prev()) {
                 if (v.counter() <= upperBound) {
                     if (v.counter() > base) {
@@ -190,7 +190,7 @@ public final class WatermarkHistory implements GlobalHistory {
 
     private int[] distinctSortedStripes(LinearLocalView view) {
         TreeSet<Integer> s = new TreeSet<>();
-        for (LinearLocation loc : view.staging().keySet()) {
+        for (VersionedLocation loc : view.staging().keySet()) {
             s.add(stripeIndex(loc));
         }
         int[] a = new int[s.size()];

@@ -29,5 +29,5 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * is an independent versioned location (the "cells" granularity; see array-design.md). Equality is by
  * array {@link StaticObject} identity plus index, so aliases of the same array share versioned state.
  */
-public record ArrayLocation(StaticObject array, int index) implements LinearLocation {
+public record ArrayLocation(StaticObject array, int index) implements VersionedLocation {
 }

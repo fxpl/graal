@@ -29,5 +29,5 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * A field slot on a holder object. Instance fields use the receiver as holder; static fields use the
  * declaring klass's statics {@link StaticObject}.
  */
-public record FieldLocation(StaticObject holder, Field field) implements LinearLocation {
+public record FieldLocation(StaticObject holder, Field field) implements VersionedLocation {
 }

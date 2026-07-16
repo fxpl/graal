@@ -34,7 +34,7 @@ import java.util.Map;
 public final class LinearLocalView {
 
     private long base;
-    private final Map<LinearLocation, Object> staging = new HashMap<>();
+    private final Map<VersionedLocation, Object> staging = new HashMap<>();
     // A conflict detected during a synchronisation action, to be raised at the next safe point (the
     // top of the bytecode loop) rather than from inside the sync op. Null if none pending.
     private String pendingConflict;
@@ -48,15 +48,15 @@ public final class LinearLocalView {
     }
 
     /** Staged value for {@code loc}, or {@code null} if not staged (staged values are never null). */
-    public Object getStaged(LinearLocation loc) {
+    public Object getStaged(VersionedLocation loc) {
         return staging.get(loc);
     }
 
-    public void stage(LinearLocation loc, Object value) {
+    public void stage(VersionedLocation loc, Object value) {
         staging.put(loc, value);
     }
 
-    public Map<LinearLocation, Object> staging() {
+    public Map<VersionedLocation, Object> staging() {
         return staging;
     }
 
