@@ -137,20 +137,22 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onSpawn() {
+    public void onSpawn(StaticObject childThread) {
         // Parent publishes its view so the child (which pulls on start) inherits the parent's writes.
+        // Linear communicates through the single global g, not per-child, so childThread is unused.
         LinearLocalView view = currentView();
         handleConflict(global.push(view), view);
     }
 
     @Override
-    public void onMonitorEnter() {
+    public void onMonitorEnter(StaticObject lock) {
+        // Linear communicates through the single global g, not per-lock, so the lock object is unused.
         LinearLocalView view = currentView();
         handleConflict(global.pull(view), view);
     }
 
     @Override
-    public void onMonitorExit() {
+    public void onMonitorExit(StaticObject lock) {
         LinearLocalView view = currentView();
         handleConflict(global.push(view), view);
     }

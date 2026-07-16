@@ -84,17 +84,17 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onSpawn() {
+    public void onSpawn(StaticObject childThread) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onSpawn: memory-model hooks must be folded under shared");
     }
 
     @Override
-    public void onMonitorEnter() {
+    public void onMonitorEnter(StaticObject lock) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onMonitorEnter: memory-model hooks must be folded under shared");
     }
 
     @Override
-    public void onMonitorExit() {
+    public void onMonitorExit(StaticObject lock) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onMonitorExit: memory-model hooks must be folded under shared");
     }
 

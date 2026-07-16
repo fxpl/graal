@@ -105,6 +105,7 @@ import com.oracle.truffle.espresso.libs.LibsMeta;
 import com.oracle.truffle.espresso.libs.LibsState;
 import com.oracle.truffle.espresso.libs.libzip.LibZipState;
 import com.oracle.truffle.espresso.libs.libzip.PureJavaLibZipFilter;
+import com.oracle.truffle.espresso.memory.BranchingMemoryModel;
 import com.oracle.truffle.espresso.memory.LinearMemoryModel;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.SharedMemoryModel;
@@ -449,6 +450,9 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
                     break;
                 case LINEAR:
                     this.memoryModel = new LinearMemoryModel(this);
+                    break;
+                case BRANCHING:
+                    this.memoryModel = new BranchingMemoryModel(this);
                     break;
                 default:
                     throw EspressoError.shouldNotReachHere("Unknown memory model: " + getLanguage().getMemoryModelMode());

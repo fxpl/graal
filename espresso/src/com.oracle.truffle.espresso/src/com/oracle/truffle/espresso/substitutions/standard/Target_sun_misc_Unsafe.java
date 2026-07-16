@@ -396,7 +396,7 @@ public final class Target_sun_misc_Unsafe {
             return null;
         }
         assert field != null;
-        // Sync-as-Share (--java.MemoryModel=linear): reflective/Unsafe access to a versioned application
+        // Sync-as-Share: under any versioned model, reflective/Unsafe access to a versioned application
         // field would bypass the calling thread's view and read/write the frozen physical heap
         // (version 0), silently diverging from the model. Rather than return stale data, fail loudly --
         // this is undesigned territory (same stance as arrays before they were implemented; see
@@ -406,7 +406,8 @@ public final class Target_sun_misc_Unsafe {
         if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive() &&
                         !StaticObject.isNull(field.getDeclaringKlass().getDefiningClassLoader())) {
             throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
-                            "Sync-as-Share (--java.MemoryModel=linear): reflective/Unsafe access to versioned field " +
+                            "Sync-as-Share (--java.MemoryModel=" + meta.getContext().getLanguage().getMemoryModelMode().name().toLowerCase() +
+                                            "): reflective/Unsafe access to versioned field " +
                                             field.getDeclaringKlass().getExternalName() + "." + field.getName() +
                                             " is not defined by the memory model");
         }

@@ -89,11 +89,23 @@ public final class BranchingView implements MemoryView {
         head = c;
     }
 
-    /** Fork: inherit another thread's branch tip and committed cache (spawn: child adopts parent). */
-    void adoptHistory(BranchingView other) {
-        this.head = other.head;
+    /**
+     * Snapshot this view's committed cache for handing to a freshly-spawned child (see
+     * {@link #adopt}). Taken on the parent thread at spawn time, so it is stable even though the
+     * parent keeps running afterwards.
+     */
+    Map<VersionedLocation, Commit> snapshotLastWriter() {
+        return new HashMap<>(lastWriter);
+    }
+
+    /**
+     * Fork: start this (fresh) view at another branch's tip and committed cache. Called on the child
+     * at start with the snapshot the parent captured at spawn (spawn: child adopts parent).
+     */
+    void adopt(Commit forkPoint, Map<VersionedLocation, Commit> forkLastWriter) {
+        this.head = forkPoint;
         this.lastWriter.clear();
-        this.lastWriter.putAll(other.lastWriter);
+        this.lastWriter.putAll(forkLastWriter);
     }
 
     /**
@@ -107,6 +119,13 @@ public final class BranchingView implements MemoryView {
     VersionedLocation mergeWithCommit(Commit other) {
         assert staging.isEmpty();
         if (other == null || other == head) {
+            return null;
+        }
+        // Already incorporated: if `other` is an ancestor of my head, there is nothing new to merge.
+        // This makes an ordinary monitor-exit's re-merge a true no-op (the lock's published commit is
+        // an ancestor of the holder's head), while a join — whose joinee head is off on a sibling
+        // branch, not an ancestor — still merges. Avoids polluting the DAG with spurious merge commits.
+        if (head != null && canReach(head, other, new HashMap<>())) {
             return null;
         }
         Commit lca = lowestCommonAncestor(head, other);

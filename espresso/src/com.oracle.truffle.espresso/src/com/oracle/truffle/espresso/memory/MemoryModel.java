@@ -90,12 +90,22 @@ public interface MemoryModel {
 
     void onThreadEnd();
 
-    /** Thread spawn: the parent publishes its view so the child (which pulls on start) inherits it. */
-    void onSpawn();
+    /**
+     * Thread spawn (runs on the parent). Linear: the parent publishes its view so the child (which
+     * pulls on start) inherits it. Branching: the parent commits and records a fork point that the
+     * {@code childThread} adopts at its start. {@code childThread} is the child's guest {@code Thread}
+     * object; Linear ignores it.
+     */
+    void onSpawn(StaticObject childThread);
 
-    void onMonitorEnter();
+    /**
+     * Monitor acquire. Linear: pull. Branching: merge the lock's published branch. {@code lock} is the
+     * monitor object (Branching keys per-lock state by it); Linear ignores it.
+     */
+    void onMonitorEnter(StaticObject lock);
 
-    void onMonitorExit();
+    /** Monitor release. Linear: push. Branching: republish the holder's tip to {@code lock}'s state. */
+    void onMonitorExit(StaticObject lock);
 
     /** Volatile read = pull (import the field's published history before reading). */
     void onVolatileRead();

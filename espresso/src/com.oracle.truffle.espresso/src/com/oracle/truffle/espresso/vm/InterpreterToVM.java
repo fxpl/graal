@@ -406,7 +406,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
             // Sync-as-Share: lock = pull. After acquiring, import updates published to g by the previous
             // holder's unlock and conflict-check this thread's staged writes. Folds away under shared;
             // off during JDK bootstrap.
-            context.getMemoryModel().onMonitorEnter();
+            context.getMemoryModel().onMonitorEnter(obj);
         }
     }
 
@@ -447,7 +447,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive()) {
             // Sync-as-Share: unlock = push. Publish this thread's view to g while still holding the
             // lock (may raise a conflict). Folds away under shared; off during JDK bootstrap.
-            meta.getContext().getMemoryModel().onMonitorExit();
+            meta.getContext().getMemoryModel().onMonitorExit(obj);
         }
         meta.getContext().getLanguage().getThreadLocalState().unblockContinuationSuspension();
         monitorUnsafeExit(lock);
