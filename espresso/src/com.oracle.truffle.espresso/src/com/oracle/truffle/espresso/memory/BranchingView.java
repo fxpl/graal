@@ -121,6 +121,14 @@ public final class BranchingView implements MemoryView {
         if (other == null || other == head) {
             return null;
         }
+        if (head == null) {
+            // Fast-forward: I have no commits of my own, so adopt the other branch wholesale. No
+            // conflict is possible (I have written nothing since any common ancestor). This is the
+            // git fast-forward: point head at `other` rather than build a merge commit.
+            head = other;
+            writesSince(other, null).forEach(lastWriter::put);
+            return null;
+        }
         // Already incorporated: if `other` is an ancestor of my head, there is nothing new to merge.
         // This makes an ordinary monitor-exit's re-merge a true no-op (the lock's published commit is
         // an ancestor of the holder's head), while a join — whose joinee head is off on a sibling
