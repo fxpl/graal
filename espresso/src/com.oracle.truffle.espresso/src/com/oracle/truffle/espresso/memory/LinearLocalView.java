@@ -31,7 +31,7 @@ import java.util.Map;
  * thread has observed. Owned by a single guest thread (lives on its {@code EspressoThreadLocalState}),
  * so it needs no synchronisation of its own.
  */
-public final class LinearLocalView {
+public final class LinearLocalView implements MemoryView {
 
     private long base;
     private final Map<VersionedLocation, Object> staging = new HashMap<>();

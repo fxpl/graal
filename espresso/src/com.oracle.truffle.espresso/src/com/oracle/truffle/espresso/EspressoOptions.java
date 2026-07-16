@@ -302,7 +302,8 @@ public final class EspressoOptions {
      */
     public enum MemoryModelMode {
         SHARED,
-        LINEAR
+        LINEAR,
+        BRANCHING
     }
 
     private static final OptionType<MemoryModelMode> MEMORY_MODEL_OPTION_TYPE = new OptionType<>("MemoryModel", new Function<String, MemoryModelMode>() {
@@ -311,15 +312,15 @@ public final class EspressoOptions {
             try {
                 return MemoryModelMode.valueOf(s.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("--java.MemoryModel: Mode can be 'shared' or 'linear'.");
+                throw new IllegalArgumentException("--java.MemoryModel: Mode can be 'shared', 'linear' or 'branching'.");
             }
         }
     });
 
-    @Option(help = "Selects the memory model: 'shared' (stock sequentially-consistent shared memory) or 'linear' (Sync-as-Share Linear version-controlled memory).", //
+    @Option(help = "Selects the memory model: 'shared' (stock sequentially-consistent shared memory), 'linear' (Sync-as-Share Linear version-controlled memory), or 'branching' (Sync-as-Share Branching commit-DAG model).", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "shared|linear") //
+                    usageSyntax = "shared|linear|branching") //
     public static final OptionKey<MemoryModelMode> MemoryModel = new OptionKey<>(MemoryModelMode.SHARED, MEMORY_MODEL_OPTION_TYPE);
 
     /**

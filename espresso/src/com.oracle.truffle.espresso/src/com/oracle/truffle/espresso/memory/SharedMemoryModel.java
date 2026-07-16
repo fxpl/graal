@@ -49,6 +49,11 @@ public final class SharedMemoryModel implements MemoryModel {
     // EspressoLanguage.isMemoryModelEnabled() (false for shared), so they fold away before any call.
 
     @Override
+    public MemoryView newThreadView() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.newThreadView: no per-thread view under shared");
+    }
+
+    @Override
     public Object readField(StaticObject holder, Field field) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.readField: memory-model hooks must be folded under shared");
     }

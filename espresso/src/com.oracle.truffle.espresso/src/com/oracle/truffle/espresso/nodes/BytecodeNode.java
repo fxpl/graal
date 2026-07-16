@@ -335,7 +335,7 @@ import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.impl.Method.MethodVersion;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
-import com.oracle.truffle.espresso.memory.LinearLocalView;
+import com.oracle.truffle.espresso.memory.MemoryView;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
@@ -800,7 +800,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                     // Sync-as-Share: raise a conflict detected by the previous synchronisation action
                     // here, at a safe point (past any just-executed monitorexit), so it propagates as an
                     // ordinary catchable guest exception. Folds away under shared (PE-constant guard).
-                    LinearLocalView mmView = getLanguage().getThreadLocalState().getMemoryView();
+                    MemoryView mmView = getLanguage().getThreadLocalState().getMemoryView();
                     if (mmView.hasPendingConflict()) {
                         setBCI(frame, curBCI);
                         throw getMeta().throwExceptionWithMessage(getMeta().java_lang_Error, mmView.takePendingConflict());

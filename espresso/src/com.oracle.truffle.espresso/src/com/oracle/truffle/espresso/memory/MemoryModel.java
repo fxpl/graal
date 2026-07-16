@@ -58,6 +58,14 @@ public interface MemoryModel {
      */
     boolean isEnabled();
 
+    /**
+     * Create this model's per-thread {@link MemoryView}. Called lazily by
+     * {@code EspressoThreadLocalState} on first use, so the view type matches the active model
+     * (Linear's staging+base view, Branching's staging+DAG-head view). Never called under
+     * {@link SharedMemoryModel} (the hot-path hooks fold away, so no thread ever asks for a view).
+     */
+    MemoryView newThreadView();
+
     // --- Ordinary field access (called only when enabled; the hot-path guard folds under shared) ---
 
     /**

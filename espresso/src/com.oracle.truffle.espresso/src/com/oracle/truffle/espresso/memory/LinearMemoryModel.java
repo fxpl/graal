@@ -69,6 +69,11 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
+    public MemoryView newThreadView() {
+        return new LinearLocalView();
+    }
+
+    @Override
     public boolean isActive() {
         return active;
     }
@@ -79,7 +84,8 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     private LinearLocalView currentView() {
-        return context.getLanguage().getThreadLocalState().getMemoryView();
+        // Safe: under linear the thread-local view was created by this model's newThreadView().
+        return (LinearLocalView) context.getLanguage().getThreadLocalState().getMemoryView();
     }
 
     private Object read(VersionedLocation loc) {

@@ -32,7 +32,7 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
 import com.oracle.truffle.espresso.impl.Field;
-import com.oracle.truffle.espresso.memory.LinearLocalView;
+import com.oracle.truffle.espresso.memory.MemoryView;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.vm.VM;
 
@@ -60,9 +60,10 @@ public class EspressoThreadLocalState {
 
     private List<PinnedObject> pinnedObjects;
 
-    // Sync-as-Share: this thread's private view of memory (staging area + base version). Lazily
-    // created; only ever touched under a non-stock memory model, so it costs nothing under shared.
-    private LinearLocalView memoryView;
+    // Sync-as-Share: this thread's private view of memory (staging + base/head). Lazily created by the
+    // active memory model (Linear or Branching); only ever touched under a non-stock model, so it
+    // costs nothing under shared.
+    private MemoryView memoryView;
 
     @SuppressWarnings("unused")
     public EspressoThreadLocalState(EspressoContext context, Thread t) {
@@ -71,10 +72,10 @@ public class EspressoThreadLocalState {
         assert ((hostThread = new WeakReference<>(t)) != null);
     }
 
-    /** This guest thread's Sync-as-Share memory view, created on first use. */
-    public LinearLocalView getMemoryView() {
+    /** This guest thread's Sync-as-Share memory view, created on first use by the active model. */
+    public MemoryView getMemoryView() {
         if (memoryView == null) {
-            memoryView = new LinearLocalView();
+            memoryView = EspressoContext.get(null).getMemoryModel().newThreadView();
         }
         return memoryView;
     }
