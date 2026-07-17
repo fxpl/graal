@@ -94,6 +94,7 @@ public final class BranchingView implements MemoryView {
 
     void stage(VersionedLocation loc, Object value) {
         staging.put(loc, value);
+        VersioningStats.observeStaging(staging.size());
     }
 
     /** Staged value, else the committed value (materialised in lastWriter), else ABSENT (read heap). */
@@ -113,12 +114,14 @@ public final class BranchingView implements MemoryView {
         }
         Commit c = new Commit(new Timestamp(threadId, ++counter), new HashMap<>(staging),
                         head == null ? List.of() : List.of(head), false);
+        VersioningStats.onCommit();
         for (VersionedLocation loc : c.changes().keySet()) {
             lastWriter.put(loc, c);
         }
         staging.clear();
         head = c;
         ownClock().observe(threadId, counter);   // my frontier now reaches my own new commit
+        VersioningStats.observeLastWriter(lastWriter.size());
     }
 
     /**
@@ -170,11 +173,14 @@ public final class BranchingView implements MemoryView {
             // commit is created (git's fast-forward). This is the steady state of a contended lock: the
             // previous holders already merged my last commit, so on re-acquire I am strictly behind, and
             // the DAG stays a linear chain instead of growing a merge node per acquisition.
+            VersioningStats.onMerge(true);
             writesNotIn(otherHead, clock).forEach(lastWriter::put);
             head = otherHead;
             ownClock().join(otherClock);
+            VersioningStats.observeLastWriter(lastWriter.size());
             return null;
         }
+        VersioningStats.onMerge(false);
         // Walk only the other branch's commits I have not seen (pruned by my clock), newest writer per
         // location. For each, a conflict iff the other side never saw my current writer of that location.
         Map<VersionedLocation, Commit> theirs = writesNotIn(otherHead, clock);
@@ -187,12 +193,14 @@ public final class BranchingView implements MemoryView {
             }
         }
         head = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(head, otherHead), conflict != null);
+        VersioningStats.onCommit();
         ownClock().observe(threadId, counter);
         clock.join(otherClock);
         if (conflict != null) {
             return conflict;
         }
         theirs.forEach(lastWriter::put);   // clean merge: adopt the other branch's writes
+        VersioningStats.observeLastWriter(lastWriter.size());
         return null;
     }
 

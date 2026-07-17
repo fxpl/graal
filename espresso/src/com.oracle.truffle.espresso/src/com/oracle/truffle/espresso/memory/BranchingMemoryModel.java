@@ -97,6 +97,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     public BranchingMemoryModel(EspressoContext context) {
         this.context = context;
+        VersioningStats.arm();
     }
 
     @Override

@@ -1,0 +1,125 @@
+/*
+ * Copyright (c) 2026, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
+package com.oracle.truffle.espresso.memory;
+
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * Optional, host-side counters for the memory footprint of the version-controlled models, enabled by
+ * the {@code SYNCSHARE_STATS} environment variable. The versioned structures (branching {@link Commit}
+ * nodes and the DAG, linear {@link Version} chains, staging maps) live on the Espresso <em>runtime</em>
+ * (host) heap, not the guest heap, so a guest {@code Runtime.getRuntime()} reading cannot see them;
+ * these counters measure them directly. Nothing is reclaimed yet, so "created" counts are also the
+ * resident counts — the number a history-collapsing scheme would shrink.
+ *
+ * <p>When disabled (the default) every hook is a single {@code static final} boolean test that the
+ * compiler folds away, so the speed benchmarks are unaffected. A summary is printed to host {@code
+ * stderr} at JVM shutdown (armed once by whichever versioned model is constructed).
+ */
+final class VersioningStats {
+
+    static final boolean ENABLED = System.getenv("SYNCSHARE_STATS") != null;
+
+    // Branching.
+    static final AtomicLong commits = new AtomicLong();        // Commit nodes created (== resident DAG)
+    static final AtomicLong merges = new AtomicLong();          // merge() calls that were not no-ops
+    static final AtomicLong fastForwards = new AtomicLong();    // ...of which fast-forwarded (no merge node)
+    static final AtomicLong peakLastWriter = new AtomicLong();  // largest per-view committed cache
+
+    // Linear.
+    static final AtomicLong gVersions = new AtomicLong();       // Version nodes appended to g (resident)
+    static final AtomicLong gLocations = new AtomicLong();      // distinct versioned locations in g
+
+    // Both.
+    static final AtomicLong peakStaging = new AtomicLong();     // largest staging map seen (residency)
+
+    private static final AtomicBoolean ARMED = new AtomicBoolean();
+
+    private VersioningStats() {
+    }
+
+    /** Register the shutdown dump once (called by a versioned model's constructor). No-op when disabled. */
+    static void arm() {
+        if (ENABLED && ARMED.compareAndSet(false, true)) {
+            Runtime.getRuntime().addShutdownHook(new Thread(VersioningStats::dump, "versioning-stats-dump"));
+        }
+    }
+
+    static void onCommit() {
+        if (ENABLED) {
+            commits.incrementAndGet();
+        }
+    }
+
+    static void onMerge(boolean fastForward) {
+        if (ENABLED) {
+            merges.incrementAndGet();
+            if (fastForward) {
+                fastForwards.incrementAndGet();
+            }
+        }
+    }
+
+    static void onGVersion(int distinctLocations) {
+        if (ENABLED) {
+            gVersions.incrementAndGet();
+            observe(gLocations, distinctLocations);
+        }
+    }
+
+    static void observeStaging(int size) {
+        if (ENABLED) {
+            observe(peakStaging, size);
+        }
+    }
+
+    static void observeLastWriter(int size) {
+        if (ENABLED) {
+            observe(peakLastWriter, size);
+        }
+    }
+
+    private static void observe(AtomicLong peak, long value) {
+        long cur;
+        while (value > (cur = peak.get()) && !peak.compareAndSet(cur, value)) {
+            // retry until we win the CAS or someone else recorded a higher peak
+        }
+    }
+
+    private static void dump() {
+        StringBuilder sb = new StringBuilder("[versioning-stats]");
+        if (commits.get() > 0 || merges.get() > 0) {
+            sb.append(" branching: commits=").append(commits)
+                            .append(" merges=").append(merges)
+                            .append(" fastForwards=").append(fastForwards)
+                            .append(" peakLastWriter=").append(peakLastWriter);
+        }
+        if (gVersions.get() > 0) {
+            sb.append(" linear: gVersions=").append(gVersions)
+                            .append(" gLocations=").append(gLocations);
+        }
+        sb.append(" peakStaging=").append(peakStaging);
+        System.err.println(sb);
+    }
+}

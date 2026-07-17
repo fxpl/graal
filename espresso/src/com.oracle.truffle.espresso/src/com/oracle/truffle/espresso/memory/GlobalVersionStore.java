@@ -140,6 +140,7 @@ public final class GlobalVersionStore implements GlobalHistory {
             for (Map.Entry<VersionedLocation, Object> e : view.staging().entrySet()) {
                 // New head whose prev is the old head (null if first): O(1), no copy.
                 history.compute(e.getKey(), (k, old) -> new Version(next, e.getValue(), old));
+                VersioningStats.onGVersion(history.size());
             }
             view.clearStaging();
             view.advanceBase(next);

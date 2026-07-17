@@ -50,6 +50,7 @@ public final class LinearMemoryModel implements MemoryModel {
     public LinearMemoryModel(EspressoContext context) {
         this.context = context;
         this.global = createHistory(context.getLanguage().getMemoryModelHistoryMode());
+        VersioningStats.arm();
     }
 
     private static GlobalHistory createHistory(EspressoOptions.MemoryModelHistoryMode mode) {

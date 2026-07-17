@@ -54,6 +54,7 @@ public final class LinearLocalView implements MemoryView {
 
     public void stage(VersionedLocation loc, Object value) {
         staging.put(loc, value);
+        VersioningStats.observeStaging(staging.size());
     }
 
     public Map<VersionedLocation, Object> staging() {
