@@ -44,6 +44,22 @@ public record Commit(Timestamp id, Map<VersionedLocation, Object> changes, List<
         parents = List.copyOf(parents);
     }
 
+    // Identity equality: a Commit is a NODE in the DAG -- two distinct node objects are distinct even
+    // with identical content. This is not just semantics: the record's default value-based equals/
+    // hashCode recurse through `parents`, so hashing one commit would hash its entire ancestry (O(DAG)),
+    // making the O(1) `visited`-set operations in a DAG walk O(DAG) each and the walk O(DAG^2). All
+    // uses compare commits by identity (`==`) or key maps by VersionedLocation/StaticObject, so identity
+    // equality here is both correct and what the callers already assume.
+    @Override
+    public boolean equals(Object o) {
+        return this == o;
+    }
+
+    @Override
+    public int hashCode() {
+        return System.identityHashCode(this);
+    }
+
     boolean isMerge() {
         return parents.size() >= 2;
     }

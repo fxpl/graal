@@ -32,19 +32,29 @@ import java.util.Set;
 
 /**
  * A guest thread's view in the branching model (the prototype's {@code branching::LocalVersionStore},
- * eager variant): a {@code head} into the commit DAG, a {@code staging} map of uncommitted writes, and
- * a materialised {@code lastWriter} cache giving O(1) committed reads. This is the <b>eager</b> policy
- * — the paper's branching model — so a merge diffs the two branches at their lowest common ancestor
- * and reports a conflict <em>at the merge</em>; reads never conflict.
+ * eager variant): a {@code head} into the commit DAG, a {@code staging} map of uncommitted writes, a
+ * materialised {@code lastWriter} cache giving O(1) committed reads, and a {@link VectorClock} frontier
+ * {@code clock} recording, per thread, how far this view has observed. This is the <b>eager</b> policy
+ * — the paper's branching model — so a merge reports a conflict <em>at the merge</em>; reads never
+ * conflict.
+ *
+ * <p>Conflict detection is happens-before race detection (FastTrack / DJIT+): rather than compute the
+ * lowest common ancestor and diff both branches (O(DAG)), a merge asks two vector-clock questions —
+ * "have I already incorporated the other tip?" and, for each write the other branch made that I have
+ * not seen, "did the other branch see <em>my</em> latest writer of that location?" — each an O(1)
+ * clock lookup against a per-location epoch. The DAG is retained only as the record (it is walked, but
+ * pruned by the clock, so only the divergent commits are visited). See {@code branching-vectorclocks.md}.
  *
  * <p>Not thread-safe, and does not need to be: a view is owned by one guest thread. Commits are
- * immutable {@link Commit} nodes shared across views (safe publication via final fields).
+ * immutable {@link Commit} nodes shared across views (safe publication via final fields); the frontier
+ * {@code clock} is copied before it is published on a tip.
  */
 public final class BranchingView implements MemoryView {
 
     private final long threadId;
     private long counter;                                  // this thread's commit counter (Timestamp)
     private Commit head;                                   // tip of this thread's branch (null = none)
+    private final VectorClock clock = new VectorClock();   // this view's happens-before frontier
     private final Map<VersionedLocation, Object> staging = new HashMap<>();
     private final Map<VersionedLocation, Commit> lastWriter = new HashMap<>();  // eager committed cache
     private String pendingConflict;
@@ -55,6 +65,11 @@ public final class BranchingView implements MemoryView {
 
     Commit head() {
         return head;
+    }
+
+    /** This view's happens-before frontier, snapshotted (copied) when published on a lock/terminal tip. */
+    VectorClock clock() {
+        return clock;
     }
 
     boolean stagingEmpty() {
@@ -87,6 +102,7 @@ public final class BranchingView implements MemoryView {
         }
         staging.clear();
         head = c;
+        clock.observe(threadId, counter);   // my frontier now reaches my own new commit
     }
 
     /**
@@ -99,75 +115,77 @@ public final class BranchingView implements MemoryView {
     }
 
     /**
-     * Fork: start this (fresh) view at another branch's tip and committed cache. Called on the child
-     * at start with the snapshot the parent captured at spawn (spawn: child adopts parent).
+     * Fork: start this (fresh) view at another branch's tip, committed cache, and frontier clock.
+     * Called on the child at start with the snapshot the parent captured at spawn (spawn: child adopts
+     * parent).
      */
-    void adopt(Commit forkPoint, Map<VersionedLocation, Commit> forkLastWriter) {
+    void adopt(Commit forkPoint, Map<VersionedLocation, Commit> forkLastWriter, VectorClock forkClock) {
         this.head = forkPoint;
         this.lastWriter.clear();
         this.lastWriter.putAll(forkLastWriter);
+        this.clock.join(forkClock);
     }
 
     /**
-     * Merge {@code other} into this branch (eager). Finds the lowest common ancestor, diffs both
-     * branches' writes since the LCA, and — if the same location was written on both — returns that
-     * location as a conflict (creating a conflicted merge commit and advancing head). On success,
-     * updates the committed cache for every location touched on either branch and advances head to a
-     * clean merge commit. {@code null} means no conflict. Assumes staging is empty (callers commit
-     * first, as the protocol does at every sync action).
+     * Merge the branch tip {@code otherHead} (with its frontier {@code otherClock}) into this branch
+     * (eager), the happens-before-race way — no lowest common ancestor. Returns a location written
+     * concurrently on both branches (a conflict), else {@code null}. Advances {@code head} to a merge
+     * commit and joins the clocks. Assumes staging is empty (callers commit first, as the protocol does
+     * at every sync action).
+     *
+     * <p>The conflict rule, per location the other branch wrote that I have not seen: it is a conflict
+     * iff the other branch never saw <em>my</em> latest writer of that location (so the two writers are
+     * concurrent); otherwise the other's write is causally later and I adopt it. A writer from the
+     * shared prefix is in {@code otherClock}, so it never triggers a conflict.
      */
-    VersionedLocation mergeWithCommit(Commit other) {
+    VersionedLocation merge(Commit otherHead, VectorClock otherClock) {
         assert staging.isEmpty();
-        if (other == null || other == head) {
+        if (otherHead == null || otherHead == head) {
+            return null;
+        }
+        if (clock.contains(otherHead.id())) {
+            // Already incorporated (a lock re-acquire, a re-merge): nothing new. O(1), and it keeps an
+            // ordinary monitor-exit's re-publish from spawning spurious merge commits.
             return null;
         }
         if (head == null) {
-            // Fast-forward: I have no commits of my own, so adopt the other branch wholesale. No
-            // conflict is possible (I have written nothing since any common ancestor). This is the
-            // git fast-forward: point head at `other` rather than build a merge commit.
-            head = other;
-            writesSince(other, null).forEach(lastWriter::put);
+            // Fast-forward: no commits of my own, so adopt the other branch wholesale (empty bound ->
+            // the walk collects its entire history). No conflict possible: I have written nothing.
+            head = otherHead;
+            writesNotIn(otherHead, new VectorClock()).forEach(lastWriter::put);
+            clock.join(otherClock);
             return null;
         }
-        // Already incorporated: if `other` is an ancestor of my head, there is nothing new to merge.
-        // This makes an ordinary monitor-exit's re-merge a true no-op (the lock's published commit is
-        // an ancestor of the holder's head), while a join — whose joinee head is off on a sibling
-        // branch, not an ancestor — still merges. Avoids polluting the DAG with spurious merge commits.
-        if (head != null && canReach(head, other, new HashMap<>())) {
-            return null;
-        }
-        Commit lca = lowestCommonAncestor(head, other);
-        Map<VersionedLocation, Commit> branchA = writesSince(head, lca);
-        Map<VersionedLocation, Commit> branchB = writesSince(other, lca);
-
+        // Walk only the other branch's commits I have not seen (pruned by my clock), newest writer per
+        // location. For each, a conflict iff the other side never saw my current writer of that location.
+        Map<VersionedLocation, Commit> theirs = writesNotIn(otherHead, clock);
         VersionedLocation conflict = null;
-        for (Map.Entry<VersionedLocation, Commit> e : branchA.entrySet()) {
-            Commit b = branchB.get(e.getKey());
-            if (b != null && b != e.getValue()) {   // both branches wrote it since the LCA
+        for (Map.Entry<VersionedLocation, Commit> e : theirs.entrySet()) {
+            Commit mine = lastWriter.get(e.getKey());
+            if (mine != null && !otherClock.contains(mine.id())) {
                 conflict = e.getKey();
                 break;
             }
         }
-
-        Commit merge = new Commit(new Timestamp(threadId, ++counter), Map.of(),
-                        List.of(head, other), conflict != null);
-        head = merge;
+        head = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(head, otherHead), conflict != null);
+        clock.observe(threadId, counter);
+        clock.join(otherClock);
         if (conflict != null) {
             return conflict;
         }
-        // No conflict: fold both branches' latest writers into the committed cache.
-        branchA.forEach(lastWriter::put);
-        branchB.forEach(lastWriter::put);
+        theirs.forEach(lastWriter::put);   // clean merge: adopt the other branch's writes
         return null;
     }
 
-    // --- DAG helpers (ported from gitmem branching/eager) ---
-
-    /** Latest writer of each location on the branch from {@code tip} back to (excluding) {@code lca}. */
-    private static Map<VersionedLocation, Commit> writesSince(Commit tip, Commit lca) {
+    /**
+     * The newest writer of each location on {@code tip}'s branch that {@code bound} has <em>not</em>
+     * already observed. Prunes the DFS at any commit {@code bound} contains — by counter monotonicity
+     * that commit and all its ancestry are already in {@code bound} — so this visits only the commits
+     * by which {@code tip} diverges from {@code bound}, never the whole DAG.
+     */
+    private static Map<VersionedLocation, Commit> writesNotIn(Commit tip, VectorClock bound) {
         Map<VersionedLocation, Commit> out = new HashMap<>();
         Set<Commit> visited = new HashSet<>();
-        Map<Commit, Boolean> reachMemo = new HashMap<>();
         Deque<Commit> stack = new ArrayDeque<>();
         if (tip != null) {
             stack.push(tip);
@@ -177,8 +195,8 @@ public final class BranchingView implements MemoryView {
             if (c == null || !visited.add(c)) {
                 continue;
             }
-            if (lca != null && (c == lca || !canReach(c, lca, reachMemo))) {
-                continue;   // stop at / beyond the LCA (the shared prefix)
+            if (bound.contains(c.id())) {
+                continue;   // bound already has c (and, by monotonicity, all of c's ancestry) -> prune
             }
             for (VersionedLocation loc : c.changes().keySet()) {
                 out.putIfAbsent(loc, c);   // first (newest, DFS from tip) writer dominates
@@ -188,63 +206,6 @@ public final class BranchingView implements MemoryView {
             }
         }
         return out;
-    }
-
-    /** Whether {@code target} is reachable from {@code from} by following parents (memoised). */
-    private static boolean canReach(Commit from, Commit target, Map<Commit, Boolean> memo) {
-        if (from == null) {
-            return false;
-        }
-        if (from == target) {
-            return true;
-        }
-        Boolean cached = memo.get(from);
-        if (cached != null) {
-            return cached;
-        }
-        boolean r = false;
-        for (Commit p : from.parents()) {
-            if (canReach(p, target, memo)) {
-                r = true;
-                break;
-            }
-        }
-        memo.put(from, r);
-        return r;
-    }
-
-    /** Lowest common ancestor of two commits in the DAG, or null if none (disjoint histories). */
-    private static Commit lowestCommonAncestor(Commit a, Commit b) {
-        if (a == null || b == null) {
-            return null;
-        }
-        if (a == b) {
-            return a;
-        }
-        // Collect all ancestors of a (inclusive), then BFS from b for the first hit.
-        Set<Commit> ancestorsOfA = new HashSet<>();
-        Deque<Commit> q = new ArrayDeque<>();
-        q.add(a);
-        while (!q.isEmpty()) {
-            Commit c = q.poll();
-            if (c == null || !ancestorsOfA.add(c)) {
-                continue;
-            }
-            q.addAll(c.parents());
-        }
-        Set<Commit> visited = new HashSet<>();
-        q.add(b);
-        while (!q.isEmpty()) {
-            Commit c = q.poll();
-            if (c == null || !visited.add(c)) {
-                continue;
-            }
-            if (ancestorsOfA.contains(c)) {
-                return c;   // first common ancestor reached from b
-            }
-            q.addAll(c.parents());
-        }
-        return null;
     }
 
     // --- MemoryView: deferred-conflict flag (raised at the bytecode safe point / thread end) ---

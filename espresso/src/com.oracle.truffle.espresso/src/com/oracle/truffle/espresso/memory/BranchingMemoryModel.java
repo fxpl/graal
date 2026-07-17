@@ -85,10 +85,14 @@ public final class BranchingMemoryModel implements MemoryModel {
      * joiner's monitor op on the thread object. Kept separate from {@link #lockStates} precisely so a
      * joiner's own enter/exit republish cannot clobber the joinee's published head. See class doc.
      */
-    private final Map<StaticObject, Commit> terminalHeads = new ConcurrentHashMap<>();
+    private final Map<StaticObject, Tip> terminalHeads = new ConcurrentHashMap<>();
 
-    /** A snapshot of the parent's branch tip and committed cache, captured at spawn for the child. */
-    private record ForkPoint(Commit head, Map<VersionedLocation, Commit> lastWriter) {
+    /** A published branch tip: a commit and the publisher's frontier clock at publication. */
+    private record Tip(Commit head, VectorClock clock) {
+    }
+
+    /** A snapshot of the parent's branch tip, committed cache, and frontier clock, captured at spawn. */
+    private record ForkPoint(Commit head, Map<VersionedLocation, Commit> lastWriter, VectorClock clock) {
     }
 
     public BranchingMemoryModel(EspressoContext context) {
@@ -154,7 +158,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         StaticObject self = context.getCurrentPlatformThread();
         ForkPoint fork = pendingForks.remove(self);
         if (fork != null) {
-            currentView().adopt(fork.head(), fork.lastWriter());
+            currentView().adopt(fork.head(), fork.lastWriter(), fork.clock());
         }
     }
 
@@ -167,17 +171,17 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         if (view.head() != null) {
-            terminalHeads.put(context.getCurrentPlatformThread(), view.head());
+            terminalHeads.put(context.getCurrentPlatformThread(), new Tip(view.head(), new VectorClock(view.clock())));
         }
     }
 
     @Override
     public void onSpawn(StaticObject childThread) {
-        // Fork: commit the parent's staging, then snapshot its tip + committed cache for the child,
-        // which adopts it at start. Runs on the parent, before the child begins.
+        // Fork: commit the parent's staging, then snapshot its tip + committed cache + frontier clock
+        // for the child, which adopts it at start. Runs on the parent, before the child begins.
         BranchingView view = currentView();
         view.commitStaging();
-        pendingForks.put(childThread, new ForkPoint(view.head(), view.snapshotLastWriter()));
+        pendingForks.put(childThread, new ForkPoint(view.head(), view.snapshotLastWriter(), new VectorClock(view.clock())));
     }
 
     @Override
@@ -187,8 +191,8 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         LockState state = lockState(lock);
-        VersionedLocation conflict = view.mergeWithCommit(state.commit);
-        state.commit = view.head();
+        VersionedLocation conflict = view.merge(state.commit, state.clock);
+        publish(state, view);
         VersionedLocation joinConflict = mergeTerminal(lock, view);
         handleConflict(conflict != null ? conflict : joinConflict, view);
     }
@@ -201,18 +205,24 @@ public final class BranchingMemoryModel implements MemoryModel {
         // joinee's terminal head (the wait-reacquire inside join fires no monitor hook). See class doc.
         BranchingView view = currentView();
         view.commitStaging();
-        lockState(lock).commit = view.head();
+        publish(lockState(lock), view);
         handleConflict(mergeTerminal(lock, view), view);
     }
 
+    /** Publish the view's current tip and frontier clock to a lock state (a snapshot copy of the clock). */
+    private static void publish(LockState state, BranchingView view) {
+        state.commit = view.head();
+        state.clock = new VectorClock(view.clock());
+    }
+
     /**
-     * If {@code lock} is a thread object that has ended, merge its terminal head into this view (join
-     * semantics); otherwise a no-op. Idempotent: once merged, the terminal head is an ancestor of this
-     * head and {@link BranchingView#mergeWithCommit} short-circuits. Never mutates {@link #terminalHeads}.
+     * If {@code lock} is a thread object that has ended, merge its terminal tip into this view (join
+     * semantics); otherwise a no-op. Idempotent: once merged, the terminal tip is already in this
+     * view's clock and {@link BranchingView#merge} short-circuits. Never mutates {@link #terminalHeads}.
      */
     private VersionedLocation mergeTerminal(StaticObject lock, BranchingView view) {
-        Commit terminal = terminalHeads.get(lock);
-        return terminal == null ? null : view.mergeWithCommit(terminal);
+        Tip terminal = terminalHeads.get(lock);
+        return terminal == null ? null : view.merge(terminal.head(), terminal.clock());
     }
 
     @Override
