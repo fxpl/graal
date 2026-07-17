@@ -164,11 +164,14 @@ public final class BranchingView implements MemoryView {
             // ordinary monitor-exit's re-publish from spawning spurious merge commits.
             return null;
         }
-        if (head == null) {
-            // Fast-forward: no commits of my own, so adopt the other branch wholesale (empty bound ->
-            // the walk collects its entire history). No conflict possible: I have written nothing.
+        if (head == null || otherClock.contains(head.id())) {
+            // Fast-forward: my whole branch is contained in the other (or I have no commits), so I have
+            // no divergent writes -> adopt the other tip wholesale. No conflict is possible and no merge
+            // commit is created (git's fast-forward). This is the steady state of a contended lock: the
+            // previous holders already merged my last commit, so on re-acquire I am strictly behind, and
+            // the DAG stays a linear chain instead of growing a merge node per acquisition.
+            writesNotIn(otherHead, clock).forEach(lastWriter::put);
             head = otherHead;
-            writesNotIn(otherHead, new VectorClock()).forEach(lastWriter::put);
             ownClock().join(otherClock);
             return null;
         }
