@@ -171,7 +171,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         if (view.head() != null) {
-            terminalHeads.put(context.getCurrentPlatformThread(), new Tip(view.head(), new VectorClock(view.clock())));
+            terminalHeads.put(context.getCurrentPlatformThread(), new Tip(view.head(), view.publishClock()));
         }
     }
 
@@ -181,7 +181,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // for the child, which adopts it at start. Runs on the parent, before the child begins.
         BranchingView view = currentView();
         view.commitStaging();
-        pendingForks.put(childThread, new ForkPoint(view.head(), view.snapshotLastWriter(), new VectorClock(view.clock())));
+        pendingForks.put(childThread, new ForkPoint(view.head(), view.snapshotLastWriter(), view.publishClock()));
     }
 
     @Override
@@ -209,10 +209,10 @@ public final class BranchingMemoryModel implements MemoryModel {
         handleConflict(mergeTerminal(lock, view), view);
     }
 
-    /** Publish the view's current tip and frontier clock to a lock state (a snapshot copy of the clock). */
+    /** Publish the view's current tip and frontier clock to a lock state (clock shared copy-on-write). */
     private static void publish(LockState state, BranchingView view) {
         state.commit = view.head();
-        state.clock = new VectorClock(view.clock());
+        state.clock = view.publishClock();
     }
 
     /**

@@ -54,7 +54,8 @@ public final class BranchingView implements MemoryView {
     private final long threadId;
     private long counter;                                  // this thread's commit counter (Timestamp)
     private Commit head;                                   // tip of this thread's branch (null = none)
-    private final VectorClock clock = new VectorClock();   // this view's happens-before frontier
+    private VectorClock clock = new VectorClock();         // this view's happens-before frontier
+    private boolean clockShared;                           // clock handed to a tip; copy-on-write next mutation
     private final Map<VersionedLocation, Object> staging = new HashMap<>();
     private final Map<VersionedLocation, Commit> lastWriter = new HashMap<>();  // eager committed cache
     private String pendingConflict;
@@ -67,8 +68,23 @@ public final class BranchingView implements MemoryView {
         return head;
     }
 
-    /** This view's happens-before frontier, snapshotted (copied) when published on a lock/terminal tip. */
-    VectorClock clock() {
+    /**
+     * Publish this view's frontier for a lock/terminal tip. Returns the clock <em>by reference</em> and
+     * marks it shared, so no copy is allocated on the (hot) lock path; the view copies it lazily the
+     * next time it mutates the clock ({@link #ownClock}), so the published instance is never mutated
+     * after publication. A read-only lock (which never mutates the clock) therefore allocates nothing.
+     */
+    VectorClock publishClock() {
+        clockShared = true;
+        return clock;
+    }
+
+    /** The clock, made private to this view first (copy-on-write) so it can be mutated safely. */
+    private VectorClock ownClock() {
+        if (clockShared) {
+            clock = new VectorClock(clock);
+            clockShared = false;
+        }
         return clock;
     }
 
@@ -102,7 +118,7 @@ public final class BranchingView implements MemoryView {
         }
         staging.clear();
         head = c;
-        clock.observe(threadId, counter);   // my frontier now reaches my own new commit
+        ownClock().observe(threadId, counter);   // my frontier now reaches my own new commit
     }
 
     /**
@@ -123,7 +139,7 @@ public final class BranchingView implements MemoryView {
         this.head = forkPoint;
         this.lastWriter.clear();
         this.lastWriter.putAll(forkLastWriter);
-        this.clock.join(forkClock);
+        ownClock().join(forkClock);
     }
 
     /**
@@ -153,7 +169,7 @@ public final class BranchingView implements MemoryView {
             // the walk collects its entire history). No conflict possible: I have written nothing.
             head = otherHead;
             writesNotIn(otherHead, new VectorClock()).forEach(lastWriter::put);
-            clock.join(otherClock);
+            ownClock().join(otherClock);
             return null;
         }
         // Walk only the other branch's commits I have not seen (pruned by my clock), newest writer per
@@ -168,7 +184,7 @@ public final class BranchingView implements MemoryView {
             }
         }
         head = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(head, otherHead), conflict != null);
-        clock.observe(threadId, counter);
+        ownClock().observe(threadId, counter);
         clock.join(otherClock);
         if (conflict != null) {
             return conflict;
