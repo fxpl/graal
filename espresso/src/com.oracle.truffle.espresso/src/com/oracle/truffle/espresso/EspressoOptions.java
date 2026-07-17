@@ -355,15 +355,25 @@ public final class EspressoOptions {
 
     /**
      * History-collapsing (reclamation) policy for the Linear model (ignored under {@code shared} and
-     * {@code branching}). {@code OFF} keeps all history forever (unbounded growth). {@code THRESHOLD}
-     * reclaims, on a cadence, every version older than the <em>furthest-behind live thread</em>: the
-     * collapse threshold {@code T = min} over live threads of their observed base. For each location
-     * the newest version {@code <= T} is retained as a moving {@code t=0} and everything older is
-     * dropped, since no live thread (all with base {@code >= T}) can resolve below it.
+     * {@code branching}). {@code OFF} keeps all history forever (unbounded growth).
+     *
+     * <p>{@code THRESHOLD} reclaims, on a cadence, every version older than the
+     * <em>furthest-behind live thread</em>: the collapse threshold {@code T = min} over live threads of
+     * their observed base. For each location the newest version {@code <= T} is retained (a moving
+     * {@code t=0}) and everything older is dropped. Cheap (one number, drops the settled tail) but a
+     * single thread parked at a low base pins {@code [T, head]} — the whole interval, including the
+     * interior no one reads.
+     *
+     * <p>{@code SQUASH} reclaims using the <em>full set</em> of live bases: for each location it keeps
+     * only the version each live base <em>resolves to</em> ({@code newest <= b}) plus the head (needed
+     * for conflict detection), dropping the shadowed interior between them. This reclaims the interior
+     * that {@code THRESHOLD} cannot when threads are spread out (a parked coordinator plus an advanced
+     * worker), at the cost of examining every version against the base set.
      */
     public enum MemoryModelCollapseMode {
         OFF,
-        THRESHOLD
+        THRESHOLD,
+        SQUASH
     }
 
     private static final OptionType<MemoryModelCollapseMode> MEMORY_MODEL_COLLAPSE_OPTION_TYPE = new OptionType<>("MemoryModelCollapse", new Function<String, MemoryModelCollapseMode>() {
@@ -372,15 +382,15 @@ public final class EspressoOptions {
             try {
                 return MemoryModelCollapseMode.valueOf(s.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("--java.MemoryModelCollapse: policy can be 'off' or 'threshold'.");
+                throw new IllegalArgumentException("--java.MemoryModelCollapse: policy can be 'off', 'threshold' or 'squash'.");
             }
         }
     });
 
-    @Option(help = "History-collapsing policy for MemoryModel=linear: 'off' (keep all history) or 'threshold' (reclaim versions older than the furthest-behind live thread, on a cadence). Ignored under shared/branching.", //
+    @Option(help = "History-collapsing policy for MemoryModel=linear: 'off' (keep all history), 'threshold' (drop versions older than the furthest-behind live thread) or 'squash' (also drop the interior no live base resolves to). On a cadence; ignored under shared/branching.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "off|threshold") //
+                    usageSyntax = "off|threshold|squash") //
     public static final OptionKey<MemoryModelCollapseMode> MemoryModelCollapse = new OptionKey<>(MemoryModelCollapseMode.OFF, MEMORY_MODEL_COLLAPSE_OPTION_TYPE);
 
     @Option(help = "Cadence for MemoryModelCollapse=watermark: run a collapse once every N committing sync pushes (default 1000). Smaller = tighter memory, more collapse overhead.", //

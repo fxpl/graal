@@ -75,37 +75,62 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     /**
-     * On a cadence of {@link #collapseEvery} sync pushes, reclaim history older than the collapse
-     * threshold {@code T = min} over live threads of their observed base — the furthest-behind live
-     * thread. Reading each base lock-free is safe: base only advances, so a stale-low read yields a
-     * conservative (too-small) threshold that retains more, never less.
+     * On a cadence of {@link #collapseEvery} sync pushes, reclaim history. Both policies read live
+     * bases lock-free, which is safe: a base only advances, so a stale-low read is conservative
+     * (retains more, never less). Threads at base 0 are excluded — having observed no commit, every
+     * read resolves to ABSENT (heap read-through) regardless of {@code g}, so they pin no version.
+     * (Guest runtimes park idle daemon threads — Reference Handler, Finalizer, Cleaner — at base 0;
+     * without this they would clamp reclamation to genesis.)
+     *
+     * <ul>
+     *   <li>{@code THRESHOLD}: collapse below {@code T = min} live base — drops the settled tail.</li>
+     *   <li>{@code SQUASH}: pass the full live-base set — also drops the interior no base resolves to
+     *       (the case a parked-low thread defeats under {@code THRESHOLD}).</li>
+     * </ul>
      */
     private void maybeCollapse() {
         if (!collapsing() || (pushes.incrementAndGet() % collapseEvery) != 0) {
             return;
         }
-        // Threshold = min base over live threads, EXCLUDING threads at base 0. A base-0 thread has
-        // observed no commit: every read resolves to ABSENT (read-through to the heap) regardless of
-        // what g holds, so it pins no version and must not clamp the threshold. (Guest runtimes always
-        // park idle daemon threads — Reference Handler, Finalizer, Cleaner — at base 0; without this
-        // they would peg the threshold at 0 and defeat all reclamation.)
+        if (collapseMode == EspressoOptions.MemoryModelCollapseMode.SQUASH) {
+            long[] bases = liveBasesPastGenesis();
+            if (COLLAPSE_DEBUG) {
+                System.err.println("[collapse-debug] squash liveViews=" + liveViews.size() + " bases=" + bases.length + " head=" + global.currentCounter());
+            }
+            if (bases.length > 0) {
+                global.squash(bases);
+            }
+            return;
+        }
         long threshold = Long.MAX_VALUE;
-        long maxBase = Long.MIN_VALUE;
         for (LinearLocalView v : liveViews) {
             long b = v.base();
             if (b > 0 && b < threshold) {
                 threshold = b;
             }
-            if (b > maxBase) {
-                maxBase = b;
-            }
         }
         if (COLLAPSE_DEBUG) {
-            System.err.println("[collapse-debug] liveViews=" + liveViews.size() + " threshold=" + threshold + " maxBase=" + maxBase + " head=" + global.currentCounter());
+            System.err.println("[collapse-debug] threshold=" + threshold + " liveViews=" + liveViews.size() + " head=" + global.currentCounter());
         }
         if (threshold != Long.MAX_VALUE) {   // at least one live thread past genesis
             global.collapse(threshold);
         }
+    }
+
+    /** Distinct-not-required snapshot of live thread bases {@code > 0}, for {@code SQUASH}. */
+    private long[] liveBasesPastGenesis() {
+        java.util.ArrayList<Long> bases = new java.util.ArrayList<>();
+        for (LinearLocalView v : liveViews) {
+            long b = v.base();
+            if (b > 0) {
+                bases.add(b);
+            }
+        }
+        long[] out = new long[bases.size()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = bases.get(i);
+        }
+        return out;
     }
 
     private static GlobalHistory createHistory(EspressoOptions.MemoryModelHistoryMode mode) {

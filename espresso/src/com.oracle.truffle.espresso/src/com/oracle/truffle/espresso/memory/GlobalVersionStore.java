@@ -228,4 +228,62 @@ public final class GlobalVersionStore implements GlobalHistory {
             write.unlock();
         }
     }
+
+    /**
+     * Squash: keep, per location, only the versions some live base resolves to (the newest version
+     * {@code <= b} for each base {@code b}) plus the head, dropping the shadowed interior. A version
+     * {@code v} with newer-neighbour counter {@code n} (or {@code +inf} for the head) resolves a base
+     * {@code b} iff {@code v.counter <= b < n}; it is kept iff it is the head or resolves some base.
+     * Same immutable-rebuild + write-lock discipline as {@link #collapse(long)}.
+     */
+    @Override
+    public void squash(long[] bases) {
+        if (bases.length == 0) {
+            return;
+        }
+        Lock write = gLock.writeLock();
+        write.lock();
+        try {
+            for (Map.Entry<VersionedLocation, Version> e : history.entrySet()) {
+                Version head = e.getValue();
+                // Kept versions, newest-first. The head is always kept (conflict detection).
+                java.util.ArrayList<Version> kept = new java.util.ArrayList<>();
+                long dropped = 0;
+                long newerCounter = Long.MAX_VALUE;   // counter of v's newer neighbour in the real chain
+                for (Version v = head; v != null; v = v.prev()) {
+                    if (v == head || resolvesSomeBase(bases, v.counter(), newerCounter)) {
+                        kept.add(v);
+                    } else {
+                        dropped++;
+                    }
+                    newerCounter = v.counter();
+                }
+                if (dropped == 0) {
+                    continue;
+                }
+                if (VersioningStats.ENABLED) {
+                    VersioningStats.onCollapse(dropped);
+                }
+                // Rebuild bottom-up (oldest kept first) so prev links point at the older kept node.
+                Version rebuilt = null;
+                for (int i = kept.size() - 1; i >= 0; i--) {
+                    Version v = kept.get(i);
+                    rebuilt = new Version(v.counter(), v.value(), rebuilt);
+                }
+                e.setValue(rebuilt);
+            }
+        } finally {
+            write.unlock();
+        }
+    }
+
+    /** Whether some base {@code b} falls in {@code [lo, hi)} — i.e. a live thread resolves to this version. */
+    private static boolean resolvesSomeBase(long[] bases, long lo, long hi) {
+        for (long b : bases) {
+            if (b >= lo && b < hi) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

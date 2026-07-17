@@ -76,4 +76,17 @@ public interface GlobalHistory {
     default void collapse(long threshold) {
         // Default: keep all history (MemoryModelCollapse=off, or a strategy without reclamation).
     }
+
+    /**
+     * Collapse (reclaim) using the full set of live thread bases (all {@code > 0}). For each location
+     * the retained versions are exactly those some live base <em>resolves to</em> — the newest version
+     * {@code <= b} for each base {@code b} — plus the head (kept for conflict detection). Every other
+     * version is shadowed for every live thread and is dropped, including the interior between a
+     * far-behind base and the head that {@link #collapse(long)} would keep. A no-op by default;
+     * {@link GlobalVersionStore} implements it. Invoked on a cadence by {@link LinearMemoryModel} only
+     * when {@code --java.MemoryModelCollapse=squash}.
+     */
+    default void squash(long[] bases) {
+        // Default: keep all history.
+    }
 }
