@@ -166,4 +166,66 @@ public final class GlobalVersionStore implements GlobalHistory {
         }
         return null;
     }
+
+    /**
+     * Reclaim every version strictly older than each location's floor — the newest version with
+     * {@code counter <= threshold}. No live thread (all with base {@code >= threshold}) can resolve
+     * below that floor, so the dropped tail is unreachable-in-future.
+     *
+     * <p>Nodes are immutable (a {@code record} with a {@code final prev}); rather than mutate the
+     * chain — which would break the lock-free reader's {@code final}-field safety — we <em>rebuild</em>
+     * the retained prefix {@code head..floor} onto a fresh floor whose {@code prev} is {@code null},
+     * then republish the new head via the {@link ConcurrentHashMap}. An in-flight lock-free reader
+     * that already holds the old head keeps walking the old (still-intact) chain and resolves
+     * correctly; a reader arriving after the {@code put} sees the new head via the map's
+     * happens-before. Once the old head is unreferenced its whole tail (including the dropped part) is
+     * collectable. Rebuild cost is O(versions above the floor) — small when collapse runs often; the
+     * reclaimed tail below the floor is what we drop. Runs under the write lock so no committing push
+     * mutates a chain concurrently.
+     */
+    @Override
+    public void collapse(long threshold) {
+        Lock write = gLock.writeLock();
+        write.lock();
+        try {
+            for (Map.Entry<VersionedLocation, Version> e : history.entrySet()) {
+                Version head = e.getValue();
+                // Floor = newest version with counter <= threshold.
+                Version floor = head;
+                while (floor != null && floor.counter() > threshold) {
+                    floor = floor.prev();
+                }
+                if (floor == null || floor.prev() == null) {
+                    // Whole chain is newer than the threshold (nothing settled), or the floor is
+                    // already the oldest node: nothing to drop.
+                    continue;
+                }
+                if (VersioningStats.ENABLED) {
+                    long dropped = 0;
+                    for (Version v = floor.prev(); v != null; v = v.prev()) {
+                        dropped++;
+                    }
+                    VersioningStats.onCollapse(dropped);
+                }
+                Version newFloor = new Version(floor.counter(), floor.value(), null);
+                if (head == floor) {
+                    e.setValue(newFloor);   // cold location fully settled below the threshold: O(1)
+                } else {
+                    // Rebuild head..(floor-exclusive) top-down, then re-link bottom-up onto newFloor.
+                    java.util.ArrayList<Version> above = new java.util.ArrayList<>();
+                    for (Version v = head; v != floor; v = v.prev()) {
+                        above.add(v);
+                    }
+                    Version rebuilt = newFloor;
+                    for (int i = above.size() - 1; i >= 0; i--) {
+                        Version v = above.get(i);
+                        rebuilt = new Version(v.counter(), v.value(), rebuilt);
+                    }
+                    e.setValue(rebuilt);
+                }
+            }
+        } finally {
+            write.unlock();
+        }
+    }
 }

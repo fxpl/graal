@@ -33,7 +33,10 @@ import java.util.Map;
  */
 public final class LinearLocalView implements MemoryView {
 
-    private long base;
+    // Volatile: the owning thread advances it (only ever forward, under g's lock), but the collapse
+    // trigger reads it cross-thread to compute the min-base threshold. A stale-low read is a safe
+    // lower bound (we would retain more, never drop something a thread still needs).
+    private volatile long base;
     private final Map<VersionedLocation, Object> staging = new HashMap<>();
     // A conflict detected during a synchronisation action, to be raised at the next safe point (the
     // top of the bytecode loop) rather than from inside the sync op. Null if none pending.

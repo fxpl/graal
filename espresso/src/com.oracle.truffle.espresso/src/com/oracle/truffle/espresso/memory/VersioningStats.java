@@ -29,9 +29,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * Optional, host-side counters for the memory footprint of the version-controlled models, enabled by
  * the {@code SYNCSHARE_STATS} environment variable. The versioned structures (branching {@link Commit}
  * nodes and the DAG, linear {@link Version} chains, staging maps) live on the Espresso <em>runtime</em>
- * (host) heap, not the guest heap, so a guest {@code Runtime.getRuntime()} reading cannot see them;
- * these counters measure them directly. Nothing is reclaimed yet, so "created" counts are also the
- * resident counts — the number a history-collapsing scheme would shrink.
+ * (host) heap, not the guest heap. These counters measure them directly. Without collapsing, "created"
+ * counts are also the resident counts; with {@code --java.MemoryModelCollapse=threshold} the
+ * {@code collapses}/{@code versionsDropped} counters report what was reclaimed (so resident linear
+ * versions {@code ~= gVersions - versionsDropped}).
  *
  * <p>When disabled (the default) every hook is a single {@code static final} boolean test that the
  * compiler folds away, so the speed benchmarks are unaffected. A summary is printed to host {@code
@@ -48,8 +49,11 @@ final class VersioningStats {
     static final AtomicLong peakLastWriter = new AtomicLong();  // largest per-view committed cache
 
     // Linear.
-    static final AtomicLong gVersions = new AtomicLong();       // Version nodes appended to g (resident)
+    static final AtomicLong gVersions = new AtomicLong();       // Version nodes ever appended to g
     static final AtomicLong gLocations = new AtomicLong();      // distinct versioned locations in g
+    static final AtomicLong collapses = new AtomicLong();       // collapse() runs (--java.MemoryModelCollapse)
+    static final AtomicLong versionsDropped = new AtomicLong(); // Version nodes reclaimed by collapse
+                                                                // (resident ~= gVersions - versionsDropped)
 
     // Both.
     static final AtomicLong peakStaging = new AtomicLong();     // largest staging map seen (residency)
@@ -88,6 +92,13 @@ final class VersioningStats {
         }
     }
 
+    static void onCollapse(long dropped) {
+        if (ENABLED) {
+            collapses.incrementAndGet();
+            versionsDropped.addAndGet(dropped);
+        }
+    }
+
     static void observeStaging(int size) {
         if (ENABLED) {
             observe(peakStaging, size);
@@ -118,6 +129,11 @@ final class VersioningStats {
         if (gVersions.get() > 0) {
             sb.append(" linear: gVersions=").append(gVersions)
                             .append(" gLocations=").append(gLocations);
+            if (collapses.get() > 0) {
+                sb.append(" collapses=").append(collapses)
+                                .append(" versionsDropped=").append(versionsDropped)
+                                .append(" gResident~=").append(gVersions.get() - versionsDropped.get());
+            }
         }
         sb.append(" peakStaging=").append(peakStaging);
         System.err.println(sb);

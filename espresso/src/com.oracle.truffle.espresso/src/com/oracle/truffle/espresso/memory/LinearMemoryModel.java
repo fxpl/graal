@@ -22,6 +22,10 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
 import com.oracle.truffle.espresso.EspressoOptions;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.meta.EspressoError;
@@ -47,10 +51,61 @@ public final class LinearMemoryModel implements MemoryModel {
     private final EspressoContext context;
     private volatile boolean active = false;
 
+    // History collapsing (--java.MemoryModelCollapse). When not OFF, every live thread's view is
+    // registered here so the collapse trigger can compute the threshold T = min over live bases; and
+    // a collapse runs once every {@code collapseEvery} sync pushes. All of this is skipped entirely
+    // (no registry, no counter) under OFF, so the default path is unchanged.
+    private final EspressoOptions.MemoryModelCollapseMode collapseMode;
+    private final int collapseEvery;
+    private final Set<LinearLocalView> liveViews;
+    private final AtomicLong pushes = new AtomicLong();
+    private static final boolean COLLAPSE_DEBUG = System.getenv("SYNCSHARE_COLLAPSE_DEBUG") != null;
+
     public LinearMemoryModel(EspressoContext context) {
         this.context = context;
         this.global = createHistory(context.getLanguage().getMemoryModelHistoryMode());
+        this.collapseMode = context.getLanguage().getMemoryModelCollapseMode();
+        this.collapseEvery = Math.max(1, context.getLanguage().getMemoryModelCollapseEvery());
+        this.liveViews = collapseMode == EspressoOptions.MemoryModelCollapseMode.OFF ? null : ConcurrentHashMap.newKeySet();
         VersioningStats.arm();
+    }
+
+    private boolean collapsing() {
+        return collapseMode != EspressoOptions.MemoryModelCollapseMode.OFF;
+    }
+
+    /**
+     * On a cadence of {@link #collapseEvery} sync pushes, reclaim history older than the collapse
+     * threshold {@code T = min} over live threads of their observed base — the furthest-behind live
+     * thread. Reading each base lock-free is safe: base only advances, so a stale-low read yields a
+     * conservative (too-small) threshold that retains more, never less.
+     */
+    private void maybeCollapse() {
+        if (!collapsing() || (pushes.incrementAndGet() % collapseEvery) != 0) {
+            return;
+        }
+        // Threshold = min base over live threads, EXCLUDING threads at base 0. A base-0 thread has
+        // observed no commit: every read resolves to ABSENT (read-through to the heap) regardless of
+        // what g holds, so it pins no version and must not clamp the threshold. (Guest runtimes always
+        // park idle daemon threads — Reference Handler, Finalizer, Cleaner — at base 0; without this
+        // they would peg the threshold at 0 and defeat all reclamation.)
+        long threshold = Long.MAX_VALUE;
+        long maxBase = Long.MIN_VALUE;
+        for (LinearLocalView v : liveViews) {
+            long b = v.base();
+            if (b > 0 && b < threshold) {
+                threshold = b;
+            }
+            if (b > maxBase) {
+                maxBase = b;
+            }
+        }
+        if (COLLAPSE_DEBUG) {
+            System.err.println("[collapse-debug] liveViews=" + liveViews.size() + " threshold=" + threshold + " maxBase=" + maxBase + " head=" + global.currentCounter());
+        }
+        if (threshold != Long.MAX_VALUE) {   // at least one live thread past genesis
+            global.collapse(threshold);
+        }
     }
 
     private static GlobalHistory createHistory(EspressoOptions.MemoryModelHistoryMode mode) {
@@ -71,7 +126,11 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        return new LinearLocalView();
+        LinearLocalView view = new LinearLocalView();
+        if (collapsing()) {
+            liveViews.add(view);
+        }
+        return view;
     }
 
     @Override
@@ -135,6 +194,11 @@ public final class LinearMemoryModel implements MemoryModel {
     public void onThreadEnd() {
         LinearLocalView view = currentView();
         handleConflict(global.push(view), view);
+        if (collapsing()) {
+            // Retire this view before collapsing so the ending thread no longer clamps the threshold.
+            liveViews.remove(view);
+            maybeCollapse();
+        }
     }
 
     @Override
@@ -143,6 +207,7 @@ public final class LinearMemoryModel implements MemoryModel {
         // Linear communicates through the single global g, not per-child, so childThread is unused.
         LinearLocalView view = currentView();
         handleConflict(global.push(view), view);
+        maybeCollapse();
     }
 
     @Override
@@ -156,6 +221,7 @@ public final class LinearMemoryModel implements MemoryModel {
     public void onMonitorExit(StaticObject lock) {
         LinearLocalView view = currentView();
         handleConflict(global.push(view), view);
+        maybeCollapse();
     }
 
     @Override
@@ -172,6 +238,7 @@ public final class LinearMemoryModel implements MemoryModel {
         LinearLocalView view = currentView();
         handleConflict(global.pull(view), view);
         handleConflict(global.push(view), view);
+        maybeCollapse();
     }
 
     private void handleConflict(VersionedLocation conflict, LinearLocalView view) {

@@ -353,6 +353,42 @@ public final class EspressoOptions {
                     usageSyntax = "rwlock|watermark") //
     public static final OptionKey<MemoryModelHistoryMode> MemoryModelHistory = new OptionKey<>(MemoryModelHistoryMode.RWLOCK, MEMORY_MODEL_HISTORY_OPTION_TYPE);
 
+    /**
+     * History-collapsing (reclamation) policy for the Linear model (ignored under {@code shared} and
+     * {@code branching}). {@code OFF} keeps all history forever (unbounded growth). {@code THRESHOLD}
+     * reclaims, on a cadence, every version older than the <em>furthest-behind live thread</em>: the
+     * collapse threshold {@code T = min} over live threads of their observed base. For each location
+     * the newest version {@code <= T} is retained as a moving {@code t=0} and everything older is
+     * dropped, since no live thread (all with base {@code >= T}) can resolve below it.
+     */
+    public enum MemoryModelCollapseMode {
+        OFF,
+        THRESHOLD
+    }
+
+    private static final OptionType<MemoryModelCollapseMode> MEMORY_MODEL_COLLAPSE_OPTION_TYPE = new OptionType<>("MemoryModelCollapse", new Function<String, MemoryModelCollapseMode>() {
+        @Override
+        public MemoryModelCollapseMode apply(String s) {
+            try {
+                return MemoryModelCollapseMode.valueOf(s.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("--java.MemoryModelCollapse: policy can be 'off' or 'threshold'.");
+            }
+        }
+    });
+
+    @Option(help = "History-collapsing policy for MemoryModel=linear: 'off' (keep all history) or 'threshold' (reclaim versions older than the furthest-behind live thread, on a cadence). Ignored under shared/branching.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "off|threshold") //
+    public static final OptionKey<MemoryModelCollapseMode> MemoryModelCollapse = new OptionKey<>(MemoryModelCollapseMode.OFF, MEMORY_MODEL_COLLAPSE_OPTION_TYPE);
+
+    @Option(help = "Cadence for MemoryModelCollapse=watermark: run a collapse once every N committing sync pushes (default 1000). Smaller = tighter memory, more collapse overhead.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "<int>") //
+    public static final OptionKey<Integer> MemoryModelCollapseEvery = new OptionKey<>(1000);
+
     public enum VerifyMode {
         NONE,
         REMOTE, // Verifies all bytecodes not loaded by the bootstrap class loader.

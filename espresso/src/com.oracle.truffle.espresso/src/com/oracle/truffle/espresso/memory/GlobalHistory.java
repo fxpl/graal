@@ -64,4 +64,16 @@ public interface GlobalHistory {
 
     /** The current visible global position (the newest committed counter). */
     long currentCounter();
+
+    /**
+     * Collapse (reclaim) history older than {@code threshold}, the collapse threshold
+     * {@code T = min} over live threads of their observed base. For each location the newest version
+     * with {@code counter <= T} is retained (as a moving {@code t=0}) and every strictly-older version
+     * is dropped, since no live thread — all with base {@code >= T} — can ever resolve to one. A no-op
+     * by default (unbounded history); {@link GlobalVersionStore} implements it. Invoked on a cadence by
+     * {@link LinearMemoryModel} only when {@code --java.MemoryModelCollapse=threshold}.
+     */
+    default void collapse(long threshold) {
+        // Default: keep all history (MemoryModelCollapse=off, or a strategy without reclamation).
+    }
 }
