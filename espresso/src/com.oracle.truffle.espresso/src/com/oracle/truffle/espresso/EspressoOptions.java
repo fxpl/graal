@@ -324,6 +324,37 @@ public final class EspressoOptions {
     public static final OptionKey<MemoryModelMode> MemoryModel = new OptionKey<>(MemoryModelMode.SHARED, MEMORY_MODEL_OPTION_TYPE);
 
     /**
+     * Selects the <em>backing representation</em> for {@code MemoryModel=branching} (ignored
+     * otherwise). Both are the same model — identical accept/reject in every case — and differ only in
+     * performance, analogous to {@link #MemoryModelHistory} for linear. {@code DAG} is the commit-DAG
+     * of information flow (the paper's definitional representation; conflict check walks the other
+     * branch's divergence, O(divergence)). {@code EPOCH} is the DAG-free realisation — per-thread
+     * vector clocks + per-sync-object last-writer epoch tables — whose conflict check is a per-location
+     * lookup, O(working set), removing the contended-lock walk. See epoch-model.md.
+     */
+    public enum BranchingBackingMode {
+        DAG,
+        EPOCH
+    }
+
+    private static final OptionType<BranchingBackingMode> BRANCHING_BACKING_OPTION_TYPE = new OptionType<>("BranchingBacking", new Function<String, BranchingBackingMode>() {
+        @Override
+        public BranchingBackingMode apply(String s) {
+            try {
+                return BranchingBackingMode.valueOf(s.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("--java.BranchingBacking: backing can be 'dag' or 'epoch'.");
+            }
+        }
+    });
+
+    @Option(help = "Backing representation for MemoryModel=branching: 'dag' (commit-DAG; conflict check walks divergence) or 'epoch' (vector clocks + per-sync-object last-writer epoch tables; conflict check is a per-location lookup). Behaviourally identical; different performance. Ignored unless branching.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "dag|epoch") //
+    public static final OptionKey<BranchingBackingMode> BranchingBacking = new OptionKey<>(BranchingBackingMode.DAG, BRANCHING_BACKING_OPTION_TYPE);
+
+    /**
      * Selects the concurrency strategy for the Linear model's global history {@code g} (ignored under
      * {@code MemoryModel=shared}). A design-exploration knob: the strategies are behaviourally
      * equivalent but trade differently under contention (see concurrency-design.md).
