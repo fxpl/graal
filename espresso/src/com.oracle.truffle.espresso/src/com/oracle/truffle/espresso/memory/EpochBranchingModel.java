@@ -71,18 +71,16 @@ public final class EpochBranchingModel implements MemoryModel {
      * op. Kept separate from {@link #lockStates} so a joiner's own enter/exit republish cannot clobber
      * the joinee's published tip — see {@link BranchingMemoryModel} class doc for the full rationale.
      *
-     * <p><b>Known bounded retention (not reclaimed).</b> Entries are never removed, so this grows with
-     * the total number of threads ever created — bounded by thread count, not by history — and each
-     * entry pins the {@code Thread} object plus a {@code seen} snapshot (and the objects it references).
-     * The correct reclamation is <em>weak keys</em>: a terminal is needed exactly while some thread can
-     * still join it, i.e. while its {@code Thread} object is reachable (a re-join is a clock-covered
-     * no-op, so once the object is unreachable no live thread can ever need the tip). A
-     * {@code java.util.WeakHashMap} keyed on the {@code Thread} object captures that, but it is not
-     * thread-safe and this map is read on the monitor path, so it would need a {@code synchronized}
-     * wrapper guarded by an "is this lock a {@code Thread}?" check (so ordinary locks never touch it).
-     * Deferred: the leak is bounded, and identical in the dag backing's {@code terminalHeads} — not
-     * epoch-specific. Epoch's tables themselves are latest-per-location (working-set bounded), so they
-     * are <em>not</em> part of this.
+     * <p><b>Unbounded retention (a fork-join-accumulate chain is O(threads²)).</b> Never removed, and —
+     * measured — weak keys on the {@code Thread} object do <em>not</em> help: the model versions a
+     * constructed thread's own fields, so the constructor's {@code seen} pins every {@code Thread} it
+     * makes (an ended, dereferenced thread is not collectable under this model), so the weak key never
+     * clears. The deeper cause is epoch's copy representation: a forked child <em>adopts a copy</em> of
+     * the parent's accumulated {@code seen}, and each terminal is a <em>copy</em> of the ended thread's
+     * {@code seen}, so K forks each carrying O(K) state give O(K²) (OOM by ~1000 threads; the dag
+     * backing stays linear because its terminal is a shared commit, not a copy). The real fixes are
+     * larger — don't copy the whole {@code seen} on fork (share it copy-on-write), and prune settled /
+     * dead-object locations from {@code seen} (§6.5) — neither a quick change. See epoch-model.md.
      */
     private final Map<StaticObject, Published> terminalTips = new ConcurrentHashMap<>();
 
