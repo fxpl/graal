@@ -63,7 +63,12 @@ public final class LinearMemoryModel implements MemoryModel {
 
     public LinearMemoryModel(EspressoContext context) {
         this.context = context;
-        this.global = createHistory(context.getLanguage().getMemoryModelHistoryMode());
+        String graphPath = context.getLanguage().getMemoryModelGraphPath();
+        GraphTrace graphTrace = graphPath.isEmpty() ? null : new GraphTrace(graphPath, true);
+        if (graphTrace != null) {
+            graphTrace.arm();
+        }
+        this.global = createHistory(context.getLanguage().getMemoryModelHistoryMode(), graphTrace);
         this.collapseMode = context.getLanguage().getMemoryModelCollapseMode();
         this.collapseEvery = Math.max(1, context.getLanguage().getMemoryModelCollapseEvery());
         this.liveViews = collapseMode == EspressoOptions.MemoryModelCollapseMode.OFF ? null : ConcurrentHashMap.newKeySet();
@@ -133,12 +138,12 @@ public final class LinearMemoryModel implements MemoryModel {
         return out;
     }
 
-    private static GlobalHistory createHistory(EspressoOptions.MemoryModelHistoryMode mode) {
+    private static GlobalHistory createHistory(EspressoOptions.MemoryModelHistoryMode mode, GraphTrace trace) {
         switch (mode) {
             case RWLOCK:
-                return new GlobalVersionStore();
+                return new GlobalVersionStore(trace);
             case WATERMARK:
-                return new WatermarkHistory();
+                return new WatermarkHistory();   // graph tracing not wired for the watermark strategy
             default:
                 throw EspressoError.shouldNotReachHere("Unknown memory-model history strategy: " + mode);
         }

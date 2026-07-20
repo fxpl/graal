@@ -95,8 +95,21 @@ public final class BranchingMemoryModel implements MemoryModel {
     private record ForkPoint(Commit head, Map<VersionedLocation, Commit> lastWriter, VectorClock clock) {
     }
 
+    /**
+     * Records the commit DAG as it is built, for {@code --java.MemoryModelGraph} (see
+     * {@link GraphTrace}). Each view emits its commits/merges here as they happen — never
+     * reconstructed from the DAG — so the graph is correct even if the DAG is later collapsed.
+     * {@code null} when the option is unset (the normal path is untouched but for one null check).
+     */
+    private final GraphTrace trace;
+
     public BranchingMemoryModel(EspressoContext context) {
         this.context = context;
+        String graphPath = context.getLanguage().getMemoryModelGraphPath();
+        this.trace = graphPath.isEmpty() ? null : new GraphTrace(graphPath, false);
+        if (trace != null) {
+            trace.arm();
+        }
         VersioningStats.arm();
     }
 
@@ -107,7 +120,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        return new BranchingView(threadIds.getAndIncrement());
+        return new BranchingView(threadIds.getAndIncrement(), trace);
     }
 
     @Override

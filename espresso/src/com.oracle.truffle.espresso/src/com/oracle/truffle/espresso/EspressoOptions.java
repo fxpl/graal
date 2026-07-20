@@ -354,6 +354,12 @@ public final class EspressoOptions {
                     usageSyntax = "dag|epoch") //
     public static final OptionKey<BranchingBackingMode> BranchingBacking = new OptionKey<>(BranchingBackingMode.DAG, BRANCHING_BACKING_OPTION_TYPE);
 
+    @Option(help = "If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for MemoryModel=branching (dag backing), or the global-history timeline for MemoryModel=linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. The epoch backing has no DAG and emits nothing. Empty = disabled.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "<path>") //
+    public static final OptionKey<String> MemoryModelGraph = new OptionKey<>("");
+
     /**
      * Selects the concurrency strategy for the Linear model's global history {@code g} (ignored under
      * {@code MemoryModel=shared}). A design-exploration knob: the strategies are behaviourally

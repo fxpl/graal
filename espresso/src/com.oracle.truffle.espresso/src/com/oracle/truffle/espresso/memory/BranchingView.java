@@ -52,6 +52,7 @@ import java.util.Set;
 public final class BranchingView implements MemoryView {
 
     private final long threadId;
+    private final GraphTrace trace;                        // non-null only under --java.MemoryModelGraph
     private long counter;                                  // this thread's commit counter (Timestamp)
     private Commit head;                                   // tip of this thread's branch (null = none)
     private VectorClock clock = new VectorClock();         // this view's happens-before frontier
@@ -60,8 +61,9 @@ public final class BranchingView implements MemoryView {
     private final Map<VersionedLocation, Commit> lastWriter = new HashMap<>();  // eager committed cache
     private String pendingConflict;
 
-    public BranchingView(long threadId) {
+    public BranchingView(long threadId, GraphTrace trace) {
         this.threadId = threadId;
+        this.trace = trace;
     }
 
     Commit head() {
@@ -117,6 +119,7 @@ public final class BranchingView implements MemoryView {
         // immutable-after-publication (nothing else aliases it) at no copy cost. A fresh empty map also
         // beats staging.clear() (which would retain the old capacity). The single biggest per-commit
         // allocation, gone.
+        Timestamp parent = head == null ? null : head.id();
         Map<VersionedLocation, Object> changes = staging;
         staging = new HashMap<>();
         Commit c = new Commit(new Timestamp(threadId, ++counter), changes,
@@ -128,6 +131,9 @@ public final class BranchingView implements MemoryView {
         head = c;
         ownClock().observe(threadId, counter);   // my frontier now reaches my own new commit
         VersioningStats.observeLastWriter(lastWriter.size());
+        if (trace != null) {
+            trace.commit(threadId, counter, parent, c.changes());
+        }
     }
 
     /**
@@ -198,10 +204,14 @@ public final class BranchingView implements MemoryView {
                 break;
             }
         }
-        head = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(head, otherHead), conflict != null);
+        Commit myHead = head;
+        head = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(myHead, otherHead), conflict != null);
         VersioningStats.onCommit();
         ownClock().observe(threadId, counter);
         clock.join(otherClock);
+        if (trace != null) {
+            trace.merge(threadId, counter, myHead == null ? null : myHead.id(), otherHead.id(), conflict != null);
+        }
         if (conflict != null) {
             return conflict;
         }

@@ -63,6 +63,11 @@ public final class GlobalVersionStore implements GlobalHistory {
     private final ConcurrentHashMap<VersionedLocation, Version> history = new ConcurrentHashMap<>();
     private final AtomicLong counter = new AtomicLong(0);
     private final ReentrantReadWriteLock gLock = new ReentrantReadWriteLock();
+    private final GraphTrace trace;   // non-null only under --java.MemoryModelGraph
+
+    public GlobalVersionStore(GraphTrace trace) {
+        this.trace = trace;
+    }
 
     @Override
     public long currentCounter() {
@@ -141,6 +146,9 @@ public final class GlobalVersionStore implements GlobalHistory {
                 // New head whose prev is the old head (null if first): O(1), no copy.
                 history.compute(e.getKey(), (k, old) -> new Version(next, e.getValue(), old));
                 VersioningStats.onGVersion(history.size());
+            }
+            if (trace != null) {
+                trace.push(next, view.staging());   // record the timeline node before staging is cleared
             }
             view.clearStaging();
             view.advanceBase(next);
