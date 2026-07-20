@@ -84,6 +84,11 @@ public final class BranchingMemoryModel implements MemoryModel {
      * Write-once by the ending thread at {@link #onThreadEnd}; read (merged, never overwritten) by a
      * joiner's monitor op on the thread object. Kept separate from {@link #lockStates} precisely so a
      * joiner's own enter/exit republish cannot clobber the joinee's published head. See class doc.
+     *
+     * <p><b>Known bounded retention (not reclaimed):</b> never removed, so it grows with total thread
+     * count (bounded by thread count, not history), pinning each ended {@code Thread}'s tip. The fix is
+     * weak keys on the {@code Thread} object (needed only while a thread can still join it) — see the
+     * fuller note on {@link EpochBranchingModel}'s {@code terminalTips}; deferred there and here.
      */
     private final Map<StaticObject, Tip> terminalHeads = new ConcurrentHashMap<>();
 
