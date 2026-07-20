@@ -430,7 +430,7 @@ public final class EspressoOptions {
                     usageSyntax = "off|threshold|squash") //
     public static final OptionKey<MemoryModelCollapseMode> MemoryModelCollapse = new OptionKey<>(MemoryModelCollapseMode.OFF, MEMORY_MODEL_COLLAPSE_OPTION_TYPE);
 
-    @Option(help = "Cadence for MemoryModelCollapse=watermark: run a collapse once every N committing sync pushes (default 1000). Smaller = tighter memory, more collapse overhead.", //
+    @Option(help = "Cadence for MemoryModelCollapse=threshold: run a collapse once every N committing sync pushes (default 1000). Smaller = tighter memory, more collapse overhead.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "<int>") //
