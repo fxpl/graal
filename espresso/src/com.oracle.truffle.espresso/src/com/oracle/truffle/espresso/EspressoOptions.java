@@ -348,13 +348,13 @@ public final class EspressoOptions {
         }
     });
 
-    @Option(help = "Backing representation for MemoryModel=branching: 'dag' (commit-DAG; conflict check walks divergence) or 'epoch' (vector clocks + per-sync-object last-writer epoch tables; conflict check is a per-location lookup). Behaviourally identical; different performance. Ignored unless branching.", //
+    @Option(help = "Applies to: branching only. Backing representation: 'dag' (commit-DAG; conflict check walks divergence) or 'epoch' (vector clocks + per-sync-object last-writer epoch tables; conflict check is a per-location lookup). Behaviourally identical; different performance. Ignored under shared/linear.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "dag|epoch") //
     public static final OptionKey<BranchingBackingMode> BranchingBacking = new OptionKey<>(BranchingBackingMode.DAG, BRANCHING_BACKING_OPTION_TYPE);
 
-    @Option(help = "If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for MemoryModel=branching (dag backing), or the global-history timeline for MemoryModel=linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. The epoch backing has no DAG and emits nothing. Empty = disabled.", //
+    @Option(help = "Applies to: linear, and branching (dag backing). If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for branching/dag, or the global-history timeline for linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. The branching/epoch backing has no DAG and emits nothing. Empty = disabled.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "<path>") //
@@ -384,28 +384,26 @@ public final class EspressoOptions {
         }
     });
 
-    @Option(help = "Global-history concurrency strategy for MemoryModel=linear: 'rwlock' (read/write-split single lock) or 'watermark' (per-location stripe locks + commit-order watermark). A design-exploration knob; ignored under shared.", //
+    @Option(help = "Applies to: linear only. Global-history concurrency strategy: 'rwlock' (read/write-split single lock) or 'watermark' (per-location stripe locks + commit-order watermark). A design-exploration knob; behaviourally identical, different performance. Ignored under shared/branching.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "rwlock|watermark") //
     public static final OptionKey<MemoryModelHistoryMode> MemoryModelHistory = new OptionKey<>(MemoryModelHistoryMode.RWLOCK, MEMORY_MODEL_HISTORY_OPTION_TYPE);
 
     /**
-     * History-collapsing (reclamation) policy for the Linear model (ignored under {@code shared} and
-     * {@code branching}). {@code OFF} keeps all history forever (unbounded growth).
-     *
-     * <p>{@code THRESHOLD} reclaims, on a cadence, every version older than the
-     * <em>furthest-behind live thread</em>: the collapse threshold {@code T = min} over live threads of
-     * their observed base. For each location the newest version {@code <= T} is retained (a moving
-     * {@code t=0}) and everything older is dropped. Cheap (one number, drops the settled tail) but a
-     * single thread parked at a low base pins {@code [T, head]} — the whole interval, including the
-     * interior no one reads.
-     *
-     * <p>{@code SQUASH} reclaims using the <em>full set</em> of live bases: for each location it keeps
-     * only the version each live base <em>resolves to</em> ({@code newest <= b}) plus the head (needed
-     * for conflict detection), dropping the shadowed interior between them. This reclaims the interior
-     * that {@code THRESHOLD} cannot when threads are spread out (a parked coordinator plus an advanced
-     * worker), at the cost of examining every version against the base set.
+     * History-collapsing (reclamation) policy. <b>Applies to {@code MemoryModel=linear} only</b>
+     * (ignored under {@code shared} and {@code branching}) — linear chains a version per write, so its
+     * history grows unboundedly and needs reclaiming; the branching backings do not (the dag shares an
+     * immutable commit graph; the epoch backing keeps only latest-per-location tables, bounded by the
+     * working set), so there is no version history for this to collapse. {@code OFF} keeps all history.
+     * <ul>
+     * <li>{@code THRESHOLD} reclaims every version older than the <em>furthest-behind live thread</em>
+     *     (the threshold {@code T = min} over live threads of their base) — cheap, but a thread parked
+     *     at a low base pins {@code [T, head]}, the interior no one reads.</li>
+     * <li>{@code SQUASH} uses the <em>full set</em> of live bases: per location it keeps only the
+     *     version each base resolves to, plus the head — reclaiming the interior {@code THRESHOLD}
+     *     cannot, at the cost of scanning versions against the base set.</li>
+     * </ul>
      */
     public enum MemoryModelCollapseMode {
         OFF,
@@ -424,13 +422,13 @@ public final class EspressoOptions {
         }
     });
 
-    @Option(help = "History-collapsing policy for MemoryModel=linear: 'off' (keep all history), 'threshold' (drop versions older than the furthest-behind live thread) or 'squash' (also drop the interior no live base resolves to). On a cadence; ignored under shared/branching.", //
+    @Option(help = "Applies to: linear only (branching keeps no collapsible version history). History reclamation on a cadence: 'off' (keep all history), 'threshold' (drop versions older than the furthest-behind live thread) or 'squash' (also drop the interior no live base resolves to). Ignored under shared/branching.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "off|threshold|squash") //
     public static final OptionKey<MemoryModelCollapseMode> MemoryModelCollapse = new OptionKey<>(MemoryModelCollapseMode.OFF, MEMORY_MODEL_COLLAPSE_OPTION_TYPE);
 
-    @Option(help = "Cadence for MemoryModelCollapse=threshold: run a collapse once every N committing sync pushes (default 1000). Smaller = tighter memory, more collapse overhead.", //
+    @Option(help = "Applies to: linear only. Cadence for MemoryModelCollapse: run a collapse once every N committing sync pushes (default 1000). Smaller = tighter memory, more collapse overhead.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "<int>") //
