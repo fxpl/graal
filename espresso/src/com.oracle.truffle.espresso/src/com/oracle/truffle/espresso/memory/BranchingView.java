@@ -124,7 +124,7 @@ public final class BranchingView implements MemoryView {
         staging = new HashMap<>();
         Commit c = new Commit(new Timestamp(threadId, ++counter), changes,
                         head == null ? List.of() : List.of(head), false);
-        VersioningStats.onCommit();
+        VersioningStats.onCommit(changes.size());
         for (VersionedLocation loc : c.changes().keySet()) {
             lastWriter.put(loc, c);
         }
@@ -206,7 +206,7 @@ public final class BranchingView implements MemoryView {
         }
         Commit myHead = head;
         head = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(myHead, otherHead), conflict != null);
-        VersioningStats.onCommit();
+        VersioningStats.onCommit(0);   // merge commit carries no changes of its own
         ownClock().observe(threadId, counter);
         clock.join(otherClock);
         if (trace != null) {

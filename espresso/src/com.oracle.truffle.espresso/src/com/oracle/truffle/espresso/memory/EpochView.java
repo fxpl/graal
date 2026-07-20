@@ -103,7 +103,7 @@ public final class EpochView implements MemoryView {
         for (Map.Entry<VersionedLocation, Object> e : staging.entrySet()) {
             seen.put(e.getKey(), new EpochEntry(epoch, e.getValue()));
         }
-        VersioningStats.onCommit();
+        VersioningStats.onCommit(staging.size());
         staging.clear();
         ownClock().observe(threadId, counter);
         VersioningStats.observeLastWriter(seen.size());

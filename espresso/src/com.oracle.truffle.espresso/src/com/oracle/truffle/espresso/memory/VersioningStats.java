@@ -44,6 +44,8 @@ final class VersioningStats {
 
     // Branching.
     static final AtomicLong commits = new AtomicLong();        // Commit nodes created (== resident DAG)
+    static final AtomicLong committedChanges = new AtomicLong(); // (location,value) pairs across all commits
+                                                                // = dag's retained value-slots (full history)
     static final AtomicLong merges = new AtomicLong();          // merge() calls that were not no-ops
     static final AtomicLong fastForwards = new AtomicLong();    // ...of which fast-forwarded (no merge node)
     static final AtomicLong peakLastWriter = new AtomicLong();  // largest per-view committed cache
@@ -70,9 +72,10 @@ final class VersioningStats {
         }
     }
 
-    static void onCommit() {
+    static void onCommit(int changes) {
         if (ENABLED) {
             commits.incrementAndGet();
+            committedChanges.addAndGet(changes);
         }
     }
 
@@ -122,6 +125,7 @@ final class VersioningStats {
         StringBuilder sb = new StringBuilder("[versioning-stats]");
         if (commits.get() > 0 || merges.get() > 0) {
             sb.append(" branching: commits=").append(commits)
+                            .append(" committedChanges=").append(committedChanges)
                             .append(" merges=").append(merges)
                             .append(" fastForwards=").append(fastForwards)
                             .append(" peakLastWriter=").append(peakLastWriter);
