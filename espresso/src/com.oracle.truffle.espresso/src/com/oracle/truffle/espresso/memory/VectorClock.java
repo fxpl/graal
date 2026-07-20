@@ -22,8 +22,7 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Arrays;
 
 /**
  * A vector clock over thread ids: for each thread, the highest commit counter of that thread this
@@ -41,27 +40,37 @@ import java.util.Map;
  * its writer, per-location writer identity needs only the epoch on the commit — full clocks live only
  * on views and published tips, never on every commit.
  *
+ * <p><b>Representation.</b> A dense {@code long[]} indexed by thread id ({@code counters[t]} = highest
+ * counter of thread {@code t} observed, {@code 0} = none; counters start at {@code 1}). Thread ids are
+ * assigned densely from a counter, so this is the standard FastTrack layout: containment and observe
+ * are O(1) array ops with <em>no boxing and no hashing</em> — the hot per-commit cost of the previous
+ * {@code HashMap<Long,Long>}. (Trade-off: the array is sized to the largest thread id seen, so a
+ * program that creates very many threads over its lifetime pays O(maxThreadId) per clock rather than
+ * O(distinct threads observed); an open-addressed {@code long}&rarr;{@code long} map would bound that,
+ * at more code. Not a concern for the few-thread workloads this targets.)
+ *
  * <p>Mutable and single-owner while it is a view's live frontier; a copy is taken (via
  * {@link #VectorClock(VectorClock)}) before it is published on a tip, and the copy is thereafter only
  * read, so it is safely shared across threads through the publishing lock / concurrent map.
  */
 final class VectorClock {
 
-    private final Map<Long, Long> entries;
+    private static final long[] EMPTY = new long[0];
+
+    private long[] counters;
 
     VectorClock() {
-        this.entries = new HashMap<>();
+        this.counters = EMPTY;
     }
 
     /** Copy constructor — used to snapshot a view's frontier onto a published tip or a fork point. */
     VectorClock(VectorClock other) {
-        this.entries = new HashMap<>(other.entries);
+        this.counters = other.counters.length == 0 ? EMPTY : Arrays.copyOf(other.counters, other.counters.length);
     }
 
     /** Whether this clock has observed thread {@code thread} up to at least {@code counter}. */
     boolean contains(long thread, long counter) {
-        Long seen = entries.get(thread);
-        return seen != null && seen >= counter;
+        return thread < counters.length && counters[(int) thread] >= counter;
     }
 
     /**
@@ -75,16 +84,41 @@ final class VectorClock {
 
     /** Record that thread {@code thread} has reached commit {@code counter} (a no-op if already ahead). */
     void observe(long thread, long counter) {
-        entries.merge(thread, counter, Math::max);
+        int t = (int) thread;
+        if (t >= counters.length) {
+            counters = Arrays.copyOf(counters, t + 1);
+        }
+        if (counter > counters[t]) {
+            counters[t] = counter;
+        }
     }
 
     /** Incorporate another clock's knowledge: component-wise max (the happens-before join {@code ⊔}). */
     void join(VectorClock other) {
-        other.entries.forEach(this::observe);
+        long[] o = other.counters;
+        if (o.length > counters.length) {
+            counters = Arrays.copyOf(counters, o.length);
+        }
+        for (int t = 0; t < o.length; t++) {
+            if (o[t] > counters[t]) {
+                counters[t] = o[t];
+            }
+        }
     }
 
     @Override
     public String toString() {
-        return entries.toString();
+        StringBuilder sb = new StringBuilder("{");
+        boolean first = true;
+        for (int t = 0; t < counters.length; t++) {
+            if (counters[t] != 0) {
+                if (!first) {
+                    sb.append(", ");
+                }
+                sb.append(t).append(':').append(counters[t]);
+                first = false;
+            }
+        }
+        return sb.append('}').toString();
     }
 }

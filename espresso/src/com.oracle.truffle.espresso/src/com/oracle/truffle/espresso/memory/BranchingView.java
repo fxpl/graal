@@ -56,7 +56,7 @@ public final class BranchingView implements MemoryView {
     private Commit head;                                   // tip of this thread's branch (null = none)
     private VectorClock clock = new VectorClock();         // this view's happens-before frontier
     private boolean clockShared;                           // clock handed to a tip; copy-on-write next mutation
-    private final Map<VersionedLocation, Object> staging = new HashMap<>();
+    private Map<VersionedLocation, Object> staging = new HashMap<>();  // reassigned (moved) on commit
     private final Map<VersionedLocation, Commit> lastWriter = new HashMap<>();  // eager committed cache
     private String pendingConflict;
 
@@ -112,13 +112,19 @@ public final class BranchingView implements MemoryView {
         if (staging.isEmpty()) {
             return;
         }
-        Commit c = new Commit(new Timestamp(threadId, ++counter), new HashMap<>(staging),
+        // Move the staging map into the commit rather than copying it (new HashMap<>(staging)): the
+        // commit takes sole ownership and staging gets a fresh empty map, so changes() is still
+        // immutable-after-publication (nothing else aliases it) at no copy cost. A fresh empty map also
+        // beats staging.clear() (which would retain the old capacity). The single biggest per-commit
+        // allocation, gone.
+        Map<VersionedLocation, Object> changes = staging;
+        staging = new HashMap<>();
+        Commit c = new Commit(new Timestamp(threadId, ++counter), changes,
                         head == null ? List.of() : List.of(head), false);
         VersioningStats.onCommit();
         for (VersionedLocation loc : c.changes().keySet()) {
             lastWriter.put(loc, c);
         }
-        staging.clear();
         head = c;
         ownClock().observe(threadId, counter);   // my frontier now reaches my own new commit
         VersioningStats.observeLastWriter(lastWriter.size());

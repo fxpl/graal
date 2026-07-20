@@ -146,9 +146,10 @@ public final class EpochView implements MemoryView {
         if (table.isEmpty()) {
             return null;
         }
+        // Pass 1: detect a conflict among the entries I have not seen. Read-only — import nothing yet,
+        // so we neither mutate seen nor need a scratch import map (the clock join, once done, would mask
+        // which entries were unseen; so we simply do not join until the imports are applied).
         VersionedLocation conflict = null;
-        // Collect the imports first: the clock join below would otherwise mask which entries were unseen.
-        Map<VersionedLocation, EpochEntry> imports = new HashMap<>();
         for (Map.Entry<VersionedLocation, EpochEntry> e : table.entrySet()) {
             EpochEntry theirs = e.getValue();
             if (clock.contains(theirs.epoch())) {
@@ -159,13 +160,20 @@ public final class EpochView implements MemoryView {
                 conflict = e.getKey();                     // concurrent writers -> conflict
                 break;
             }
-            imports.put(e.getKey(), theirs);
         }
-        ownClock().join(otherClock);
         if (conflict != null) {
+            ownClock().join(otherClock);                   // advance frontier, import nothing (as the DAG backing)
             return conflict;
         }
-        seen.putAll(imports);
+        // Pass 2: no conflict -> import the unseen entries directly into seen. The clock is still
+        // un-joined here, so contains() distinguishes the same unseen set pass 1 saw; join after.
+        for (Map.Entry<VersionedLocation, EpochEntry> e : table.entrySet()) {
+            EpochEntry theirs = e.getValue();
+            if (!clock.contains(theirs.epoch())) {
+                seen.put(e.getKey(), theirs);
+            }
+        }
+        ownClock().join(otherClock);
         VersioningStats.observeLastWriter(seen.size());
         return null;
     }
