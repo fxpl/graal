@@ -2987,7 +2987,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         MemoryModel model = getContext().getMemoryModel();
         if (field.isVolatile()) {
             // Volatile read = pull the field's published history before reading (Table 1 / §6.4).
-            model.onVolatileRead();
+            model.onVolatileRead(receiver, field);
         }
         Object staged = model.readField(receiver, field);
 
@@ -3118,9 +3118,10 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 throw EspressoError.shouldNotReachHere("unexpected kind");
         }
         if (field.isVolatile()) {
-            // Volatile write = pull then push (Table 1 / §6.4): the value is staged above; publish it
-            // after importing the field's prior history so earlier writes are not dropped.
-            model.onVolatileWrite();
+            // Volatile write = pull then push (Table 1 / §6.4): the value is staged above; the model
+            // pulls the field's prior history first, then commits the staged write on top (ordering it
+            // after the imported history) and publishes.
+            model.onVolatileWrite(receiver, field);
         }
         return -slotCount;
     }

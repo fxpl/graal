@@ -255,16 +255,19 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onVolatileRead() {
-        // Volatile read = pull: import the field's published history before reading.
+    public void onVolatileRead(StaticObject holder, Field field) {
+        // Volatile read = pull: import the field's published history before reading. holder/field are
+        // unused: Linear's single global g is the history for every volatile field (§6.4). The pull
+        // re-bases any staged writes on the imported versions, so it need not commit first.
         LinearLocalView view = currentView();
         handleConflict(global.pull(view), view);
     }
 
     @Override
-    public void onVolatileWrite() {
+    public void onVolatileWrite(StaticObject holder, Field field) {
         // Volatile write = pull then push (§6.4): import history, then publish this write. The value
-        // has already been staged by the caller.
+        // has already been staged by the caller; the pull re-bases it on the imported versions so it is
+        // ordered after them (and concurrent volatile writes to the field are thus not a data race).
         LinearLocalView view = currentView();
         handleConflict(global.pull(view), view);
         handleConflict(global.push(view), view);

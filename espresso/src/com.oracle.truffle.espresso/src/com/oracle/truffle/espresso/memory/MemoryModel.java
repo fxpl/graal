@@ -107,11 +107,20 @@ public interface MemoryModel {
     /** Monitor release. Linear: push. Branching: republish the holder's tip to {@code lock}'s state. */
     void onMonitorExit(StaticObject lock);
 
-    /** Volatile read = pull (import the field's published history before reading). */
-    void onVolatileRead();
+    /**
+     * Volatile read = pull (import the field's published history before reading). {@code holder}/{@code
+     * field} identify the volatile location; Branching keys the per-field synchronisation tip by it,
+     * Linear ignores it (the history is the single global {@code g}). §6.4 / Table 2 {@code ReadVolatile}.
+     */
+    void onVolatileRead(StaticObject holder, Field field);
 
-    /** Volatile write = pull then push (import history, then publish this write). */
-    void onVolatileWrite();
+    /**
+     * Volatile write = pull then push (import the field's history, then publish this write) — §6.4 /
+     * Table 2 {@code WriteVolatile}. The pull-before-push accumulates the field's release chain and
+     * orders concurrent volatile writes so they are not a data race. The staged value must be committed
+     * <em>after</em> the pull so it is ordered after the imported history.
+     */
+    void onVolatileWrite(StaticObject holder, Field field);
 
     // --- Activation gate ---
 

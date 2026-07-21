@@ -76,6 +76,14 @@ public final class BranchingMemoryModel implements MemoryModel {
     /** Per-monitor (and per-thread-object, for join) published branch tip. Keyed by object identity. */
     private final Map<StaticObject, LockState> lockStates = new ConcurrentHashMap<>();
 
+    /**
+     * Per-volatile-field published branch tip — the paper's map {@code V} of the latest commit of each
+     * volatile variable (§5.3 / Table 2). Keyed by {@link FieldLocation} (so a volatile instance field
+     * is a distinct sync object per receiver). Separate from {@link #lockStates}: a volatile field is
+     * its own synchronisation object, not a monitor.
+     */
+    private final Map<FieldLocation, LockState> volatileTips = new ConcurrentHashMap<>();
+
     /** Fork points recorded at spawn, keyed by the child's guest {@code Thread}; consumed at its start. */
     private final Map<StaticObject, ForkPoint> pendingForks = new ConcurrentHashMap<>();
 
@@ -148,6 +156,10 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     private LockState lockState(StaticObject key) {
         return lockStates.computeIfAbsent(key, k -> new LockState());
+    }
+
+    private LockState volatileTip(FieldLocation key) {
+        return volatileTips.computeIfAbsent(key, k -> new LockState());
     }
 
     // --- Ordinary field / array access: stage and read on the calling thread's view. ---
@@ -248,13 +260,36 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onVolatileRead() {
-        // Volatiles are a later branching milestone; treated as ordinary reads until then.
+    public void onVolatileRead(StaticObject holder, Field field) {
+        // Volatile read = pull (§6.4 / Table 2 ReadVolatile): merge the field's published branch into
+        // this view, then the caller reads. No publish — a read adds no history. Staging is left
+        // pending (the reader's own writes stay staged). Synchronised on the tip so the (commit, clock)
+        // snapshot is consistent against a concurrent volatile write to the same field.
+        BranchingView view = currentView();
+        LockState tip = volatileTip(new FieldLocation(holder, field));
+        VersionedLocation conflict;
+        synchronized (tip) {
+            conflict = view.merge(tip.commit, tip.clock);
+        }
+        handleConflict(conflict, view);
     }
 
     @Override
-    public void onVolatileWrite() {
-        // Volatiles are a later branching milestone; treated as ordinary writes until then.
+    public void onVolatileWrite(StaticObject holder, Field field) {
+        // Volatile write = pull then push (§6.4 / Table 2 WriteVolatile): pull the field's history
+        // FIRST (folding it into head, staging still pending), then commit the staged value on top so
+        // it is ordered after the imported writes, then publish the extended frontier. The whole
+        // pull+push is atomic per field (synchronised on the tip) so concurrent volatile writes to the
+        // same field serialise through its branch and are not a data race.
+        BranchingView view = currentView();
+        LockState tip = volatileTip(new FieldLocation(holder, field));
+        VersionedLocation conflict;
+        synchronized (tip) {
+            conflict = view.merge(tip.commit, tip.clock);
+            view.commitStaging();
+            publish(tip, view);
+        }
+        handleConflict(conflict, view);
     }
 
     private void handleConflict(VersionedLocation conflict, BranchingView view) {
