@@ -230,34 +230,16 @@ public final class EpochBranchingModel implements MemoryModel {
     }
 
     @Override
-    public void onVolatileRead(StaticObject holder, Field field) {
-        // Volatile read = pull (§6.4 / Table 2 ReadVolatile): merge the field's published table into
-        // this view; the caller then reads. No publish. Synchronised on the tip for a consistent
-        // (table, clock) snapshot against a concurrent volatile write to the same field.
-        EpochView view = currentView();
-        EpochLockState tip = volatileTip(new FieldLocation(holder, field));
-        VersionedLocation conflict;
-        synchronized (tip) {
-            conflict = view.mergeTable(tip.table, tip.clock);
-        }
-        handleConflict(conflict, view);
+    public Object onVolatileRead(StaticObject holder, Field field) {
+        // TODO: volatiles under the epoch backing are not implemented (deprioritised — the epoch backing
+        // is secondary). Volatiles are supported under the dag backing; select --java.BranchingBacking=dag.
+        throw new UnsupportedOperationException("volatile fields are not implemented under the branching epoch backing (TODO); use --java.BranchingBacking=dag");
     }
 
     @Override
-    public void onVolatileWrite(StaticObject holder, Field field) {
-        // Volatile write = pull then push (§6.4 / Table 2 WriteVolatile): merge the field's table FIRST
-        // (staging still pending), then commit the staged value on top so it is ordered after the
-        // imported writes, then publish. Atomic per field (synchronised on the tip) so concurrent
-        // volatile writes to the same field serialise and are not a data race.
-        EpochView view = currentView();
-        EpochLockState tip = volatileTip(new FieldLocation(holder, field));
-        VersionedLocation conflict;
-        synchronized (tip) {
-            conflict = view.mergeTable(tip.table, tip.clock);
-            view.commitStaging();
-            publish(tip, view);
-        }
-        handleConflict(conflict, view);
+    public void onVolatileWrite(StaticObject holder, Field field, Object value) {
+        // TODO: volatiles under the epoch backing are not implemented (see onVolatileRead).
+        throw new UnsupportedOperationException("volatile fields are not implemented under the branching epoch backing (TODO); use --java.BranchingBacking=dag");
     }
 
     private void handleConflict(VersionedLocation conflict, EpochView view) {

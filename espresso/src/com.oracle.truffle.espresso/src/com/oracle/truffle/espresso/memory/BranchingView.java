@@ -161,14 +161,9 @@ public final class BranchingView implements MemoryView {
      * Merge the branch tip {@code otherHead} (with its frontier {@code otherClock}) into this branch
      * (eager), the happens-before-race way — no lowest common ancestor. Returns a location written
      * concurrently on both branches (a conflict), else {@code null}. Advances {@code head} to a merge
-     * commit and joins the clocks.
-     *
-     * <p>The lock/join callers commit their staging first, so staging is empty. The <em>volatile
-     * write</em> path merges with staging still pending on purpose (paper §6.4 / Table 2 pull-before-
-     * push): the pulled history is folded into {@code head}, then the staged volatile value is committed
-     * <em>on top</em> so it is ordered after the imported writes (and concurrent volatile writes to the
-     * field are therefore not a data race). The conflict rule reads {@code lastWriter} (committed only),
-     * so the still-staged value never triggers a spurious conflict during the merge.
+     * commit and joins the clocks. Staging must be empty — every sync action (lock acquire, join,
+     * volatile read/write) commits first, so the conflict rule's {@code lastWriter} check covers the
+     * thread's just-committed writes (the paper's {@code dom(δ)} term in Conflict-Free-Merge).
      *
      * <p>The conflict rule, per location the other branch wrote that I have not seen: it is a conflict
      * iff the other branch never saw <em>my</em> latest writer of that location (so the two writers are
@@ -176,6 +171,7 @@ public final class BranchingView implements MemoryView {
      * shared prefix is in {@code otherClock}, so it never triggers a conflict.
      */
     VersionedLocation merge(Commit otherHead, VectorClock otherClock) {
+        assert staging.isEmpty();
         if (otherHead == null || otherHead == head) {
             return null;
         }

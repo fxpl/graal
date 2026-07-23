@@ -2985,11 +2985,10 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                         : nullCheck(popObject(frame, slot));
 
         MemoryModel model = getContext().getMemoryModel();
-        if (field.isVolatile()) {
-            // Volatile read = pull the field's published history before reading (Table 1 / §6.4).
-            model.onVolatileRead(receiver, field);
-        }
-        Object staged = model.readField(receiver, field);
+        // A volatile field's value lives in the model's un-versioned cell, not the versioned heap, so it
+        // is read via volatileRead (which also does the acquire) rather than readField. ABSENT (never
+        // written) falls through to the real heap default below, same as an ordinary versioned read.
+        Object staged = field.isVolatile() ? model.onVolatileRead(receiver, field) : model.readField(receiver, field);
 
         if (instrumentation != null) {
             instrumentation.notifyFieldAccess(frame, statementIndex, field, this, receiver);
@@ -3039,13 +3038,14 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                         : nullCheck(popObject(frame, slot));
 
         MemoryModel model = getContext().getMemoryModel();
+        Object toWrite;
         switch (typeHeader) {
             case 'Z': {
                 boolean value = stackIntToBoolean(popInt(frame, top - 1));
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, Boolean.valueOf(value));
+                toWrite = Boolean.valueOf(value);
                 break;
             }
             case 'B': {
@@ -3053,7 +3053,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, Byte.valueOf(value));
+                toWrite = Byte.valueOf(value);
                 break;
             }
             case 'C': {
@@ -3061,7 +3061,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, Character.valueOf(value));
+                toWrite = Character.valueOf(value);
                 break;
             }
             case 'S': {
@@ -3069,7 +3069,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, Short.valueOf(value));
+                toWrite = Short.valueOf(value);
                 break;
             }
             case 'I': {
@@ -3077,7 +3077,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, Integer.valueOf(value));
+                toWrite = Integer.valueOf(value);
                 break;
             }
             case 'D': {
@@ -3085,7 +3085,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, Double.valueOf(value));
+                toWrite = Double.valueOf(value);
                 break;
             }
             case 'F': {
@@ -3093,7 +3093,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, Float.valueOf(value));
+                toWrite = Float.valueOf(value);
                 break;
             }
             case 'J': {
@@ -3101,7 +3101,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, Long.valueOf(value));
+                toWrite = Long.valueOf(value);
                 break;
             }
             case '[': // fall through
@@ -3110,18 +3110,19 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 if (instrumentation != null) {
                     instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
                 }
-                model.writeField(receiver, field, value);
+                toWrite = value;
                 break;
             }
             default:
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw EspressoError.shouldNotReachHere("unexpected kind");
         }
+        // A volatile field's value is stored in the model's un-versioned cell (not staged/versioned):
+        // volatileWrite does the acquire, sets the cell value, and releases. Ordinary writes stage.
         if (field.isVolatile()) {
-            // Volatile write = pull then push (Table 1 / §6.4): the value is staged above; the model
-            // pulls the field's prior history first, then commits the staged write on top (ordering it
-            // after the imported history) and publishes.
-            model.onVolatileWrite(receiver, field);
+            model.onVolatileWrite(receiver, field, toWrite);
+        } else {
+            model.writeField(receiver, field, toWrite);
         }
         return -slotCount;
     }

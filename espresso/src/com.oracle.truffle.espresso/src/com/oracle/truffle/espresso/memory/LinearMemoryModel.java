@@ -255,21 +255,26 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onVolatileRead(StaticObject holder, Field field) {
-        // Volatile read = pull: import the field's published history before reading. holder/field are
-        // unused: Linear's single global g is the history for every volatile field (§6.4). The pull
-        // re-bases any staged writes on the imported versions, so it need not commit first.
+    public Object onVolatileRead(StaticObject holder, Field field) {
+        // Volatile read (paper VolatileRead): acquire by pulling g, then read the field's un-versioned
+        // value straight from its physical slot. The value is not in g (volatiles are race-free — their
+        // value is not versioned); Linear's single global g is the acquire for every volatile field, so
+        // the pull imports/conflict-checks the reader's ordinary staged writes. The pull happens-before
+        // the read, and every writer's field.set happens-before its push, so g's lock carries the value.
         LinearLocalView view = currentView();
         handleConflict(global.pull(view), view);
+        return field.get(holder, true);   // forceVolatile
     }
 
     @Override
-    public void onVolatileWrite(StaticObject holder, Field field) {
-        // Volatile write = pull then push (§6.4): import history, then publish this write. The value
-        // has already been staged by the caller; the pull re-bases it on the imported versions so it is
-        // ordered after them (and concurrent volatile writes to the field are thus not a data race).
+    public void onVolatileWrite(StaticObject holder, Field field, Object value) {
+        // Volatile write (paper VolatileWrite): acquire (pull g), set the un-versioned value in the
+        // physical slot, then release (push the ordinary staged writes to g). The value never enters g,
+        // so concurrent volatile writes to the same field are not a data race — last writer wins on the
+        // slot; only the ordinary writes published alongside are conflict-checked, by the pull/push.
         LinearLocalView view = currentView();
         handleConflict(global.pull(view), view);
+        field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
         handleConflict(global.push(view), view);
         maybeCollapse();
     }

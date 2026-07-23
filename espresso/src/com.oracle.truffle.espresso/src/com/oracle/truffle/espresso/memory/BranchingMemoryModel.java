@@ -260,34 +260,46 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onVolatileRead(StaticObject holder, Field field) {
-        // Volatile read = pull (§6.4 / Table 2 ReadVolatile): merge the field's published branch into
-        // this view, then the caller reads. No publish — a read adds no history. Staging is left
-        // pending (the reader's own writes stay staged). Synchronised on the tip so the (commit, clock)
-        // snapshot is consistent against a concurrent volatile write to the same field.
+    public Object onVolatileRead(StaticObject holder, Field field) {
+        // Volatile read (paper VolatileRead): acquire by merging the field's published commit into this
+        // view, then read the un-versioned value straight from the physical slot. commitStaging first,
+        // so the merge sees empty staging and its conflict check covers the reader's ordinary writes;
+        // no publish — a read adds no history. Atomic per field (synchronised on the tip) so value and
+        // commit are read together, consistent against a concurrent volatile write to the same field.
         BranchingView view = currentView();
         LockState tip = volatileTip(new FieldLocation(holder, field));
-        VersionedLocation conflict;
+        VersionedLocation conflict = null;
+        Object value;
         synchronized (tip) {
-            conflict = view.merge(tip.commit, tip.clock);
+            view.commitStaging();
+            if (tip.commit != null) {
+                conflict = view.merge(tip.commit, tip.clock);
+            }
+            value = field.get(holder, true);   // forceVolatile; value is un-versioned, in the real heap
         }
         handleConflict(conflict, view);
+        return value;
     }
 
     @Override
-    public void onVolatileWrite(StaticObject holder, Field field) {
-        // Volatile write = pull then push (§6.4 / Table 2 WriteVolatile): pull the field's history
-        // FIRST (folding it into head, staging still pending), then commit the staged value on top so
-        // it is ordered after the imported writes, then publish the extended frontier. The whole
-        // pull+push is atomic per field (synchronised on the tip) so concurrent volatile writes to the
-        // same field serialise through its branch and are not a data race.
+    public void onVolatileWrite(StaticObject holder, Field field, Object value) {
+        // Volatile write (paper VolatileWrite): acquire (commit ordinary staging, merge the field's
+        // prior commit), then release — set the un-versioned value in the physical slot and publish this
+        // thread's head as the field's new commit. The value never enters a commit, so concurrent
+        // volatile writes to the same field are not a data race (last writer wins on the slot); only the
+        // ordinary writes carried on the commit are conflict-checked, at the merge. Atomic per field.
         BranchingView view = currentView();
         LockState tip = volatileTip(new FieldLocation(holder, field));
-        VersionedLocation conflict;
+        VersionedLocation conflict = null;
         synchronized (tip) {
-            conflict = view.merge(tip.commit, tip.clock);
             view.commitStaging();
-            publish(tip, view);
+            if (tip.commit != null) {
+                conflict = view.merge(tip.commit, tip.clock);
+            }
+            if (conflict == null) {
+                field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
+                publish(tip, view);
+            }
         }
         handleConflict(conflict, view);
     }

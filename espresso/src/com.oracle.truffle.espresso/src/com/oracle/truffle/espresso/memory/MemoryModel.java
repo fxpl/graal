@@ -108,19 +108,23 @@ public interface MemoryModel {
     void onMonitorExit(StaticObject lock);
 
     /**
-     * Volatile read = pull (import the field's published history before reading). {@code holder}/{@code
-     * field} identify the volatile location; Branching keys the per-field synchronisation tip by it,
-     * Linear ignores it (the history is the single global {@code g}). §6.4 / Table 2 {@code ReadVolatile}.
+     * Volatile read (the paper's {@code VolatileRead} rule). A volatile field is an <em>un-versioned</em>
+     * cell {@code (value, commit)} kept beside the locks, not in the versioned heap: the value is a plain
+     * slot, the commit carries the happens-before of the ordinary writes published alongside it. A read
+     * <em>acquires</em> — it pulls (Branching: merges the cell's commit; Linear: pulls {@code g}), which
+     * may raise a conflict on those ordinary writes — then returns the cell's value (or {@link #ABSENT}
+     * if never written, so the caller reads the heap default). A read publishes nothing.
      */
-    void onVolatileRead(StaticObject holder, Field field);
+    Object onVolatileRead(StaticObject holder, Field field);
 
     /**
-     * Volatile write = pull then push (import the field's history, then publish this write) — §6.4 /
-     * Table 2 {@code WriteVolatile}. The pull-before-push accumulates the field's release chain and
-     * orders concurrent volatile writes so they are not a data race. The staged value must be committed
-     * <em>after</em> the pull so it is ordered after the imported history.
+     * Volatile write (the paper's {@code VolatileWrite} rule). Acquires as {@link #volatileRead}, then
+     * <em>releases</em>: sets the cell's value to {@code value} and publishes the writer's commit to the
+     * cell. The value is stored in the cell only — never staged or versioned — so concurrent volatile
+     * writes to the same field are not a data race (last writer wins); only the ordinary writes carried
+     * on the commit are conflict-checked, at the acquire. Atomic per field.
      */
-    void onVolatileWrite(StaticObject holder, Field field);
+    void onVolatileWrite(StaticObject holder, Field field, Object value);
 
     // --- Activation gate ---
 
