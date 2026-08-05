@@ -55,5 +55,35 @@ public enum SyncOp {
     /** A guest thread's payload has finished (before the terminal push). */
     THREAD_END,
     /** {@code Thread.sleep}: a timed, happens-before-free pause. */
-    SLEEP
+    SLEEP;
+
+    /**
+     * An acquire gains visibility from {@code subject} (the release-acquire "acquire" side): a monitor
+     * enter, or the monitor re-acquire on return from wait. Used by the completeness oracle to detect
+     * the acquire end of a handoff.
+     */
+    public boolean isAcquire() {
+        return this == MONITOR_ENTER || this == WAIT_REACQUIRE;
+    }
+
+    /**
+     * A release publishes this thread's view to {@code subject} (the "release" side): a monitor exit,
+     * or a thread's termination (which a joiner acquires by waiting on the thread object).
+     */
+    public boolean isRelease() {
+        return this == MONITOR_EXIT || this == THREAD_END;
+    }
+
+    /**
+     * Whether the memory model has a synchronization hook wired at this op, i.e. whether the model
+     * actually propagates flow here. The completeness oracle flags a cross-thread handoff whose acquire
+     * is <em>not</em> model-hooked — the wait/notify shape: a real {@code WAIT_REACQUIRE} that carries
+     * no merge because the internal re-lock bypasses {@code onMonitorEnter}.
+     */
+    public boolean isModelHooked() {
+        return switch (this) {
+            case MONITOR_ENTER, MONITOR_EXIT, THREAD_START, THREAD_END, SPAWN -> true;
+            default -> false;   // WAIT_*, NOTIFY*, PARK, UNPARK, SLEEP: no model hook
+        };
+    }
 }

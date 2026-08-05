@@ -23,6 +23,7 @@
 package com.oracle.truffle.espresso.scheduler;
 
 import java.io.PrintStream;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -69,6 +70,20 @@ public final class TracingScheduler implements Scheduler {
     // (no wake seam) — so run= can over-count there; refined with the scheduler's enabled-set (§5).
     private final AtomicInteger runnableApp = new AtomicInteger();
 
+    // Completeness oracle (§6a). From the seam stream alone — independent of the model's flow notion —
+    // reconstruct release->acquire handoffs: the last thread to RELEASE a subject is its publisher; a
+    // later, cross-thread ACQUIRE of the same subject completes a synchronizes-with edge. Flag any such
+    // handoff whose acquire is not model-hooked (WAIT_REACQUIRE) — the wait/notify shape, where a real
+    // handoff carries no merge because the internal re-lock bypasses onMonitorEnter. Subjects are
+    // retained (debug tool; not pruned).
+    private final Map<StaticObject, String> lastPublisher = new ConcurrentHashMap<>();
+    private final AtomicInteger alarms = new AtomicInteger();
+    private final boolean oracleOnly;   // ORACLE mode prints alarms only; TRACE mode prints the full trace too
+
+    public TracingScheduler(boolean oracleOnly) {
+        this.oracleOnly = oracleOnly;
+    }
+
     @Override
     public boolean isActive() {
         return active;
@@ -109,8 +124,22 @@ public final class TracingScheduler implements Scheduler {
             default -> { }
         }
         long n = seq.incrementAndGet();
-        out.printf("[seam %4d] live=%d run=%d %-18s %-14s %s%n",
-                        n, liveApp.get(), runnableApp.get(), Thread.currentThread().getName(), op, label(subject));
+        if (!oracleOnly) {
+            out.printf("[seam %4d] live=%d run=%d %-18s %-14s %s%n",
+                            n, liveApp.get(), runnableApp.get(), Thread.currentThread().getName(), op, label(subject));
+        }
+        // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
+        // model-hooked completes a handoff the model does not carry (§6a).
+        if (op.isRelease() && subject != null && !StaticObject.isNull(subject)) {
+            lastPublisher.put(subject, Thread.currentThread().getName());
+        } else if (op.isAcquire() && subject != null && !StaticObject.isNull(subject)) {
+            String publisher = lastPublisher.get(subject);
+            String me = Thread.currentThread().getName();
+            if (publisher != null && !publisher.equals(me) && !op.isModelHooked()) {
+                out.printf("[ORACLE] missed handoff #%d: %s %s %s — published by %s, but this acquire fires no model hook (no merge)%n",
+                                alarms.incrementAndGet(), me, op, label(subject), publisher);
+            }
+        }
         // State updates that take effect AFTER this seam (the acting thread leaves the runnable set):
         // ending stops it; releasing the monitor to wait blocks it until its WAIT_REACQUIRE.
         switch (op) {

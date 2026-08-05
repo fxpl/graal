@@ -470,7 +470,8 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
             // pass through synchronization seams; folds away under OFF.
             this.scheduler = switch (getLanguage().getScheduleExploreMode()) {
                 case OFF -> NullScheduler.INSTANCE;
-                case TRACE -> new TracingScheduler();
+                case TRACE -> new TracingScheduler(false);
+                case ORACLE -> new TracingScheduler(true);
             };
 
             nativeAccess = spawnNativeAccess();

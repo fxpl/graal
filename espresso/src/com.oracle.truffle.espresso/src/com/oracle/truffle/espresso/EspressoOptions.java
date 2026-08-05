@@ -331,7 +331,8 @@ public final class EspressoOptions {
      */
     public enum ScheduleExploreMode {
         OFF,
-        TRACE
+        TRACE,
+        ORACLE
     }
 
     private static final OptionType<ScheduleExploreMode> SCHEDULE_EXPLORE_OPTION_TYPE = new OptionType<>("ScheduleExplore", new Function<String, ScheduleExploreMode>() {
@@ -340,15 +341,15 @@ public final class EspressoOptions {
             try {
                 return ScheduleExploreMode.valueOf(s.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("--java.ScheduleExplore: mode can be 'off' or 'trace'.");
+                throw new IllegalArgumentException("--java.ScheduleExplore: mode can be 'off', 'trace' or 'oracle'.");
             }
         }
     });
 
-    @Option(help = "Schedule exploration mode (independent of the memory model): 'off', or 'trace' (log every synchronization seam as it fires; observation only).", //
+    @Option(help = "Schedule exploration mode (independent of the memory model): 'off'; 'trace' (log every synchronization seam as it fires); or 'oracle' (report only missed-seam alarms — cross-thread handoffs whose acquire fires no model hook).", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "off|trace") //
+                    usageSyntax = "off|trace|oracle") //
     public static final OptionKey<ScheduleExploreMode> ScheduleExplore = new OptionKey<>(ScheduleExploreMode.OFF, SCHEDULE_EXPLORE_OPTION_TYPE);
 
     @Option(help = "Applies to: linear and branching. If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for branching, or the global-history timeline for linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. Empty = disabled.", //
