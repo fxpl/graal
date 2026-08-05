@@ -323,6 +323,34 @@ public final class EspressoOptions {
                     usageSyntax = "shared|linear|branching") //
     public static final OptionKey<MemoryModelMode> MemoryModel = new OptionKey<>(MemoryModelMode.SHARED, MEMORY_MODEL_OPTION_TYPE);
 
+    /**
+     * Schedule exploration mode. Independent of {@link #MemoryModel}: the scheduler observes (and, in
+     * later slices, controls) the order threads pass through synchronization seams, whereas the memory
+     * model decides visibility. {@code TRACE} logs every seam as it fires (observation only, no change
+     * to behaviour). See design/schedule-explorer.md.
+     */
+    public enum ScheduleExploreMode {
+        OFF,
+        TRACE
+    }
+
+    private static final OptionType<ScheduleExploreMode> SCHEDULE_EXPLORE_OPTION_TYPE = new OptionType<>("ScheduleExplore", new Function<String, ScheduleExploreMode>() {
+        @Override
+        public ScheduleExploreMode apply(String s) {
+            try {
+                return ScheduleExploreMode.valueOf(s.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("--java.ScheduleExplore: mode can be 'off' or 'trace'.");
+            }
+        }
+    });
+
+    @Option(help = "Schedule exploration mode (independent of the memory model): 'off', or 'trace' (log every synchronization seam as it fires; observation only).", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "off|trace") //
+    public static final OptionKey<ScheduleExploreMode> ScheduleExplore = new OptionKey<>(ScheduleExploreMode.OFF, SCHEDULE_EXPLORE_OPTION_TYPE);
+
     @Option(help = "Applies to: linear and branching. If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for branching, or the global-history timeline for linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. Empty = disabled.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //

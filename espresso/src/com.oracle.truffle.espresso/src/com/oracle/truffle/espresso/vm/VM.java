@@ -153,6 +153,7 @@ import com.oracle.truffle.espresso.runtime.EspressoExitException;
 import com.oracle.truffle.espresso.runtime.EspressoProperties;
 import com.oracle.truffle.espresso.runtime.OS;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.scheduler.SyncOp;
 import com.oracle.truffle.espresso.shared.meta.SignaturePolymorphicIntrinsic;
 import com.oracle.truffle.espresso.substitutions.CallableFromNative;
 import com.oracle.truffle.espresso.substitutions.GenerateNativeEnv;
@@ -887,6 +888,7 @@ public final class VM extends NativeEnv {
     public void JVM_MonitorNotifyAll(@JavaType(Object.class) StaticObject self, @Inject SubstitutionProfiler profiler) {
         try {
             InterpreterToVM.monitorNotifyAll(self.getLock(getContext()));
+            getContext().seam(SyncOp.NOTIFY_ALL, self);
         } catch (IllegalMonitorStateException e) {
             profiler.profile(0);
             Meta meta = getMeta();
@@ -899,6 +901,7 @@ public final class VM extends NativeEnv {
     public void JVM_MonitorNotify(@JavaType(Object.class) StaticObject self, @Inject SubstitutionProfiler profiler) {
         try {
             InterpreterToVM.monitorNotify(self.getLock(getContext()));
+            getContext().seam(SyncOp.NOTIFY, self);
         } catch (IllegalMonitorStateException e) {
             profiler.profile(0);
             Meta meta = getMeta();
@@ -924,6 +927,7 @@ public final class VM extends NativeEnv {
                 context.reportMonitorWait(self, timeout);
             }
             boolean timedOut;
+            context.seam(SyncOp.WAIT_RELEASE, self);
             // wait() releases the monitor here: publish this thread's view to the lock, as a normal
             // monitorexit would (the internal release fires no bytecode hook otherwise).
             if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
@@ -935,6 +939,7 @@ public final class VM extends NativeEnv {
             } else {
                 timedOut = !InterpreterToVM.monitorWait(self.getLock(context), timeout);
             }
+            context.seam(SyncOp.WAIT_REACQUIRE, self);
             // wait() re-acquired the monitor on wake: merge whatever the notifier published, as a
             // normal monitorenter would (the internal re-lock fires no bytecode hook otherwise).
             if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {

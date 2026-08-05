@@ -44,6 +44,7 @@ import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.scheduler.SyncOp;
 import com.oracle.truffle.espresso.substitutions.EspressoSubstitutions;
 import com.oracle.truffle.espresso.substitutions.Inject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
@@ -143,6 +144,7 @@ public final class Target_java_lang_Thread {
                 if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
                     context.getMemoryModel().onSpawn(self);
                 }
+                context.seam(SyncOp.SPAWN, self);
                 hostThread.start();
             } else {
                 String reason = context.getMultiThreadingDisabledReason();
@@ -238,6 +240,7 @@ public final class Target_java_lang_Thread {
             unit = TimeUnit.MILLISECONDS;
         }
         StaticObject thread = meta.getContext().getCurrentPlatformThread();
+        meta.getContext().seam(SyncOp.SLEEP, StaticObject.NULL);
         Transition transition = Transition.transition(TIMED_SLEEPING, location);
         try {
             meta.getContext().getBlockingSupport().sleep(unit.toNanos(amount), location);

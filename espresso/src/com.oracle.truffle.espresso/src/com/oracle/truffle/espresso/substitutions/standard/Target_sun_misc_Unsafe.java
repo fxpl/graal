@@ -72,6 +72,7 @@ import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.runtime.GuestAllocator;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.scheduler.SyncOp;
 import com.oracle.truffle.espresso.substitutions.EspressoSubstitutions;
 import com.oracle.truffle.espresso.substitutions.Inject;
 import com.oracle.truffle.espresso.substitutions.InlineInBytecode;
@@ -750,6 +751,7 @@ public final class Target_sun_misc_Unsafe {
 
         EspressoContext context = meta.getContext();
         StaticObject thread = context.getCurrentPlatformThread();
+        context.seam(SyncOp.PARK, thread);
 
         // Check return condition beforehand
         if (parkReturnCondition(thread, meta)) {
@@ -819,6 +821,7 @@ public final class Target_sun_misc_Unsafe {
     @Substitution(hasReceiver = true)
     public static void unpark(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject thread,
                     @Inject Meta meta) {
+        meta.getContext().seam(SyncOp.UNPARK, thread);
         EspressoLock parkLock = getParkLock(thread, meta);
         parkLock.lock();
         try {

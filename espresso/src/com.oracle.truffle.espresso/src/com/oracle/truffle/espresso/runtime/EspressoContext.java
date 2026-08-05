@@ -109,6 +109,10 @@ import com.oracle.truffle.espresso.memory.BranchingMemoryModel;
 import com.oracle.truffle.espresso.memory.LinearMemoryModel;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.SharedMemoryModel;
+import com.oracle.truffle.espresso.scheduler.NullScheduler;
+import com.oracle.truffle.espresso.scheduler.Scheduler;
+import com.oracle.truffle.espresso.scheduler.SyncOp;
+import com.oracle.truffle.espresso.scheduler.TracingScheduler;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.interop.EspressoForeignProxyGenerator;
@@ -200,6 +204,7 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
     @CompilationFinal private JniEnv jniEnv;
     @CompilationFinal private InterpreterToVM interpreterToVM;
     @CompilationFinal private MemoryModel memoryModel;
+    @CompilationFinal private Scheduler scheduler;
     @CompilationFinal private JImageLibrary jimageLibrary;
     @CompilationFinal private EspressoProperties vmProperties;
     @CompilationFinal private AgentLibraries agents;
@@ -367,6 +372,9 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
         // Turn versioning on now, so user code (from main onward) is versioned while the JDK bootstrap
         // is not. No-op under shared.
         getMemoryModel().activate();
+        // The schedule explorer activates later, at the user-main boundary (BeginUserCodeNode, fired
+        // by the launcher right before invoking main), so a programmer sees only seams from main
+        // onward — not the class-loading and reflective-launch machinery. See BeginUserCodeNode.
 
         if (EspressoOptions.CDS.getValue(getEnv().getOptions()) == XShareOption.dump) {
             CDSSupport cds = getCDS();
@@ -457,6 +465,13 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
                 default:
                     throw EspressoError.shouldNotReachHere("Unknown memory model: " + getLanguage().getMemoryModelMode());
             }
+
+            // Schedule explorer (independent of the memory model). Observes/controls the order threads
+            // pass through synchronization seams; folds away under OFF.
+            this.scheduler = switch (getLanguage().getScheduleExploreMode()) {
+                case OFF -> NullScheduler.INSTANCE;
+                case TRACE -> new TracingScheduler();
+            };
 
             nativeAccess = spawnNativeAccess();
             if (getLanguage().useEspressoLibs()) {
@@ -898,6 +913,22 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
 
     public MemoryModel getMemoryModel() {
         return memoryModel;
+    }
+
+    public Scheduler getScheduler() {
+        return scheduler;
+    }
+
+    /**
+     * Announce a synchronization seam to the schedule explorer. The guard reads as a
+     * partial-evaluation constant, so this folds away entirely when {@code --java.ScheduleExplore=off}
+     * (the default). Called from the seam sites in InterpreterToVM / VM / Unsafe / Thread /
+     * GuestRunnable.
+     */
+    public void seam(SyncOp op, StaticObject subject) {
+        if (getLanguage().isScheduleExploreEnabled() && scheduler.isActive()) {
+            scheduler.atSeam(op, subject);
+        }
     }
 
     public VM getVM() {

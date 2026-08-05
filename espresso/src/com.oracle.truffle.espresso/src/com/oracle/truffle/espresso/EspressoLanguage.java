@@ -165,6 +165,8 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     // {@code true} iff a non-stock memory model is active. Kept as a separate PE-constant so the
     // Sync-as-Share hooks on the hot path fold away entirely under {@code SHARED}.
     @CompilationFinal private boolean memoryModelEnabled;
+    @CompilationFinal private EspressoOptions.ScheduleExploreMode scheduleExploreMode;
+    @CompilationFinal private boolean scheduleExploreEnabled;
     // endregion Options
 
     // region Allocation
@@ -272,6 +274,8 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         memoryModelCollapseMode = env.getOptions().get(EspressoOptions.MemoryModelCollapse);
         memoryModelCollapseEvery = env.getOptions().get(EspressoOptions.MemoryModelCollapseEvery);
         memoryModelEnabled = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
+        scheduleExploreMode = env.getOptions().get(EspressoOptions.ScheduleExplore);
+        scheduleExploreEnabled = scheduleExploreMode != EspressoOptions.ScheduleExploreMode.OFF;
 
         useTRegex = env.getOptions().get(EspressoOptions.UseTRegex);
         if (useTRegex && !env.getInternalLanguages().containsKey("regex")) {
@@ -440,6 +444,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelGraph) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelCollapse) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelCollapseEvery) &&
+                        isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleExplore) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.LivenessAnalysis) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.LivenessAnalysisMinimumLocals) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.EnablePreview) &&
@@ -534,6 +539,10 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         }
         if (ReferenceProcessRootNode.EVAL_NAME.equals(contents)) {
             RootNode node = new ReferenceProcessRootNode(this);
+            return node.getCallTarget();
+        }
+        if (com.oracle.truffle.espresso.nodes.commands.BeginUserCodeNode.EVAL_NAME.equals(contents)) {
+            RootNode node = new com.oracle.truffle.espresso.nodes.commands.BeginUserCodeNode(this);
             return node.getCallTarget();
         }
         throw new EspressoParseError(
@@ -676,6 +685,18 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
      */
     public boolean isMemoryModelEnabled() {
         return memoryModelEnabled;
+    }
+
+    public EspressoOptions.ScheduleExploreMode getScheduleExploreMode() {
+        return scheduleExploreMode;
+    }
+
+    /**
+     * Whether schedule exploration is selected. Reads as a partial-evaluation constant, so the seam
+     * announcements fold away on the hot path when {@code OFF} is selected.
+     */
+    public boolean isScheduleExploreEnabled() {
+        return scheduleExploreEnabled;
     }
 
     public EspressoOptions.LivenessAnalysisMode getLivenessAnalysisMode() {

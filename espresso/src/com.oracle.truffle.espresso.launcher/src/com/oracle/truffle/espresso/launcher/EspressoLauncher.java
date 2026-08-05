@@ -794,6 +794,12 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
                     guestMainClassArgs.setArrayElement(i, mainClassArgs.get(i));
                 }
 
+                // Mark the boundary between launcher/class-loading setup and user code, so the
+                // schedule explorer (if enabled) begins observing seams only from main onward. No-op
+                // unless --java.ScheduleExplore is set. Keep the literal in sync with
+                // BeginUserCodeNode.EVAL_NAME (the launcher module cannot reference it directly).
+                context.eval("java", "<begin-user-code>");
+
                 mainKlass.invokeMember("main/([Ljava/lang/String;)V", guestMainClassArgs);
                 if (pauseOnExit) {
                     getError().print("Press any key to continue...");

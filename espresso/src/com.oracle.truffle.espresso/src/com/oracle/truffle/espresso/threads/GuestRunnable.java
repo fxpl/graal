@@ -27,6 +27,7 @@ import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.runtime.EspressoExitException;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.scheduler.SyncOp;
 
 /**
  * The payload of the host thread executing a guest {@linkplain #thread thread}.
@@ -64,10 +65,12 @@ final class GuestRunnable implements Runnable {
                 if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
                     context.getMemoryModel().onThreadStart();
                 }
+                context.seam(SyncOp.THREAD_START, thread);
                 // Execute the payload
                 context.getThreadAccess().checkDeprecatedThreadStatus(thread);
                 context.getMeta().java_lang_Thread_run.invokeDirectVirtual(thread);
                 context.getThreadAccess().checkDeprecatedThreadStatus(thread);
+                context.seam(SyncOp.THREAD_END, thread);
                 // Sync-as-Share: thread end = push this thread's view to g.
                 if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
                     context.getMemoryModel().onThreadEnd();

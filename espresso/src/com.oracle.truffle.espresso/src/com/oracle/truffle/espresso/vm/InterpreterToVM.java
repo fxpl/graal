@@ -57,6 +57,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.substitutions.Throws;
 import com.oracle.truffle.espresso.substitutions.standard.Target_java_lang_Thread;
+import com.oracle.truffle.espresso.scheduler.SyncOp;
 import com.oracle.truffle.espresso.threads.Transition;
 
 public final class InterpreterToVM extends ContextAccessImpl {
@@ -408,6 +409,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
             // off during JDK bootstrap.
             context.getMemoryModel().onMonitorEnter(obj);
         }
+        context.seam(SyncOp.MONITOR_ENTER, obj);
     }
 
     @TruffleBoundary
@@ -449,6 +451,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
             // lock (may raise a conflict). Folds away under shared; off during JDK bootstrap.
             meta.getContext().getMemoryModel().onMonitorExit(obj);
         }
+        meta.getContext().seam(SyncOp.MONITOR_EXIT, obj);
         meta.getContext().getLanguage().getThreadLocalState().unblockContinuationSuspension();
         monitorUnsafeExit(lock);
     }
