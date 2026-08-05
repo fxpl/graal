@@ -924,11 +924,21 @@ public final class VM extends NativeEnv {
                 context.reportMonitorWait(self, timeout);
             }
             boolean timedOut;
+            // wait() releases the monitor here: publish this thread's view to the lock, as a normal
+            // monitorexit would (the internal release fires no bytecode hook otherwise).
+            if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+                context.getMemoryModel().onMonitorExit(self);
+            }
             if (context.getEspressoEnv().EnableManagement) {
                 Target_java_lang_Thread.incrementThreadCounter(currentThread, meta.java_lang_Thread_0waitedCount);
                 timedOut = !InterpreterToVM.monitorWait(self.getLock(context), timeout, currentThread, self);
             } else {
                 timedOut = !InterpreterToVM.monitorWait(self.getLock(context), timeout);
+            }
+            // wait() re-acquired the monitor on wake: merge whatever the notifier published, as a
+            // normal monitorenter would (the internal re-lock fires no bytecode hook otherwise).
+            if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+                context.getMemoryModel().onMonitorEnter(self);
             }
             if (report) {
                 context.reportMonitorWaited(self, timedOut);
