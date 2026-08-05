@@ -60,6 +60,15 @@ public final class TracingScheduler implements Scheduler {
     // live= column lets us measure how many of the raw seams are even candidates.
     private final AtomicInteger liveApp = new AtomicInteger();
 
+    // Number of application threads currently RUNNABLE — live and not blocked in wait/join (a joiner
+    // blocks via Object.wait on the joinee, so join is covered). This is the tighter co-enablement
+    // measure: a monitor op fired while only one thread is runnable cannot be contended, so it is not a
+    // decision. Upgrading the gate from live>=2 to run>=2 drops the "one thread runs while the others
+    // are blocked in join" tail (e.g. the exception-message / println machinery after a joinee ends).
+    // Not yet tracked as blocking: contended monitor-enter (fires its seam post-acquire) and park/sleep
+    // (no wake seam) — so run= can over-count there; refined with the scheduler's enabled-set (§5).
+    private final AtomicInteger runnableApp = new AtomicInteger();
+
     @Override
     public boolean isActive() {
         return active;
@@ -70,6 +79,7 @@ public final class TracingScheduler implements Scheduler {
         active = true;
         appThread.set(Boolean.TRUE);   // runs on the main thread (BeginUserCodeNode)
         liveApp.set(1);                // main
+        runnableApp.set(1);
     }
 
     @Override
@@ -86,16 +96,30 @@ public final class TracingScheduler implements Scheduler {
         if (!appThread.get()) {
             return;   // not descended from main => VM/daemon thread; skip.
         }
-        // Maintain the live application-thread count. Increment before printing a SPAWN (the child is
-        // now in play); decrement after printing a THREAD_END (self still counts at its own end).
-        if (op == SyncOp.SPAWN && subject != null && !StaticObject.isNull(subject)) {
-            spawnedByApp.add(subject);
-            liveApp.incrementAndGet();
+        // State updates that must be visible ON this seam's line (the acting thread is now in that
+        // state): a spawn adds a live thread; a start/wake makes this thread runnable.
+        switch (op) {
+            case SPAWN -> {
+                if (subject != null && !StaticObject.isNull(subject)) {
+                    spawnedByApp.add(subject);   // so the child's THREAD_START promotes it
+                    liveApp.incrementAndGet();   // child now in play (not yet runnable — starts at THREAD_START)
+                }
+            }
+            case THREAD_START, WAIT_REACQUIRE -> runnableApp.incrementAndGet();
+            default -> { }
         }
         long n = seq.incrementAndGet();
-        out.printf("[seam %4d] live=%d %-18s %-14s %s%n", n, liveApp.get(), Thread.currentThread().getName(), op, label(subject));
-        if (op == SyncOp.THREAD_END) {
-            liveApp.decrementAndGet();
+        out.printf("[seam %4d] live=%d run=%d %-18s %-14s %s%n",
+                        n, liveApp.get(), runnableApp.get(), Thread.currentThread().getName(), op, label(subject));
+        // State updates that take effect AFTER this seam (the acting thread leaves the runnable set):
+        // ending stops it; releasing the monitor to wait blocks it until its WAIT_REACQUIRE.
+        switch (op) {
+            case THREAD_END -> {
+                runnableApp.decrementAndGet();
+                liveApp.decrementAndGet();
+            }
+            case WAIT_RELEASE -> runnableApp.decrementAndGet();
+            default -> { }
         }
     }
 
