@@ -22,6 +22,7 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -50,6 +51,16 @@ public final class LinearMemoryModel implements MemoryModel {
     private final GlobalHistory global;
     private final EspressoContext context;
     private volatile boolean active = false;
+    // Per-volatile-field lock making a volatile read's (pull, get-value) and a volatile write's
+    // (pull, set-value, push) atomic per field — the paper's pull-push is one action. Without it a
+    // reader could see a new volatile value while its pull missed the ordinary writes published with it
+    // (the publication window). The value itself is un-versioned (the physical slot); this lock only
+    // couples the value with the g pull/push. Keyed by FieldLocation.
+    private final Map<FieldLocation, Object> volatileLocks = new ConcurrentHashMap<>();
+
+    private Object volatileLock(FieldLocation loc) {
+        return volatileLocks.computeIfAbsent(loc, k -> new Object());
+    }
 
     // History collapsing (--java.MemoryModelCollapse). When not OFF, every live thread's view is
     // registered here so the collapse trigger can compute the threshold T = min over live bases; and
@@ -262,8 +273,12 @@ public final class LinearMemoryModel implements MemoryModel {
         // the pull imports/conflict-checks the reader's ordinary staged writes. The pull happens-before
         // the read, and every writer's field.set happens-before its push, so g's lock carries the value.
         LinearLocalView view = currentView();
-        handleConflict(global.pull(view), view);
-        return field.get(holder, true);   // forceVolatile
+        Object value;
+        synchronized (volatileLock(new FieldLocation(holder, field))) {
+            handleConflict(global.pull(view), view);
+            value = field.get(holder, true);   // forceVolatile; atomic with the pull (see volatileLocks)
+        }
+        return value;
     }
 
     @Override
@@ -273,9 +288,11 @@ public final class LinearMemoryModel implements MemoryModel {
         // so concurrent volatile writes to the same field are not a data race — last writer wins on the
         // slot; only the ordinary writes published alongside are conflict-checked, by the pull/push.
         LinearLocalView view = currentView();
-        handleConflict(global.pull(view), view);
-        field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
-        handleConflict(global.push(view), view);
+        synchronized (volatileLock(new FieldLocation(holder, field))) {
+            handleConflict(global.pull(view), view);
+            field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
+            handleConflict(global.push(view), view);
+        }
         maybeCollapse();
     }
 
