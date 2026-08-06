@@ -59,19 +59,23 @@ public enum SyncOp {
 
     /**
      * An acquire gains visibility from {@code subject} (the release-acquire "acquire" side): a monitor
-     * enter, or the monitor re-acquire on return from wait. Used by the completeness oracle to detect
-     * the acquire end of a handoff.
+     * enter, the monitor re-acquire on return from wait, or a freshly started thread pulling the view
+     * its parent published at spawn. The paired release is the one that most recently published the
+     * same {@code subject}: spawn/start share the child's {@code Thread} object; unlock/lock share the
+     * monitor; termination/join share the terminating {@code Thread} object.
      */
     public boolean isAcquire() {
-        return this == MONITOR_ENTER || this == WAIT_REACQUIRE;
+        return this == MONITOR_ENTER || this == WAIT_REACQUIRE || this == THREAD_START;
     }
 
     /**
-     * A release publishes this thread's view to {@code subject} (the "release" side): a monitor exit,
-     * or a thread's termination (which a joiner acquires by waiting on the thread object).
+     * A release publishes this thread's staged view to {@code subject} (the "release" side): a monitor
+     * exit, the release on entering {@code wait}, a spawn (parent publishes to the child's {@code Thread}
+     * object), or a thread's termination (which a joiner acquires by waiting on the {@code Thread}
+     * object). A release with writes staged is a flow-commit.
      */
     public boolean isRelease() {
-        return this == MONITOR_EXIT || this == THREAD_END;
+        return this == MONITOR_EXIT || this == WAIT_RELEASE || this == SPAWN || this == THREAD_END;
     }
 
     /**
