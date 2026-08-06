@@ -68,6 +68,10 @@ public final class LinearLocalView implements MemoryView {
         return staging.isEmpty();
     }
 
+    public int stagingSize() {
+        return staging.size();
+    }
+
     public void clearStaging() {
         staging.clear();
     }

@@ -152,6 +152,12 @@ public final class BranchingMemoryModel implements MemoryModel {
         return (BranchingView) context.getLanguage().getThreadLocalState().getMemoryView();
     }
 
+    @Override
+    public int pendingWriteCount() {
+        MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
+        return v == null ? 0 : ((BranchingView) v).stagingSize();
+    }
+
     private LockState lockState(StaticObject key) {
         return lockStates.computeIfAbsent(key, k -> new LockState());
     }

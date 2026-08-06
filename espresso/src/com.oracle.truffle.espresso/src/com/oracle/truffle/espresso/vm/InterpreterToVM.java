@@ -446,12 +446,14 @@ public final class InterpreterToVM extends ContextAccessImpl {
             // Espresso has its own monitor handling.
             throw meta.throwException(meta.java_lang_IllegalMonitorStateException);
         }
+        // Seam fires before the publish so it observes the staging about to be pushed (flow-commit
+        // detection) and, for the driver, controls order before the release takes effect.
+        meta.getContext().seam(SyncOp.MONITOR_EXIT, obj);
         if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive()) {
             // Sync-as-Share: unlock = push. Publish this thread's view to g while still holding the
             // lock (may raise a conflict). Folds away under shared; off during JDK bootstrap.
             meta.getContext().getMemoryModel().onMonitorExit(obj);
         }
-        meta.getContext().seam(SyncOp.MONITOR_EXIT, obj);
         meta.getContext().getLanguage().getThreadLocalState().unblockContinuationSuspension();
         monitorUnsafeExit(lock);
     }

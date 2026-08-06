@@ -142,4 +142,20 @@ public interface MemoryModel {
     /** Turn versioning on. Called once, after context bootstrap completes and before user code runs. */
     default void activate() {
     }
+
+    // --- Scheduler introspection (read-only; used by the schedule explorer, not the hot path) ---
+
+    /**
+     * Number of writes the calling thread has staged but not yet published. A release-type seam
+     * (monitor exit, thread end, spawn, wait-release, volatile write) is a <em>flow-commit</em> —
+     * a seam that actually publishes something and can therefore change another thread's view — iff
+     * this is {@code > 0}. A release with nothing staged commits nothing, so its ordering relative to
+     * other threads is provably irrelevant under Sync-as-Share (the isolation property). The schedule
+     * explorer uses this to reduce the raw seam stream to the seams worth driving; see
+     * {@code design/schedule-explorer.md} &sect;3a. Returns {@code 0} for {@link SharedMemoryModel}
+     * and whenever the calling thread has no view yet.
+     */
+    default int pendingWriteCount() {
+        return 0;
+    }
 }

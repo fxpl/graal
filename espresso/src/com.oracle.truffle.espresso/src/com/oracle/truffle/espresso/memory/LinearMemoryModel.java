@@ -176,6 +176,12 @@ public final class LinearMemoryModel implements MemoryModel {
         return (LinearLocalView) context.getLanguage().getThreadLocalState().getMemoryView();
     }
 
+    @Override
+    public int pendingWriteCount() {
+        MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
+        return v == null ? 0 : ((LinearLocalView) v).stagingSize();
+    }
+
     private Object read(VersionedLocation loc) {
         LinearLocalView view = currentView();
         Object staged = view.getStaged(loc);

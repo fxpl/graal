@@ -138,13 +138,15 @@ public final class Target_java_lang_Thread {
                     long guestId = threadAccess.getThreadId(self);
                     return String.format("Thread.start0: [HOST:%s, %d], [GUEST:%s, %d]", hostThread.getName(), getThreadId(hostThread), guestName, guestId);
                 });
+                // Seam fires before the publish so it observes the parent's staging about to be handed
+                // to the child (flow-commit detection) and, for the driver, controls order first.
+                context.seam(SyncOp.SPAWN, self);
                 // Sync-as-Share: spawn = the parent publishes its view so the child (which pulls on
                 // start) inherits the parent's pre-spawn writes. Runs on the parent, before the child
                 // starts. No-op/folded under shared; off during JDK bootstrap.
                 if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
                     context.getMemoryModel().onSpawn(self);
                 }
-                context.seam(SyncOp.SPAWN, self);
                 hostThread.start();
             } else {
                 String reason = context.getMultiThreadingDisabledReason();

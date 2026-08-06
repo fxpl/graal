@@ -928,7 +928,13 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
      */
     public void seam(SyncOp op, StaticObject subject) {
         if (getLanguage().isScheduleExploreEnabled() && scheduler.isActive()) {
-            scheduler.atSeam(op, subject);
+            // Feed the scheduler the model's flow datum (writes staged but not yet published by the
+            // calling thread) rather than let it reach into the model — keeps order (scheduler) and
+            // visibility (model) independent (design/schedule-explorer.md §6). 0 under shared.
+            int pendingWrites = (getLanguage().isMemoryModelEnabled() && memoryModel.isActive())
+                            ? memoryModel.pendingWriteCount()
+                            : 0;
+            scheduler.atSeam(op, subject, pendingWrites);
         }
     }
 
@@ -1017,6 +1023,9 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
                 return;
             }
             disposeCalled = true;
+        }
+        if (getLanguage().isScheduleExploreEnabled()) {
+            scheduler.report();
         }
     }
 

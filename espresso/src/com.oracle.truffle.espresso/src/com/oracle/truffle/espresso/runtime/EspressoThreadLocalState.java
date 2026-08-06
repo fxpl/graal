@@ -94,6 +94,12 @@ public class EspressoThreadLocalState {
         return memoryView;
     }
 
+    /** This thread's view if one has been created, else {@code null} — never creates one. For read-only
+     * introspection (the schedule explorer's flow-commit count) that must not allocate a view. */
+    public MemoryView peekMemoryView() {
+        return memoryView;
+    }
+
     public StaticObject getPendingExceptionObject() {
         EspressoException espressoException = getPendingException();
         if (espressoException == null) {

@@ -94,6 +94,10 @@ public final class BranchingView implements MemoryView {
         return staging.isEmpty();
     }
 
+    int stagingSize() {
+        return staging.size();
+    }
+
     void stage(VersionedLocation loc, Object value) {
         staging.put(loc, value);
         VersioningStats.observeStaging(staging.size());

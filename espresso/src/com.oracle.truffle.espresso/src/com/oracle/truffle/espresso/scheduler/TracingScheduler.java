@@ -80,6 +80,17 @@ public final class TracingScheduler implements Scheduler {
     private final AtomicInteger alarms = new AtomicInteger();
     private final boolean oracleOnly;   // ORACLE mode prints alarms only; TRACE mode prints the full trace too
 
+    // The 984 -> 22 -> 6 funnel (design/schedule-explorer.md §3a), counted instead of hand-tallied.
+    //   traced        : every app-thread seam that fired (the raw stream).
+    //   coEnabled      : seams where >= 2 app threads were runnable — a scheduling decision needs a race.
+    //   flow           : release-type seams that actually published (pendingWrites > 0) — a seam that
+    //                    commits nothing cannot change any view, so its order is irrelevant under SaS.
+    //   flowCoEnabled  : the intersection — the seams actually worth driving (the alphabet for the driver).
+    private final AtomicInteger tracedSeams = new AtomicInteger();
+    private final AtomicInteger coEnabledSeams = new AtomicInteger();
+    private final AtomicInteger flowCommits = new AtomicInteger();
+    private final AtomicInteger flowCommitsCoEnabled = new AtomicInteger();
+
     public TracingScheduler(boolean oracleOnly) {
         this.oracleOnly = oracleOnly;
     }
@@ -99,7 +110,7 @@ public final class TracingScheduler implements Scheduler {
 
     @Override
     @TruffleBoundary
-    public void atSeam(SyncOp op, StaticObject subject) {
+    public void atSeam(SyncOp op, StaticObject subject, int pendingWrites) {
         if (!active) {
             return;
         }
@@ -124,9 +135,26 @@ public final class TracingScheduler implements Scheduler {
             default -> { }
         }
         long n = seq.incrementAndGet();
+        // Classify this seam for the funnel. Co-enabled: another app thread is runnable right now, so
+        // the order here could matter. Flow-commit: a release that actually publishes staged writes.
+        boolean coEnabled = runnableApp.get() >= 2;
+        boolean flow = op.isRelease() && pendingWrites > 0;
+        tracedSeams.incrementAndGet();
+        if (coEnabled) {
+            coEnabledSeams.incrementAndGet();
+        }
+        if (flow) {
+            flowCommits.incrementAndGet();
+            if (coEnabled) {
+                flowCommitsCoEnabled.incrementAndGet();
+            }
+        }
         if (!oracleOnly) {
-            out.printf("[seam %4d] live=%d run=%d %-18s %-14s %s%n",
-                            n, liveApp.get(), runnableApp.get(), Thread.currentThread().getName(), op, label(subject));
+            // Tag the drivable seams: FLOW = publishes; * = co-enabled. A FLOW* is one the driver explores.
+            String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
+            out.printf("[seam %4d] live=%d run=%d %-18s %-14s stage=%d %s%s%n",
+                            n, liveApp.get(), runnableApp.get(), Thread.currentThread().getName(), op,
+                            pendingWrites, label(subject), tag);
         }
         // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
         // model-hooked completes a handoff the model does not carry (§6a).
@@ -149,6 +177,21 @@ public final class TracingScheduler implements Scheduler {
             }
             case WAIT_RELEASE -> runnableApp.decrementAndGet();
             default -> { }
+        }
+    }
+
+    @Override
+    @TruffleBoundary
+    public void report() {
+        if (!active) {
+            return;
+        }
+        // The funnel, as measured. flowCoEnabled is the alphabet the driver explores; the ratios show
+        // how much of the raw seam stream is provably irrelevant to reorder under Sync-as-Share.
+        out.printf("[explore] seams: %d traced -> %d co-enabled -> %d flow-commit -> %d flow-commit & co-enabled%n",
+                        tracedSeams.get(), coEnabledSeams.get(), flowCommits.get(), flowCommitsCoEnabled.get());
+        if (oracleOnly && alarms.get() == 0) {
+            out.println("[explore] no missed handoffs detected");
         }
     }
 
