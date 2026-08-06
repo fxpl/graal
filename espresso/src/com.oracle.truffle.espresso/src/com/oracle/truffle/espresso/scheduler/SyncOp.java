@@ -77,13 +77,16 @@ public enum SyncOp {
     /**
      * Whether the memory model has a synchronization hook wired at this op, i.e. whether the model
      * actually propagates flow here. The completeness oracle flags a cross-thread handoff whose acquire
-     * is <em>not</em> model-hooked — the wait/notify shape: a real {@code WAIT_REACQUIRE} that carries
-     * no merge because the internal re-lock bypasses {@code onMonitorEnter}.
+     * is <em>not</em> model-hooked. It was built to catch the wait/notify shape — a {@code WAIT_REACQUIRE}
+     * carrying no merge because the internal re-lock bypassed {@code onMonitorEnter}. That gap is now
+     * closed (sync-as-share {@code a59a0be} brackets {@code JVM_MonitorWait} with
+     * {@code onMonitorExit}/{@code onMonitorEnter}), so the wait seams are hooked and the oracle is
+     * silent on them — it remains as a regression guard for any future acquire op left un-hooked.
      */
     public boolean isModelHooked() {
         return switch (this) {
-            case MONITOR_ENTER, MONITOR_EXIT, THREAD_START, THREAD_END, SPAWN -> true;
-            default -> false;   // WAIT_*, NOTIFY*, PARK, UNPARK, SLEEP: no model hook
+            case MONITOR_ENTER, MONITOR_EXIT, WAIT_RELEASE, WAIT_REACQUIRE, THREAD_START, THREAD_END, SPAWN -> true;
+            default -> false;   // NOTIFY*, PARK, UNPARK, SLEEP: no model hook
         };
     }
 }
