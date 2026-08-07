@@ -110,6 +110,8 @@ import com.oracle.truffle.espresso.memory.LinearMemoryModel;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.SharedMemoryModel;
 import com.oracle.truffle.espresso.scheduler.NullScheduler;
+import com.oracle.truffle.espresso.scheduler.RecordingScheduler;
+import com.oracle.truffle.espresso.scheduler.ReplayScheduler;
 import com.oracle.truffle.espresso.scheduler.Scheduler;
 import com.oracle.truffle.espresso.scheduler.SyncOp;
 import com.oracle.truffle.espresso.scheduler.TracingScheduler;
@@ -467,12 +469,21 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
             }
 
             // Schedule explorer (independent of the memory model). Observes/controls the order threads
-            // pass through synchronization seams; folds away under OFF.
-            this.scheduler = switch (getLanguage().getScheduleExploreMode()) {
-                case OFF -> NullScheduler.INSTANCE;
-                case TRACE -> new TracingScheduler(false);
-                case ORACLE -> new TracingScheduler(true);
-            };
+            // pass through synchronization seams; folds away under OFF. Driving (record/replay) is a
+            // distinct axis and takes precedence over observation when both are set.
+            if (getLanguage().isScheduleDriveEnabled()) {
+                this.scheduler = switch (getLanguage().getScheduleDriveMode()) {
+                    case RECORD -> new RecordingScheduler(getLanguage().getScheduleFile());
+                    case REPLAY -> new ReplayScheduler(getLanguage().getScheduleFile());
+                    case OFF -> NullScheduler.INSTANCE;   // unreachable (isScheduleDriveEnabled)
+                };
+            } else {
+                this.scheduler = switch (getLanguage().getScheduleExploreMode()) {
+                    case OFF -> NullScheduler.INSTANCE;
+                    case TRACE -> new TracingScheduler(false);
+                    case ORACLE -> new TracingScheduler(true);
+                };
+            }
 
             nativeAccess = spawnNativeAccess();
             if (getLanguage().useEspressoLibs()) {
@@ -927,7 +938,7 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
      * GuestRunnable.
      */
     public void seam(SyncOp op, StaticObject subject) {
-        if (getLanguage().isScheduleExploreEnabled() && scheduler.isActive()) {
+        if ((getLanguage().isScheduleExploreEnabled() || getLanguage().isScheduleDriveEnabled()) && scheduler.isActive()) {
             // Feed the scheduler the model's flow datum (writes staged but not yet published by the
             // calling thread) rather than let it reach into the model — keeps order (scheduler) and
             // visibility (model) independent (design/schedule-explorer.md §6). 0 under shared.
@@ -1024,7 +1035,7 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
             }
             disposeCalled = true;
         }
-        if (getLanguage().isScheduleExploreEnabled()) {
+        if (getLanguage().isScheduleExploreEnabled() || getLanguage().isScheduleDriveEnabled()) {
             scheduler.report();
         }
     }

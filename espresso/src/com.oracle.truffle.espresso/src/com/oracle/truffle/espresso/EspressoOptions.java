@@ -352,6 +352,42 @@ public final class EspressoOptions {
                     usageSyntax = "off|trace|oracle") //
     public static final OptionKey<ScheduleExploreMode> ScheduleExplore = new OptionKey<>(ScheduleExploreMode.OFF, SCHEDULE_EXPLORE_OPTION_TYPE);
 
+    /**
+     * Schedule <em>drive</em> mode — the control axis, distinct from {@link #ScheduleExplore} (which
+     * only observes). {@code RECORD} logs the order threads pass through the meaningful synchronization
+     * seams to {@link #ScheduleFile}; {@code REPLAY} forces that recorded order on a later run. This is
+     * design/schedule-explorer.md §5.4 mode 2: threads run concurrently between seams, the recorded
+     * total seam order makes replay deterministic under isolation.
+     */
+    public enum ScheduleDriveMode {
+        OFF,
+        RECORD,
+        REPLAY
+    }
+
+    private static final OptionType<ScheduleDriveMode> SCHEDULE_DRIVE_OPTION_TYPE = new OptionType<>("ScheduleDrive", new Function<String, ScheduleDriveMode>() {
+        @Override
+        public ScheduleDriveMode apply(String s) {
+            try {
+                return ScheduleDriveMode.valueOf(s.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("--java.ScheduleDrive: mode can be 'off', 'record' or 'replay'.");
+            }
+        }
+    });
+
+    @Option(help = "Schedule drive mode (control, distinct from ScheduleExplore's observation): 'off'; 'record' (log the order threads pass the meaningful seams to ScheduleFile); or 'replay' (force the order recorded in ScheduleFile). Requires ScheduleFile. See design/schedule-explorer.md §5.4.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "off|record|replay") //
+    public static final OptionKey<ScheduleDriveMode> ScheduleDrive = new OptionKey<>(ScheduleDriveMode.OFF, SCHEDULE_DRIVE_OPTION_TYPE);
+
+    @Option(help = "Path to the schedule file read by ScheduleDrive=replay and written by ScheduleDrive=record. Empty = disabled.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "<path>") //
+    public static final OptionKey<String> ScheduleFile = new OptionKey<>("");
+
     @Option(help = "Applies to: linear and branching. If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for branching, or the global-history timeline for linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. Empty = disabled.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //

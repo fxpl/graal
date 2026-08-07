@@ -167,6 +167,9 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     @CompilationFinal private boolean memoryModelEnabled;
     @CompilationFinal private EspressoOptions.ScheduleExploreMode scheduleExploreMode;
     @CompilationFinal private boolean scheduleExploreEnabled;
+    @CompilationFinal private EspressoOptions.ScheduleDriveMode scheduleDriveMode;
+    @CompilationFinal private String scheduleFile;
+    @CompilationFinal private boolean scheduleDriveEnabled;
     // endregion Options
 
     // region Allocation
@@ -276,6 +279,9 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         memoryModelEnabled = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
         scheduleExploreMode = env.getOptions().get(EspressoOptions.ScheduleExplore);
         scheduleExploreEnabled = scheduleExploreMode != EspressoOptions.ScheduleExploreMode.OFF;
+        scheduleDriveMode = env.getOptions().get(EspressoOptions.ScheduleDrive);
+        scheduleFile = env.getOptions().get(EspressoOptions.ScheduleFile);
+        scheduleDriveEnabled = scheduleDriveMode != EspressoOptions.ScheduleDriveMode.OFF;
 
         useTRegex = env.getOptions().get(EspressoOptions.UseTRegex);
         if (useTRegex && !env.getInternalLanguages().containsKey("regex")) {
@@ -445,6 +451,8 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelCollapse) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelCollapseEvery) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleExplore) &&
+                        isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleDrive) &&
+                        isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleFile) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.LivenessAnalysis) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.LivenessAnalysisMinimumLocals) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.EnablePreview) &&
@@ -697,6 +705,23 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
      */
     public boolean isScheduleExploreEnabled() {
         return scheduleExploreEnabled;
+    }
+
+    public EspressoOptions.ScheduleDriveMode getScheduleDriveMode() {
+        return scheduleDriveMode;
+    }
+
+    public String getScheduleFile() {
+        return scheduleFile;
+    }
+
+    /**
+     * Whether schedule driving (record/replay) is selected. Reads as a partial-evaluation constant, so
+     * the seam control folds away on the hot path when {@code OFF} is selected. When enabled, the seam
+     * sites deliver to the driver just as they do for exploration.
+     */
+    public boolean isScheduleDriveEnabled() {
+        return scheduleDriveEnabled;
     }
 
     public EspressoOptions.LivenessAnalysisMode getLivenessAnalysisMode() {
