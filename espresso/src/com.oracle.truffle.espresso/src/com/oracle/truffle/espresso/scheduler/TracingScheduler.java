@@ -205,8 +205,8 @@ public final class TracingScheduler implements Scheduler {
         // synchronizing and how often.
         if (mode == Mode.TRACE) {
             String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
-            out.printf(java.util.Locale.ROOT, "[seam %4d] t+%8.1fms live=%d run=%d %-18s %-14s stage=%d %-28s %s%s%n",
-                            n, millis(), liveApp.get(), runnableApp.get(), me, op, pendingWrites,
+            out.printf(java.util.Locale.ROOT, "[seam %4d] t+%8.1fms %-12s %-14s stage=%d (live=%d run=%d) %-28s %s%s%n",
+                            n, millis(), me, op, pendingWrites, liveApp.get(), runnableApp.get(),
                             label(subject), site(), tag);
         }
         // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
