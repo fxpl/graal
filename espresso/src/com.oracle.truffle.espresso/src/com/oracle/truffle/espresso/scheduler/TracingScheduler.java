@@ -33,7 +33,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.frame.FrameInstance;
+import com.oracle.truffle.api.frame.FrameInstanceVisitor;
+import com.oracle.truffle.espresso.impl.Method;
+import com.oracle.truffle.espresso.nodes.EspressoRootNode;
+import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.vm.VM;
 
 /**
  * Observation-only scheduler; changes no program behaviour. Three outputs, selected by
@@ -105,6 +112,8 @@ public final class TracingScheduler implements Scheduler {
     }
 
     private final Mode mode;
+    private final EspressoContext context;   // for guest-frame provenance (trace/story)
+    private volatile long baseNanos;          // set at activation; timestamps are relative to it
 
     // The 984 -> 22 -> 6 funnel (design/schedule-explorer.md §3a), counted instead of hand-tallied.
     //   traced        : every app-thread seam that fired (the raw stream).
@@ -129,8 +138,9 @@ public final class TracingScheduler implements Scheduler {
     private record StoryLine(long seq, String text) {
     }
 
-    public TracingScheduler(Mode mode) {
+    public TracingScheduler(Mode mode, EspressoContext context) {
         this.mode = mode;
+        this.context = context;
     }
 
     @Override
@@ -141,6 +151,7 @@ public final class TracingScheduler implements Scheduler {
     @Override
     public void activate() {
         active = true;
+        baseNanos = System.nanoTime();   // t=0 at the user-code boundary
         appThread.set(Boolean.TRUE);   // runs on the main thread (BeginUserCodeNode)
         liveApp.set(1);                // main
         runnableApp.set(1);
@@ -194,8 +205,9 @@ public final class TracingScheduler implements Scheduler {
         // synchronizing and how often.
         if (mode == Mode.TRACE) {
             String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
-            out.printf("[seam %4d] live=%d run=%d %-18s %-14s stage=%d %s%s%n",
-                            n, liveApp.get(), runnableApp.get(), me, op, pendingWrites, label(subject), tag);
+            out.printf(java.util.Locale.ROOT, "[seam %4d] t+%8.1fms live=%d run=%d %-18s %-14s stage=%d %-28s %s%s%n",
+                            n, millis(), liveApp.get(), runnableApp.get(), me, op, pendingWrites,
+                            label(subject), site(), tag);
         }
         // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
         // model-hooked completes a handoff the model does not carry (§6a). Alarms print in every mode.
@@ -268,7 +280,43 @@ public final class TracingScheduler implements Scheduler {
     }
 
     private void narrate(long seq, String text) {
-        story.add(new StoryLine(seq, text));
+        story.add(new StoryLine(seq, String.format(java.util.Locale.ROOT, "t+%8.1fms  %s", millis(), text)));
+    }
+
+    /** Milliseconds since activation (t=0 at the user-code boundary). Observation only — never fed to
+     * the recorded schedule, so it does not compromise replay determinism (§5.5). */
+    private double millis() {
+        return (System.nanoTime() - baseNanos) / 1_000_000.0;
+    }
+
+    /**
+     * The guest source site performing this seam: the top application frame, as
+     * {@code Class.method:line}. Walks the Truffle stack (we are on the acting thread, synchronously in
+     * the seam), returns the first frame whose method belongs to this context. {@code ?} if none (e.g.
+     * a seam fired from a VM substitution with no guest frame above it).
+     */
+    private String site() {
+        String s = Truffle.getRuntime().iterateFrames(new FrameInstanceVisitor<String>() {
+            @Override
+            public String visitFrame(FrameInstance frame) {
+                EspressoRootNode root = VM.getEspressoRootFromFrame(frame, context);
+                if (root == null) {
+                    return null;
+                }
+                Method m = root.getMethod();
+                String where = m.getDeclaringKlass().getNameAsString() + "." + m.getNameAsString();
+                try {
+                    int line = m.bciToLineNumber(root.readBCI(frame.getFrame(FrameInstance.FrameAccess.READ_ONLY)));
+                    if (line > 0) {
+                        where += ":" + line;
+                    }
+                } catch (RuntimeException ignored) {
+                    // no line table / no bytecode frame (synchronized method wrapper) — method is enough
+                }
+                return where;
+            }
+        });
+        return s == null ? "?" : s;
     }
 
     /**
