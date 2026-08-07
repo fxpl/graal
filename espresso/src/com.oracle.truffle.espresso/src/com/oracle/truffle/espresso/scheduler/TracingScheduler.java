@@ -115,6 +115,11 @@ public final class TracingScheduler implements Scheduler {
     private final EspressoContext context;   // for guest-frame provenance (trace/story)
     private volatile long baseNanos;          // set at activation; timestamps are relative to it
 
+    // Short, stable per-thread labels for the trace: T0 = main, then T1, T2, ... in first-seen order.
+    // A legend line ("# T1 = Thread-1") is printed as each thread first appears.
+    private final Map<String, Integer> threadIds = new ConcurrentHashMap<>();
+    private final AtomicInteger nextThreadId = new AtomicInteger();
+
     // The 984 -> 22 -> 6 funnel (design/schedule-explorer.md §3a), counted instead of hand-tallied.
     //   traced        : every app-thread seam that fired (the raw stream).
     //   coEnabled      : seams where >= 2 app threads were runnable — a scheduling decision needs a race.
@@ -155,6 +160,16 @@ public final class TracingScheduler implements Scheduler {
         appThread.set(Boolean.TRUE);   // runs on the main thread (BeginUserCodeNode)
         liveApp.set(1);                // main
         runnableApp.set(1);
+        if (mode == Mode.TRACE) {
+            out.println("# schedule trace. one line per synchronization seam an application thread passes.");
+            out.println("#   [seam N] Tk  t+<ms>  OP  staged=<w>  live=<L>  run=<r>  <subject>  <guest site>  [FLAGS]");
+            out.println("#   Tk       acting thread (T0 = main; legend below as each first appears)");
+            out.println("#   staged=w w writes sit in Tk's private view (published if OP is a release)");
+            out.println("#   live=L   application threads alive (started, not yet ended)");
+            out.println("#   run=r    application threads runnable right now (r>=2 => this order could matter)");
+            out.println("#   subject  the monitor / thread object;  site  the guest Class.method:line doing it");
+            out.println("#   FLAGS    FLOW = this release publishes staged writes;  * = co-enabled (run>=2)");
+        }
     }
 
     @Override
@@ -205,8 +220,8 @@ public final class TracingScheduler implements Scheduler {
         // synchronizing and how often.
         if (mode == Mode.TRACE) {
             String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
-            out.printf(java.util.Locale.ROOT, "[seam %4d] t+%8.1fms %-12s %-14s stage=%d (live=%d run=%d) %-28s %s%s%n",
-                            n, millis(), me, op, pendingWrites, liveApp.get(), runnableApp.get(),
+            out.printf(java.util.Locale.ROOT, "[seam %4d] %-4s t+%8.1fms %-14s staged=%d live=%d run=%d %-28s %s%s%n",
+                            n, tid(me), millis(), op, pendingWrites, liveApp.get(), runnableApp.get(),
                             label(subject), site(), tag);
         }
         // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
@@ -287,6 +302,23 @@ public final class TracingScheduler implements Scheduler {
      * the recorded schedule, so it does not compromise replay determinism (§5.5). */
     private double millis() {
         return (System.nanoTime() - baseNanos) / 1_000_000.0;
+    }
+
+    /** Short label for a thread: T0 = main, then T1, T2, ... in first-seen order. Prints a legend line
+     * the first time each thread is labelled. */
+    private String tid(String name) {
+        Integer id = threadIds.get(name);
+        if (id == null) {
+            synchronized (threadIds) {
+                id = threadIds.get(name);
+                if (id == null) {
+                    id = nextThreadId.getAndIncrement();
+                    threadIds.put(name, id);
+                    out.printf("# T%d = %s%n", id, name);
+                }
+            }
+        }
+        return "T" + id;
     }
 
     /**
