@@ -36,21 +36,24 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
- * Observation-only scheduler; changes no program behaviour. Two outputs, selected by
- * {@code --java.ScheduleExplore}:
+ * Observation-only scheduler; changes no program behaviour. Three outputs, selected by
+ * {@code --java.ScheduleExplore} (see {@link Mode}):
  *
  * <ul>
- * <li>{@code trace}: a reduced, programmer-legible <em>story</em> of the run — only the events that
- * matter to a reader: each application thread's spawn / start / end, and every cross-thread
- * information handoff (thread A published staged writes at a lock / thread-object, thread B later
- * synchronized on the same subject and received them). The thousands of raw seams that publish
- * nothing or never meet another thread are dropped, because under Sync-as-Share their order cannot
- * change any thread's view. Ends with the funnel counts.</li>
+ * <li>{@code trace}: every seam as it fires — the full firehose. One line per seam with the acting
+ * thread, op, staged-write count, and subject, tagged {@code FLOW} if it publishes and {@code *} if
+ * co-enabled. The view for investigating <em>what</em> synchronizes, <em>who</em> does it, and
+ * <em>when</em>.</li>
+ * <li>{@code story}: a reduced, programmer-legible narrative — only the events that matter to a
+ * reader: each application thread's spawn / start / end, and every cross-thread information handoff
+ * (thread A published staged writes at a lock / thread-object, thread B later synchronized on the same
+ * subject and received them). The thousands of raw seams that publish nothing or never meet another
+ * thread are dropped, because under Sync-as-Share their order cannot change any thread's view.</li>
  * <li>{@code oracle}: the completeness check only (§6a) — flags any cross-thread handoff whose
- * acquire fires no model hook — plus the funnel.</li>
+ * acquire fires no model hook.</li>
  * </ul>
  *
- * <p>See {@code design/schedule-explorer.md} §3a/§6.
+ * All three end with the funnel counts. See {@code design/schedule-explorer.md} §3a/§6.
  */
 public final class TracingScheduler implements Scheduler {
 
@@ -90,7 +93,18 @@ public final class TracingScheduler implements Scheduler {
     // retained (debug tool; not pruned).
     private final Map<StaticObject, String> lastPublisher = new ConcurrentHashMap<>();
     private final AtomicInteger alarms = new AtomicInteger();
-    private final boolean oracleOnly;   // ORACLE mode prints alarms only; TRACE mode prints the full trace too
+
+    /** What this tracer emits. All three also print the funnel and any oracle alarms. */
+    public enum Mode {
+        /** Every seam as it fires — the full firehose (who / when / what / staged count). */
+        TRACE,
+        /** Only the meaningful events: lifecycle + cross-thread handoffs, as an ordered narrative. */
+        STORY,
+        /** Nothing per-seam; only missed-handoff alarms. */
+        ORACLE
+    }
+
+    private final Mode mode;
 
     // The 984 -> 22 -> 6 funnel (design/schedule-explorer.md §3a), counted instead of hand-tallied.
     //   traced        : every app-thread seam that fired (the raw stream).
@@ -115,8 +129,8 @@ public final class TracingScheduler implements Scheduler {
     private record StoryLine(long seq, String text) {
     }
 
-    public TracingScheduler(boolean oracleOnly) {
-        this.oracleOnly = oracleOnly;
+    public TracingScheduler(Mode mode) {
+        this.mode = mode;
     }
 
     @Override
@@ -175,8 +189,16 @@ public final class TracingScheduler implements Scheduler {
         }
         String me = Thread.currentThread().getName();
         boolean hasSubject = subject != null && !StaticObject.isNull(subject);
+        // trace: the full firehose — one line per seam (who / when / op / staged count / subject),
+        // tagged FLOW if it publishes and * if co-enabled. This is the view for investigating what is
+        // synchronizing and how often.
+        if (mode == Mode.TRACE) {
+            String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
+            out.printf("[seam %4d] live=%d run=%d %-18s %-14s stage=%d %s%s%n",
+                            n, liveApp.get(), runnableApp.get(), me, op, pendingWrites, label(subject), tag);
+        }
         // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
-        // model-hooked completes a handoff the model does not carry (§6a).
+        // model-hooked completes a handoff the model does not carry (§6a). Alarms print in every mode.
         if (op.isRelease() && hasSubject) {
             lastPublisher.put(subject, me);
         } else if (op.isAcquire() && hasSubject) {
@@ -186,10 +208,9 @@ public final class TracingScheduler implements Scheduler {
                                 alarms.incrementAndGet(), me, op, label(subject), publisher);
             }
         }
-        // Reduced story (trace mode): record flow publishes per subject and narrate lifecycle +
-        // cross-thread handoffs. Everything else — the thousands of stage=0 / single-thread seams — is
-        // silently dropped.
-        if (!oracleOnly) {
+        // story: record flow publishes per subject and narrate lifecycle + cross-thread handoffs.
+        // Everything else — the thousands of stage=0 / single-thread seams — is silently dropped.
+        if (mode == Mode.STORY) {
             if (flow && hasSubject) {
                 flowPublisher.put(subject, me);
                 flowCount.put(subject, pendingWrites);
@@ -229,8 +250,8 @@ public final class TracingScheduler implements Scheduler {
         if (!active) {
             return;
         }
-        // The reduced story, as one ordered timeline (trace mode).
-        if (!oracleOnly) {
+        // The reduced story, as one ordered timeline.
+        if (mode == Mode.STORY) {
             List<StoryLine> lines = new ArrayList<>(story);
             lines.sort((a, b) -> Long.compare(a.seq(), b.seq()));
             for (StoryLine line : lines) {
@@ -241,7 +262,7 @@ public final class TracingScheduler implements Scheduler {
         // how much of the raw seam stream is provably irrelevant to reorder under Sync-as-Share.
         out.printf("[explore] seams: %d traced -> %d co-enabled -> %d flow-commit -> %d flow-commit & co-enabled%n",
                         tracedSeams.get(), coEnabledSeams.get(), flowCommits.get(), flowCommitsCoEnabled.get());
-        if (oracleOnly && alarms.get() == 0) {
+        if (mode == Mode.ORACLE && alarms.get() == 0) {
             out.println("[explore] no missed handoffs detected");
         }
     }

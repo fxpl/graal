@@ -480,8 +480,9 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
             } else {
                 this.scheduler = switch (getLanguage().getScheduleExploreMode()) {
                     case OFF -> NullScheduler.INSTANCE;
-                    case TRACE -> new TracingScheduler(false);
-                    case ORACLE -> new TracingScheduler(true);
+                    case TRACE -> new TracingScheduler(TracingScheduler.Mode.TRACE);
+                    case STORY -> new TracingScheduler(TracingScheduler.Mode.STORY);
+                    case ORACLE -> new TracingScheduler(TracingScheduler.Mode.ORACLE);
                 };
             }
 
