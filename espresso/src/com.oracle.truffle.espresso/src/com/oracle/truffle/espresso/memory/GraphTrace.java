@@ -62,6 +62,7 @@ public final class GraphTrace {
     private final Queue<Node> nodes = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean armed = new AtomicBoolean();
     private final AtomicLong ffSeq = new AtomicLong();   // unique ids for fast-forward marker nodes
+    private final AtomicLong conflictSeq = new AtomicLong();   // unique ids for (non-committing) conflict nodes
 
     // Per-thread graph head to chain through *after a fast-forward*. On FF, the thread's model head
     // aliases the adopted tip (another cluster), so the thread's next commit/merge would otherwise
@@ -140,6 +141,26 @@ public final class GraphTrace {
         nodes.add(new Node(Long.toString(counter), -1, formatChanges(changes), false, false, false, parents));
     }
 
+    /**
+     * Linear: a <em>failed</em> push/pull — a conflict. Renders a distinct red node off the timeline
+     * that records what the thread had staged and why it lost: it was rebased at {@code base}, but the
+     * offending location {@code loc} had already advanced to an unseen version at {@code competingCounter}
+     * (value {@code competingValue}). Edges point to that competing version and to the thread's base, so
+     * the figure shows the thread branching off {@code base} and colliding with the newer write. Without
+     * this a conflict left no mark on the graph at all.
+     */
+    void conflict(long base, Map<VersionedLocation, Object> staged, VersionedLocation loc, long competingCounter, Object competingValue) {
+        String id = "conflict_" + conflictSeq.incrementAndGet();
+        String label = "CONFLICT\\nstaged: " + formatChanges(staged).replace("\\n", ", ")
+                        + "\\non " + esc(describe(loc)) + ": base=" + base + " vs g@" + competingCounter + "=" + esc(value(competingValue));
+        List<String> parents = new ArrayList<>(2);
+        parents.add(Long.toString(competingCounter));   // the write this push lost to
+        if (base > 0) {
+            parents.add(Long.toString(base));           // where the pushing thread was rebased
+        }
+        nodes.add(new Node(id, -1, label, false, true, false, parents));
+    }
+
     private void render() {
         StringBuilder sb = new StringBuilder();
         sb.append("digraph MemoryGraph {\n  rankdir=BT;\n  node [shape=box];\n");
@@ -191,6 +212,8 @@ public final class GraphTrace {
             label = esc(n.id()) + (n.conflicted() ? " (merge - CONFLICT)" : " (merge)");
         } else if (n.ff()) {
             label = esc(n.label());   // "fast-forward -> X"
+        } else if (n.conflicted()) {
+            label = n.label();   // synthetic conflict node carries its own full descriptive label
         } else {
             label = n.label().isEmpty() ? esc(n.id()) : esc(n.id()) + "\\n" + n.label();
         }
@@ -199,6 +222,8 @@ public final class GraphTrace {
             sb.append(", style=filled, fillcolor=").append(n.conflicted() ? "pink" : "lightgray");
         } else if (n.ff()) {
             sb.append(", style=dashed, color=gray40, fontcolor=gray40");
+        } else if (n.conflicted()) {
+            sb.append(", style=filled, fillcolor=lightpink, color=red");
         }
         sb.append("];\n");
     }

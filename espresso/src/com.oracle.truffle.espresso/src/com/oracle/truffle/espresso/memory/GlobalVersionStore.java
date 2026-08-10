@@ -104,6 +104,7 @@ public final class GlobalVersionStore implements GlobalHistory {
         try {
             VersionedLocation conflict = firstConflict(view);
             if (conflict != null) {
+                traceConflict(view, conflict);
                 return conflict;
             }
             view.advanceBase(counter.get());
@@ -139,6 +140,7 @@ public final class GlobalVersionStore implements GlobalHistory {
         try {
             VersionedLocation conflict = firstConflict(view);
             if (conflict != null) {
+                traceConflict(view, conflict);
                 return conflict;
             }
             long next = counter.incrementAndGet();
@@ -173,6 +175,18 @@ public final class GlobalVersionStore implements GlobalHistory {
             }
         }
         return null;
+    }
+
+    /** Record a conflicting push/pull to the information-flow graph (no-op unless graphing is on). Called
+     * while holding {@code gLock}, so the competing head is stable. */
+    private void traceConflict(LinearLocalView view, VersionedLocation conflict) {
+        if (trace == null) {
+            return;
+        }
+        Version competing = history.get(conflict);   // the unseen newer version that firstConflict found
+        if (competing != null) {
+            trace.conflict(view.base(), view.staging(), conflict, competing.counter(), competing.value());
+        }
     }
 
     /**

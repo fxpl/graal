@@ -23,6 +23,7 @@
 package com.oracle.truffle.espresso.memory;
 
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
@@ -157,5 +158,19 @@ public interface MemoryModel {
      */
     default int pendingWriteCount() {
         return 0;
+    }
+
+    /**
+     * A human label for the sync point a monitor op represents, for conflict diagnostics. A monitor op
+     * whose subject is a {@code Thread} object <em>is</em> a {@code join} — {@link Thread#join} is
+     * implemented as {@code synchronized (thread) { ... wait() ... }}, so it routes through the monitor
+     * hooks — and reporting "join" reflects the programmer's intent rather than "lock acquire/release",
+     * which is only the mechanism. Any other monitor is an ordinary lock.
+     */
+    static String monitorSyncLabel(EspressoContext context, StaticObject lock, boolean acquire) {
+        if (lock != null && !StaticObject.isNull(lock) && context.getMeta().java_lang_Thread.isAssignableFrom(lock.getKlass())) {
+            return "join";
+        }
+        return acquire ? "lock acquire" : "lock release";
     }
 }

@@ -241,7 +241,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         VersionedLocation conflict = view.merge(state.commit, state.clock);
         publish(state, view);
         VersionedLocation joinConflict = mergeTerminal(lock, view);
-        handleConflict(conflict != null ? conflict : joinConflict, view);
+        handleConflict(conflict != null ? conflict : joinConflict, view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
     @Override
@@ -253,7 +253,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         publish(lockState(lock), view);
-        handleConflict(mergeTerminal(lock, view), view);
+        handleConflict(mergeTerminal(lock, view), view, MemoryModel.monitorSyncLabel(context, lock, false));
     }
 
     /** Publish the view's current tip and frontier clock to a lock state (clock shared copy-on-write). */
@@ -289,7 +289,7 @@ public final class BranchingMemoryModel implements MemoryModel {
                     c = v.merge(t.commit, t.clock);
                 }
             }
-            handleConflict(c, v);
+            handleConflict(c, v, "class init");
             return StaticObject.NULL;
         }
         BranchingView view = currentView();
@@ -303,7 +303,7 @@ public final class BranchingMemoryModel implements MemoryModel {
             }
             value = field.get(holder, true);   // forceVolatile; value is un-versioned, in the real heap
         }
-        handleConflict(conflict, view);
+        handleConflict(conflict, view, "volatile read");
         return value;
     }
 
@@ -327,7 +327,7 @@ public final class BranchingMemoryModel implements MemoryModel {
                     publish(t, v);
                 }
             }
-            handleConflict(c, v);
+            handleConflict(c, v, "class init");
             return;
         }
         BranchingView view = currentView();
@@ -343,10 +343,10 @@ public final class BranchingMemoryModel implements MemoryModel {
                 publish(tip, view);
             }
         }
-        handleConflict(conflict, view);
+        handleConflict(conflict, view, "volatile write");
     }
 
-    private void handleConflict(VersionedLocation conflict, BranchingView view) {
+    private void handleConflict(VersionedLocation conflict, BranchingView view, String at) {
         if (conflict == null) {
             return;
         }
@@ -355,7 +355,8 @@ public final class BranchingMemoryModel implements MemoryModel {
         // thread's final sync. We must NOT throw from inside the monitor op itself: that corrupts the
         // synchronized block's exit machinery. The conflicted merge commit already advanced head, so
         // the branch stays consistent if the conflict is caught and execution continues.
-        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict));
+        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict)
+                        + ", caught at " + at + " in " + context.getVM().topGuestSite());
     }
 
     private static String describe(VersionedLocation loc) {

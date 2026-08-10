@@ -227,7 +227,7 @@ public final class LinearMemoryModel implements MemoryModel {
     @Override
     public void onThreadEnd() {
         LinearLocalView view = currentView();
-        handleConflict(global.push(view), view);
+        handleConflict(global.push(view), view, "thread exit");
         if (collapsing()) {
             // Retire this view before collapsing so the ending thread no longer clamps the threshold.
             liveViews.remove(view);
@@ -240,7 +240,7 @@ public final class LinearMemoryModel implements MemoryModel {
         // Parent publishes its view so the child (which pulls on start) inherits the parent's writes.
         // Linear communicates through the single global g, not per-child, so childThread is unused.
         LinearLocalView view = currentView();
-        handleConflict(global.push(view), view);
+        handleConflict(global.push(view), view, "spawn");
         maybeCollapse();
     }
 
@@ -248,13 +248,13 @@ public final class LinearMemoryModel implements MemoryModel {
     public void onMonitorEnter(StaticObject lock) {
         // Linear communicates through the single global g, not per-lock, so the lock object is unused.
         LinearLocalView view = currentView();
-        handleConflict(global.pull(view), view);
+        handleConflict(global.pull(view), view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
     @Override
     public void onMonitorExit(StaticObject lock) {
         LinearLocalView view = currentView();
-        handleConflict(global.push(view), view);
+        handleConflict(global.push(view), view, MemoryModel.monitorSyncLabel(context, lock, false));
         maybeCollapse();
     }
 
@@ -267,13 +267,13 @@ public final class LinearMemoryModel implements MemoryModel {
         // the read, and every writer's field.set happens-before its push, so g's lock carries the value.
         if (field == null) {   // class-init acquire (init-state volatile read): merge only, no heap value
             LinearLocalView v = currentView();
-            handleConflict(global.pull(v), v);
+            handleConflict(global.pull(v), v, "class init");
             return StaticObject.NULL;
         }
         LinearLocalView view = currentView();
         Object value;
         synchronized (volatileLock(new FieldLocation(holder, field))) {
-            handleConflict(global.pull(view), view);
+            handleConflict(global.pull(view), view, "volatile read");
             value = field.get(holder, true);   // forceVolatile; atomic with the pull (see volatileLocks)
         }
         return value;
@@ -287,21 +287,21 @@ public final class LinearMemoryModel implements MemoryModel {
         // slot; only the ordinary writes published alongside are conflict-checked, by the pull/push.
         if (field == null) {   // class-init release (init-state volatile write): publish staged writes, no heap value
             LinearLocalView v = currentView();
-            handleConflict(global.pull(v), v);
-            handleConflict(global.push(v), v);
+            handleConflict(global.pull(v), v, "class init");
+            handleConflict(global.push(v), v, "class init");
             maybeCollapse();
             return;
         }
         LinearLocalView view = currentView();
         synchronized (volatileLock(new FieldLocation(holder, field))) {
-            handleConflict(global.pull(view), view);
+            handleConflict(global.pull(view), view, "volatile write (acquire)");
             field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
-            handleConflict(global.push(view), view);
+            handleConflict(global.push(view), view, "volatile write (release)");
         }
         maybeCollapse();
     }
 
-    private void handleConflict(VersionedLocation conflict, LinearLocalView view) {
+    private void handleConflict(VersionedLocation conflict, LinearLocalView view, String at) {
         if (conflict == null) {
             return;
         }
@@ -309,7 +309,9 @@ public final class LinearMemoryModel implements MemoryModel {
         // of the bytecode loop, past any just-executed monitorexit), or by GuestRunnable if this was
         // the thread's final push. We must NOT throw from inside the monitor op itself: that corrupts
         // the synchronized block's exit machinery (the implicit exception-path monitorexit re-runs).
-        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict));
+        // `at` names the synchronization point that caught it, plus the guest site, for diagnosis.
+        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict)
+                        + ", caught at " + at + " in " + context.getVM().topGuestSite());
         // Recover the view so it stays consistent if the conflict is caught and execution continues.
         view.clearStaging();
         view.advanceBase(global.currentCounter());
