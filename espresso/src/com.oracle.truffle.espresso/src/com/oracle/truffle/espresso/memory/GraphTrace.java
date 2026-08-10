@@ -169,10 +169,18 @@ public final class GraphTrace {
         } else {
             renderClustered(sb);
         }
-        // Edges (shared): each node to each of its parents.
+        // Edges (shared): each node to each of its parents. A conflict node's edges are drawn
+        // constraint=false (dashed red) so they do NOT influence ranking — this keeps the linear
+        // history a straight vertical spine and lets the failed staging/view float off to the side,
+        // rather than being ranked inline between the versions it points at.
         for (Node n : nodes) {
+            boolean offSpine = n.conflicted() && !n.merge();
             for (String p : n.parents()) {
-                sb.append("  \"").append(n.id()).append("\" -> \"").append(p).append("\";\n");
+                sb.append("  \"").append(n.id()).append("\" -> \"").append(p).append('"');
+                if (offSpine) {
+                    sb.append(" [constraint=false, style=dashed, color=red]");
+                }
+                sb.append(";\n");
             }
         }
         sb.append("}\n");
