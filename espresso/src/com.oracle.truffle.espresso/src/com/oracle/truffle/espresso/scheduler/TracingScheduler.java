@@ -33,14 +33,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.Truffle;
-import com.oracle.truffle.api.frame.FrameInstance;
-import com.oracle.truffle.api.frame.FrameInstanceVisitor;
-import com.oracle.truffle.espresso.impl.Method;
-import com.oracle.truffle.espresso.nodes.EspressoRootNode;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-import com.oracle.truffle.espresso.vm.VM;
 
 /**
  * Observation-only scheduler; changes no program behaviour. Three outputs, selected by
@@ -115,11 +109,6 @@ public final class TracingScheduler implements Scheduler {
     private final EspressoContext context;   // for guest-frame provenance (trace/story)
     private volatile long baseNanos;          // set at activation; timestamps are relative to it
 
-    // Short, stable per-thread labels for the trace: T0 = main, then T1, T2, ... in first-seen order.
-    // A legend line ("# T1 = Thread-1") is printed as each thread first appears.
-    private final Map<String, Integer> threadIds = new ConcurrentHashMap<>();
-    private final AtomicInteger nextThreadId = new AtomicInteger();
-
     // The 984 -> 22 -> 6 funnel (design/schedule-explorer.md §3a), counted instead of hand-tallied.
     //   traced        : every app-thread seam that fired (the raw stream).
     //   coEnabled      : seams where >= 2 app threads were runnable — a scheduling decision needs a race.
@@ -162,9 +151,9 @@ public final class TracingScheduler implements Scheduler {
         runnableApp.set(1);
         if (mode == Mode.TRACE) {
             out.println("# schedule trace. one line per synchronization seam an application thread passes.");
-            out.println("#   [seam N] Tk  t+<ms>  OP  staged=<w>  live=<L>  run=<r>  <subject>  <guest site>  [FLAGS]");
-            out.println("#   Tk       acting thread (T0 = main; legend below as each first appears)");
-            out.println("#   staged=w w writes sit in Tk's private view (published if OP is a release)");
+            out.println("#   [seam N] <thread>  t+<ms>  OP  staged=<w>  live=<L>  run=<r>  <subject>  <guest site>  [FLAGS]");
+            out.println("#   thread   the acting thread (main, Thread-1, ...)");
+            out.println("#   staged=w w writes sit in the thread's private view (published if OP is a release)");
             out.println("#   live=L   application threads alive (started, not yet ended)");
             out.println("#   run=r    application threads runnable right now (r>=2 => this order could matter)");
             out.println("#   subject  the monitor / thread object;  site  the guest Class.method:line doing it");
@@ -220,8 +209,8 @@ public final class TracingScheduler implements Scheduler {
         // synchronizing and how often.
         if (mode == Mode.TRACE) {
             String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
-            out.printf(java.util.Locale.ROOT, "[seam %4d] %-4s t+%8.1fms %-14s staged=%d live=%d run=%d %-28s %s%s%n",
-                            n, tid(me), millis(), op, pendingWrites, liveApp.get(), runnableApp.get(),
+            out.printf(java.util.Locale.ROOT, "[seam %4d] %-12s t+%8.1fms %-14s staged=%d live=%d run=%d %-28s %s%s%n",
+                            n, me, millis(), op, pendingWrites, liveApp.get(), runnableApp.get(),
                             label(subject), site(), tag);
         }
         // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
@@ -304,51 +293,13 @@ public final class TracingScheduler implements Scheduler {
         return (System.nanoTime() - baseNanos) / 1_000_000.0;
     }
 
-    /** Short label for a thread: T0 = main, then T1, T2, ... in first-seen order. Prints a legend line
-     * the first time each thread is labelled. */
-    private String tid(String name) {
-        Integer id = threadIds.get(name);
-        if (id == null) {
-            synchronized (threadIds) {
-                id = threadIds.get(name);
-                if (id == null) {
-                    id = nextThreadId.getAndIncrement();
-                    threadIds.put(name, id);
-                    out.printf("# T%d = %s%n", id, name);
-                }
-            }
-        }
-        return "T" + id;
-    }
-
     /**
      * The guest source site performing this seam: the top application frame, as
-     * {@code Class.method:line}. Walks the Truffle stack (we are on the acting thread, synchronously in
-     * the seam), returns the first frame whose method belongs to this context. {@code ?} if none (e.g.
-     * a seam fired from a VM substitution with no guest frame above it).
+     * {@code Class.method:line}, or {@code ?} if none. Valid because we run synchronously on the acting
+     * thread inside the seam, so its frames are live.
      */
     private String site() {
-        String s = Truffle.getRuntime().iterateFrames(new FrameInstanceVisitor<String>() {
-            @Override
-            public String visitFrame(FrameInstance frame) {
-                EspressoRootNode root = VM.getEspressoRootFromFrame(frame, context);
-                if (root == null) {
-                    return null;
-                }
-                Method m = root.getMethod();
-                String where = m.getDeclaringKlass().getNameAsString() + "." + m.getNameAsString();
-                try {
-                    int line = m.bciToLineNumber(root.readBCI(frame.getFrame(FrameInstance.FrameAccess.READ_ONLY)));
-                    if (line > 0) {
-                        where += ":" + line;
-                    }
-                } catch (RuntimeException ignored) {
-                    // no line table / no bytecode frame (synchronized method wrapper) — method is enough
-                }
-                return where;
-            }
-        });
-        return s == null ? "?" : s;
+        return context.getVM().topGuestSite();
     }
 
     /**
