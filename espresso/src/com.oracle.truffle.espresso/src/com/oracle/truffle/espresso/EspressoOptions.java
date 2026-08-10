@@ -323,72 +323,11 @@ public final class EspressoOptions {
                     usageSyntax = "shared|linear|branching") //
     public static final OptionKey<MemoryModelMode> MemoryModel = new OptionKey<>(MemoryModelMode.SHARED, MEMORY_MODEL_OPTION_TYPE);
 
-    /**
-     * Selects the <em>backing representation</em> for {@code MemoryModel=branching} (ignored
-     * otherwise). Both are the same model — identical accept/reject in every case — and differ only in
-     * performance, analogous to {@link #MemoryModelHistory} for linear. {@code DAG} is the commit-DAG
-     * of information flow (the paper's definitional representation; conflict check walks the other
-     * branch's divergence, O(divergence)). {@code EPOCH} is the DAG-free realisation — per-thread
-     * vector clocks + per-sync-object last-writer epoch tables — whose conflict check is a per-location
-     * lookup, O(working set), removing the contended-lock walk. See epoch-model.md.
-     */
-    public enum BranchingBackingMode {
-        DAG,
-        EPOCH
-    }
-
-    private static final OptionType<BranchingBackingMode> BRANCHING_BACKING_OPTION_TYPE = new OptionType<>("BranchingBacking", new Function<String, BranchingBackingMode>() {
-        @Override
-        public BranchingBackingMode apply(String s) {
-            try {
-                return BranchingBackingMode.valueOf(s.toUpperCase(Locale.ROOT));
-            } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("--java.BranchingBacking: backing can be 'dag' or 'epoch'.");
-            }
-        }
-    });
-
-    @Option(help = "Applies to: branching only. Backing representation: 'dag' (commit-DAG; conflict check walks divergence) or 'epoch' (vector clocks + per-sync-object last-writer epoch tables; conflict check is a per-location lookup). Behaviourally identical; different performance. Ignored under shared/linear.", //
-                    category = OptionCategory.EXPERT, //
-                    stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "dag|epoch") //
-    public static final OptionKey<BranchingBackingMode> BranchingBacking = new OptionKey<>(BranchingBackingMode.DAG, BRANCHING_BACKING_OPTION_TYPE);
-
-    @Option(help = "Applies to: linear, and branching (dag backing). If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for branching/dag, or the global-history timeline for linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. The branching/epoch backing has no DAG and emits nothing. Empty = disabled.", //
+    @Option(help = "Applies to: linear and branching. If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for branching, or the global-history timeline for linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. Empty = disabled.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "<path>") //
     public static final OptionKey<String> MemoryModelGraph = new OptionKey<>("");
-
-    /**
-     * Selects the concurrency strategy for the Linear model's global history {@code g} (ignored under
-     * {@code MemoryModel=shared}). A design-exploration knob: the strategies are behaviourally
-     * equivalent but trade differently under contention (see concurrency-design.md).
-     * {@code RWLOCK} is the read/write-split single lock (pulls + empty pushes concurrent; committing
-     * pushes serialise). {@code WATERMARK} is per-location stripe locks + a commit-order watermark
-     * (disjoint committing pushes run in parallel; only an O(1) retire is serial).
-     */
-    public enum MemoryModelHistoryMode {
-        RWLOCK,
-        WATERMARK
-    }
-
-    private static final OptionType<MemoryModelHistoryMode> MEMORY_MODEL_HISTORY_OPTION_TYPE = new OptionType<>("MemoryModelHistory", new Function<String, MemoryModelHistoryMode>() {
-        @Override
-        public MemoryModelHistoryMode apply(String s) {
-            try {
-                return MemoryModelHistoryMode.valueOf(s.toUpperCase(Locale.ROOT));
-            } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("--java.MemoryModelHistory: strategy can be 'rwlock' or 'watermark'.");
-            }
-        }
-    });
-
-    @Option(help = "Applies to: linear only. Global-history concurrency strategy: 'rwlock' (read/write-split single lock) or 'watermark' (per-location stripe locks + commit-order watermark). A design-exploration knob; behaviourally identical, different performance. Ignored under shared/branching.", //
-                    category = OptionCategory.EXPERT, //
-                    stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "rwlock|watermark") //
-    public static final OptionKey<MemoryModelHistoryMode> MemoryModelHistory = new OptionKey<>(MemoryModelHistoryMode.RWLOCK, MEMORY_MODEL_HISTORY_OPTION_TYPE);
 
     /**
      * History-collapsing (reclamation) policy. <b>Applies to {@code MemoryModel=linear} only</b>

@@ -96,10 +96,8 @@ public final class BranchingMemoryModel implements MemoryModel {
      * <p><b>Unbounded retention (never removed).</b> Grows with total thread count. Weak keys on the
      * {@code Thread} object do not help: the model versions a constructed thread's own fields, so the
      * constructor's {@code lastWriter} pins every {@code Thread} it makes (an ended thread is not
-     * collectable under this model), so the weak key never clears — see the fuller note on
-     * {@link EpochBranchingModel}'s {@code terminalTips}. (This backing stays linear regardless — a
-     * terminal is a shared commit, not a copy — so the retention here is a bounded per-thread constant,
-     * unlike epoch's O(threads²).)
+     * collectable under this model), so the weak key never clears. The retention here is a bounded
+     * per-thread constant — a terminal is a shared commit, not a copy.
      */
     private final Map<StaticObject, Tip> terminalHeads = new ConcurrentHashMap<>();
 

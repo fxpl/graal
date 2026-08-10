@@ -28,15 +28,10 @@ package com.oracle.truffle.espresso.memory;
  * reads/writes stay thread-local (in each thread's {@link LinearLocalView}); only sync actions touch
  * {@code g}, via {@link #pull} and {@link #push}, and ordinary read fall-through via {@link #snapshot}.
  *
- * <p>Implementations are behaviourally equivalent but differ in <em>concurrency strategy</em>, chosen
- * at context creation by {@code --java.MemoryModelHistory} (a design-exploration knob; see
- * concurrency-design.md):
- * <ul>
- *   <li>{@link GlobalVersionStore} — {@code rwlock}: a read/write-split single lock. Pulls and
- *       empty-delta pushes take the read lock (concurrent); committing pushes take the write lock.</li>
- *   <li>{@link WatermarkHistory} — {@code watermark}: per-location stripe locks plus a commit-order
- *       watermark. Disjoint committing pushes run in parallel; only an O(1) retire is serial.</li>
- * </ul>
+ * <p>The implementation is {@link GlobalVersionStore}: a read/write-split single lock over {@code g}.
+ * Pulls and empty-delta pushes take the read lock (concurrent); a committing push takes the write lock.
+ * (This is an interface because the concurrency strategy was a design-exploration axis; the alternative
+ * strategies have been dropped — see the paper's evaluation for the comparison.)
  */
 public interface GlobalHistory {
 

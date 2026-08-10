@@ -29,8 +29,8 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * The {@code rwlock} {@link GlobalHistory} strategy (default; {@code --java.MemoryModelHistory=rwlock}).
- * A monotonic {@code counter} plus a per-location append-only version chain.
+ * The {@link GlobalHistory} implementation: a monotonic {@code counter} plus a per-location
+ * append-only version chain, guarded by a read/write-split lock.
  *
  * <p><b>Concurrency (M2).</b> Unlike the prototype (single-threaded under a model checker), Espresso
  * runs real threads. {@link #pull}/{@link #push} conflict-check and (for a committing push) append,

@@ -39,19 +39,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * shutdown. Enabled by {@code --java.MemoryModelGraph=<path>}.
  *
  * <p><b>Why a stream, not a walk.</b> The obvious alternative — reconstruct the graph from the live
- * in-memory structure at the end — is wrong the moment that structure is compressed or absent: history
- * collapsing ({@code --java.MemoryModelCollapse}) reclaims versions, and the {@code epoch} backing
- * keeps no DAG at all. Recording each node as it is created, into this independent buffer, is correct
+ * in-memory structure at the end — is wrong the moment that structure is compressed: history
+ * collapsing ({@code --java.MemoryModelCollapse}) reclaims versions. Recording each node as it is created, into this independent buffer, is correct
  * regardless: the event is captured before anything can reclaim it, and labels are formatted while the
  * klasses/values are still live. (The buffer grows with history; for the small programs this targets
  * — figures, debugging — that is fine. For very long runs it could stream to disk behind the same
  * {@code commit}/{@code push} calls without changing callers.)
  *
- * <p><b>Two shapes.</b> {@code branching} (dag backing) emits a commit DAG — {@link #commit} write
- * nodes and {@link #merge} merge nodes, clustered per thread, edges to parents (gitmem's
- * {@code revision_graph}). {@code linear} emits the single global-history timeline — {@link #push}
- * nodes in one chain. The {@code epoch} backing has no DAG (its merges have no single source node), so
- * it emits nothing; use the dag backing for graphs (the two are the same model).
+ * <p><b>Two shapes.</b> {@code branching} emits a commit DAG — {@link #commit} write nodes and
+ * {@link #merge} merge nodes, clustered per thread, edges to parents (gitmem's {@code revision_graph}).
+ * {@code linear} emits the single global-history timeline — {@link #push} nodes in one chain.
  *
  * <p>Thread-safe: guest threads emit concurrently into a {@link ConcurrentLinkedQueue}; rendering runs
  * once, single-threaded, at shutdown.

@@ -29,7 +29,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.truffle.espresso.EspressoOptions;
 import com.oracle.truffle.espresso.impl.Field;
-import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 // FieldLocation / ArrayLocation / VersionedLocation are in this package.
@@ -43,8 +42,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * surfaces at the synchronisation point as a guest exception.
  *
  * <p>Scope (M2): instance + static fields, monitor lock/unlock, thread start/end. Arrays, volatiles,
- * and spawn/join are M3. The {@code g} concurrency strategy is selected by
- * {@code --java.MemoryModelHistory} (see {@link GlobalHistory}).
+ * and spawn/join are M3. The single global history {@code g} is a {@link GlobalVersionStore}.
  */
 public final class LinearMemoryModel implements MemoryModel {
 
@@ -79,7 +77,7 @@ public final class LinearMemoryModel implements MemoryModel {
         if (graphTrace != null) {
             graphTrace.arm();
         }
-        this.global = createHistory(context.getLanguage().getMemoryModelHistoryMode(), graphTrace);
+        this.global = new GlobalVersionStore(graphTrace);
         this.collapseMode = context.getLanguage().getMemoryModelCollapseMode();
         this.collapseEvery = Math.max(1, context.getLanguage().getMemoryModelCollapseEvery());
         this.liveViews = collapseMode == EspressoOptions.MemoryModelCollapseMode.OFF ? null : ConcurrentHashMap.newKeySet();
@@ -147,17 +145,6 @@ public final class LinearMemoryModel implements MemoryModel {
             out[i] = bases.get(i);
         }
         return out;
-    }
-
-    private static GlobalHistory createHistory(EspressoOptions.MemoryModelHistoryMode mode, GraphTrace trace) {
-        switch (mode) {
-            case RWLOCK:
-                return new GlobalVersionStore(trace);
-            case WATERMARK:
-                return new WatermarkHistory();   // graph tracing not wired for the watermark strategy
-            default:
-                throw EspressoError.shouldNotReachHere("Unknown memory-model history strategy: " + mode);
-        }
     }
 
     @Override

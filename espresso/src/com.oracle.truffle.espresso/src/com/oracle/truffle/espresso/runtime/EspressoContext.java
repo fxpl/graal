@@ -106,7 +106,6 @@ import com.oracle.truffle.espresso.libs.LibsState;
 import com.oracle.truffle.espresso.libs.libzip.LibZipState;
 import com.oracle.truffle.espresso.libs.libzip.PureJavaLibZipFilter;
 import com.oracle.truffle.espresso.memory.BranchingMemoryModel;
-import com.oracle.truffle.espresso.memory.EpochBranchingModel;
 import com.oracle.truffle.espresso.memory.LinearMemoryModel;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.SharedMemoryModel;
@@ -453,12 +452,7 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
                     this.memoryModel = new LinearMemoryModel(this);
                     break;
                 case BRANCHING:
-                    // Same model, two backings (behaviourally identical, different performance):
-                    // DAG (commit-DAG) or EPOCH (vector clocks + per-sync-object epoch tables).
-                    this.memoryModel = switch (getLanguage().getBranchingBackingMode()) {
-                        case DAG -> new BranchingMemoryModel(this);
-                        case EPOCH -> new EpochBranchingModel(this);
-                    };
+                    this.memoryModel = new BranchingMemoryModel(this);
                     break;
                 default:
                     throw EspressoError.shouldNotReachHere("Unknown memory model: " + getLanguage().getMemoryModelMode());
