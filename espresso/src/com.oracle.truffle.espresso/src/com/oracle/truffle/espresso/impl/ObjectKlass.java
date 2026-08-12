@@ -448,9 +448,44 @@ public final class ObjectKlass extends Klass implements AttributedElement {
             checkErroneousInitialization();
             initState = INITIALIZED;
             assert isInitialized();
+            publishClassInit();
         } finally {
             getInitLock().unlock();
         }
+    }
+
+    // Sync-as-Share: the class-init happens-before (JLS §12.4.2) is init-completion -> first-use. Its
+    // *effect* is a one-way acquire — a volatile read of the init-state — NOT a monitor (a monitor
+    // enter/exit also republishes, which would invent a use<->use edge the JVM never creates and mask
+    // real races). So: a volatile WRITE (release) on the class mirror at <clinit> completion, and a
+    // volatile READ (acquire, no republish) on first use, keyed by the mirror. Application classes only:
+    // JDK class-init HB rides unversioned boot fields, so versioning it is neither needed nor wanted
+    // (it would also route the whole JDK enum-<clinit> storm through here).
+    private boolean classInitVersioned() {
+        return getContext().getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive()
+                        && !StaticObject.isNull(getDefiningClassLoader());
+    }
+
+    /** Release: at {@code <clinit>} completion (holding LC) publish the initializer's static writes to
+     *  the class mirror — the init-state's volatile write. A null field means "no heap value slot". */
+    private void publishClassInit() {
+        if (classInitVersioned()) {
+            getContext().getMemoryModel().onVolatileWrite(mirror(), null, StaticObject.NULL);
+        }
+    }
+
+    /** Acquire: the first use of this class by a thread reads the init-state and merges whatever the
+     *  initializer published — a volatile read (merge only, no republish). Memoised per (thread, class):
+     *  the edge is init->first-use, so it fires once, not on every subsequent access. Called from the
+     *  interpreter's class-first-use bytecodes. */
+    public void classInitAcquire() {
+        if (!classInitVersioned()) {
+            return;
+        }
+        if (!getContext().getLanguage().getThreadLocalState().markClassInitAcquired(mirror())) {
+            return;   // already acquired this class's init on this thread
+        }
+        getContext().getMemoryModel().onVolatileRead(mirror(), null);
     }
 
     /*

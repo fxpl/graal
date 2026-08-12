@@ -65,11 +65,25 @@ public class EspressoThreadLocalState {
     // costs nothing under shared.
     private MemoryView memoryView;
 
+    // Sync-as-Share: application classes whose init this thread has already acquired (JLS §12.4.2 is
+    // init-completion -> FIRST use, so the acquire fires once per class, not on every static access).
+    // Owned by this guest thread, so a plain set is safe. Lazily created (null under shared/off).
+    private java.util.Set<StaticObject> classInitAcquired;
+
     @SuppressWarnings("unused")
     public EspressoThreadLocalState(EspressoContext context, Thread t) {
         typeStack = new ClassRegistry.TypeStack();
         privilegedStack = new VM.PrivilegedStack(context);
         assert ((hostThread = new WeakReference<>(t)) != null);
+    }
+
+    /** Sync-as-Share: record that this thread is using class {@code mirror} for the first time; returns
+     *  {@code true} exactly once per class (so the class-init acquire fires only on the first use). */
+    public boolean markClassInitAcquired(StaticObject mirror) {
+        if (classInitAcquired == null) {
+            classInitAcquired = new java.util.HashSet<>();
+        }
+        return classInitAcquired.add(mirror);
     }
 
     /** This guest thread's Sync-as-Share memory view, created on first use by the active model. */

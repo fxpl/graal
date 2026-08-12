@@ -160,6 +160,15 @@ public final class BranchingMemoryModel implements MemoryModel {
         return volatileTips.computeIfAbsent(key, k -> new LockState());
     }
 
+    // Sync-as-Share: per-class init cell, keyed by the class mirror (the init-state's guest handle).
+    // The class-init edge (JLS §12.4.2) is a volatile on this cell: released at <clinit> completion,
+    // acquired (merge only) on first use.
+    private final Map<StaticObject, LockState> classInitTips = new ConcurrentHashMap<>();
+
+    private LockState classInitTip(StaticObject mirror) {
+        return classInitTips.computeIfAbsent(mirror, k -> new LockState());
+    }
+
     // --- Ordinary field / array access: stage and read on the calling thread's view. ---
 
     @Override
@@ -264,6 +273,19 @@ public final class BranchingMemoryModel implements MemoryModel {
         // so the merge sees empty staging and its conflict check covers the reader's ordinary writes;
         // no publish — a read adds no history. Atomic per field (synchronised on the tip) so value and
         // commit are read together, consistent against a concurrent volatile write to the same field.
+        if (field == null) {   // class-init acquire: merge the class's init tip only — no republish, no heap value
+            BranchingView v = currentView();
+            LockState t = classInitTip(holder);
+            VersionedLocation c = null;
+            synchronized (t) {
+                v.commitStaging();
+                if (t.commit != null) {
+                    c = v.merge(t.commit, t.clock);
+                }
+            }
+            handleConflict(c, v);
+            return StaticObject.NULL;
+        }
         BranchingView view = currentView();
         LockState tip = volatileTip(new FieldLocation(holder, field));
         VersionedLocation conflict = null;
@@ -286,6 +308,22 @@ public final class BranchingMemoryModel implements MemoryModel {
         // thread's head as the field's new commit. The value never enters a commit, so concurrent
         // volatile writes to the same field are not a data race (last writer wins on the slot); only the
         // ordinary writes carried on the commit are conflict-checked, at the merge. Atomic per field.
+        if (field == null) {   // class-init release: merge then publish this thread's tip — no heap value
+            BranchingView v = currentView();
+            LockState t = classInitTip(holder);
+            VersionedLocation c = null;
+            synchronized (t) {
+                v.commitStaging();
+                if (t.commit != null) {
+                    c = v.merge(t.commit, t.clock);
+                }
+                if (c == null) {
+                    publish(t, v);
+                }
+            }
+            handleConflict(c, v);
+            return;
+        }
         BranchingView view = currentView();
         LockState tip = volatileTip(new FieldLocation(holder, field));
         VersionedLocation conflict = null;
