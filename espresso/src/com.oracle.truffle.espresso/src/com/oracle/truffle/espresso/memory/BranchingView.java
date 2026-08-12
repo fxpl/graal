@@ -188,6 +188,9 @@ public final class BranchingView implements MemoryView {
             // the DAG stays a linear chain instead of growing a merge node per acquisition.
             VersioningStats.onMerge(true);
             writesNotIn(otherHead, clock).forEach(lastWriter::put);
+            if (trace != null) {
+                trace.fastForward(threadId, head == null ? null : head.id(), otherHead.id());
+            }
             head = otherHead;
             ownClock().join(otherClock);
             VersioningStats.observeLastWriter(lastWriter.size());

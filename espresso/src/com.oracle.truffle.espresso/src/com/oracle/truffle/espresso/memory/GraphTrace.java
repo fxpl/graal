@@ -30,8 +30,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Records the memory model's information-flow graph as a <em>stream of events</em>, emitted by the
@@ -59,8 +61,16 @@ public final class GraphTrace {
     private final boolean linear;
     private final Queue<Node> nodes = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean armed = new AtomicBoolean();
+    private final AtomicLong ffSeq = new AtomicLong();   // unique ids for fast-forward marker nodes
 
-    private record Node(String id, long cluster, String label, boolean merge, boolean conflicted, List<String> parents) {
+    // Per-thread graph head to chain through *after a fast-forward*. On FF, the thread's model head
+    // aliases the adopted tip (another cluster), so the thread's next commit/merge would otherwise
+    // parent into that foreign tip, scattering its spine. We remember the FF node here and use it as the
+    // parent of the thread's next node, so the spine stays connected: prevHead -> ff -> next. Written and
+    // read only by the owning thread (fastForward/commit/merge all run on that thread's view).
+    private final ConcurrentHashMap<Long, String> pendingFFHead = new ConcurrentHashMap<>();
+
+    private record Node(String id, long cluster, String label, boolean merge, boolean conflicted, boolean ff, List<String> parents) {
     }
 
     public GraphTrace(String path, boolean linear) {
@@ -75,28 +85,59 @@ public final class GraphTrace {
         }
     }
 
-    /** Branching (dag): a write commit {@code thread:counter} with the given single parent (or none). */
+    /** Branching (dag): a write commit {@code thread:counter}. Parent is the thread's prior node — the
+     *  pending FF node if it just fast-forwarded, else the model-supplied {@code parent} (which carries
+     *  fork linkage for a thread's first commit). */
     void commit(long thread, long counter, Timestamp parent, Map<VersionedLocation, Object> changes) {
-        List<String> parents = parent == null ? List.of() : List.of(parent.toString());
-        nodes.add(new Node(thread + ":" + counter, thread, formatChanges(changes), false, false, parents));
+        String p = threadParent(thread, parent);
+        List<String> parents = p == null ? List.of() : List.of(p);
+        nodes.add(new Node(thread + ":" + counter, thread, formatChanges(changes), false, false, false, parents));
     }
 
-    /** Branching (dag): a merge commit {@code thread:counter} with its two parents. */
+    /** Branching (dag): a merge commit {@code thread:counter} with its two parents. {@code mine} is the
+     *  thread's own prior head (or its pending FF node). */
     void merge(long thread, long counter, Timestamp mine, Timestamp other, boolean conflicted) {
+        String m = threadParent(thread, mine);
         List<String> parents = new ArrayList<>(2);
-        if (mine != null) {
-            parents.add(mine.toString());
+        if (m != null) {
+            parents.add(m);
         }
         if (other != null) {
             parents.add(other.toString());
         }
-        nodes.add(new Node(thread + ":" + counter, thread, "", true, conflicted, parents));
+        nodes.add(new Node(thread + ":" + counter, thread, "", true, conflicted, false, parents));
+    }
+
+    /** Branching: a fast-forward — a thread adopts another branch's tip {@code to} with no merge commit
+     *  (git-style FF, when it had no divergent writes). Rendered as a dashed node on the thread's OWN
+     *  spine ({@code prevHead -> ff -> to}) so the adoption is visible and the thread's later commits
+     *  chain through it, instead of the model head silently aliasing the other cluster's tip. */
+    void fastForward(long thread, Timestamp from, Timestamp to) {
+        String mine = threadParent(thread, from);
+        String id = thread + ":ff" + ffSeq.incrementAndGet();
+        List<String> parents = new ArrayList<>(2);
+        if (mine != null) {
+            parents.add(mine);
+        }
+        parents.add(to.toString());
+        nodes.add(new Node(id, thread, "fast-forward → " + to, false, false, true, parents));
+        pendingFFHead.put(thread, id);   // the thread's next node chains through this FF node
+    }
+
+    /** The graph parent to use for {@code thread}'s next node: its pending FF node (consumed) if it just
+     *  fast-forwarded, else the model-supplied head. */
+    private String threadParent(long thread, Timestamp modelHead) {
+        String ff = pendingFFHead.remove(thread);
+        if (ff != null) {
+            return ff;
+        }
+        return modelHead == null ? null : modelHead.toString();
     }
 
     /** Linear: a global-history push at {@code counter}, chained to {@code counter-1}. */
     void push(long counter, Map<VersionedLocation, Object> changes) {
         List<String> parents = counter > 1 ? List.of(Long.toString(counter - 1)) : List.of();
-        nodes.add(new Node(Long.toString(counter), -1, formatChanges(changes), false, false, parents));
+        nodes.add(new Node(Long.toString(counter), -1, formatChanges(changes), false, false, false, parents));
     }
 
     private void render() {
@@ -145,11 +186,19 @@ public final class GraphTrace {
     }
 
     private void emitNode(StringBuilder sb, Node n) {
-        String label = n.merge() ? esc(n.id()) + (n.conflicted() ? " (merge - CONFLICT)" : " (merge)")
-                        : (n.label().isEmpty() ? esc(n.id()) : esc(n.id()) + "\\n" + n.label());
+        String label;
+        if (n.merge()) {
+            label = esc(n.id()) + (n.conflicted() ? " (merge - CONFLICT)" : " (merge)");
+        } else if (n.ff()) {
+            label = esc(n.label());   // "fast-forward -> X"
+        } else {
+            label = n.label().isEmpty() ? esc(n.id()) : esc(n.id()) + "\\n" + n.label();
+        }
         sb.append("    \"").append(n.id()).append("\" [label=\"").append(label).append('"');
         if (n.merge()) {
             sb.append(", style=filled, fillcolor=").append(n.conflicted() ? "pink" : "lightgray");
+        } else if (n.ff()) {
+            sb.append(", style=dashed, color=gray40, fontcolor=gray40");
         }
         sb.append("];\n");
     }
