@@ -95,8 +95,10 @@ public final class TracingScheduler implements Scheduler {
     private final Map<StaticObject, String> lastPublisher = new ConcurrentHashMap<>();
     private final AtomicInteger alarms = new AtomicInteger();
 
-    /** What this tracer emits. All three also print the funnel and any oracle alarms. */
+    /** What this tracer emits. All modes also print the funnel and any oracle alarms. */
     public enum Mode {
+        /** Nothing per-seam — only the closing counts (the funnel + the authored/machinery split). */
+        SUMMARY,
         /** Every seam as it fires — the full firehose (who / when / what / staged count). */
         TRACE,
         /** Only the meaningful events: lifecycle + cross-thread handoffs, as an ordered narrative. */
@@ -119,6 +121,10 @@ public final class TracingScheduler implements Scheduler {
     private final AtomicInteger coEnabledSeams = new AtomicInteger();
     private final AtomicInteger flowCommits = new AtomicInteger();
     private final AtomicInteger flowCommitsCoEnabled = new AtomicInteger();
+    // authored: the programmer wrote this synchronized (the monitor op is in an application-loaded
+    // method). machinery: a boot-loaded library method or pure VM code took the lock (finalizer list,
+    // loader CHM, class-init, System.out, ...) — the programmer never wrote it. Split by frame loader.
+    private final AtomicInteger machinerySeams = new AtomicInteger();
 
     // The reduced story (trace mode). A flow-commit records (publisher, count) per subject; a later
     // cross-thread acquire of that subject consumes it into a "B receives N writes from A" line. Lines
@@ -151,12 +157,14 @@ public final class TracingScheduler implements Scheduler {
         runnableApp.set(1);
         if (mode == Mode.TRACE) {
             out.println("# schedule trace. one line per synchronization seam an application thread passes.");
-            out.println("#   [seam N] <thread>  t+<ms>  OP  staged=<w>  live=<L>  run=<r>  <subject>  <guest site>  [FLAGS]");
+            out.println("#   [seam N] <thread>  t+<ms>  OP  staged=<w>  live=<L>  run=<r>  <app|jvm>  <subject>  <guest site>  [FLAGS]");
             out.println("#   thread   the acting thread (main, Thread-1, ...)");
             out.println("#   staged=w w writes sit in the thread's private view (published if OP is a release)");
             out.println("#   live=L   application threads alive (started, not yet ended)");
             out.println("#   run=r    application threads runnable right now (r>=2 => this order could matter)");
             out.println("#   subject  the monitor / thread object;  site  the guest Class.method:line doing it");
+            out.println("#   app/jvm  app = the programmer wrote this synchronized (app-loaded frame);");
+            out.println("#            jvm = library/VM machinery took the lock (finalizer, loader map, class-init, System.out, ...)");
             out.println("#   FLAGS    FLOW = this release publishes staged writes;  * = co-enabled (run>=2)");
         }
     }
@@ -204,14 +212,23 @@ public final class TracingScheduler implements Scheduler {
         }
         String me = Thread.currentThread().getName();
         boolean hasSubject = subject != null && !StaticObject.isNull(subject);
-        // trace: the full firehose — one line per seam (who / when / op / staged count / subject),
-        // tagged FLOW if it publishes and * if co-enabled. This is the view for investigating what is
-        // synchronizing and how often.
-        if (mode == Mode.TRACE) {
-            String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
-            out.printf(java.util.Locale.ROOT, "[seam %4d] %-12s t+%8.1fms %-14s staged=%d live=%d run=%d %-28s %s%s%n",
-                            n, me, millis(), op, pendingWrites, liveApp.get(), runnableApp.get(),
-                            label(subject), site(), tag);
+        // trace / summary: classify this seam's origin and count the machinery split. authored (app):
+        // the monitor op sits in an application-loaded method — the programmer wrote this synchronized.
+        // jvm: a boot-loaded library method or VM code took the lock (finalizer, loader map, class-init,
+        // System.out, ...) — machinery the programmer never wrote. TRACE also prints the seam line — the
+        // full firehose, tagged FLOW if it publishes and * if co-enabled; SUMMARY prints nothing here and
+        // only reports the totals at the end.
+        if (mode == Mode.TRACE || mode == Mode.SUMMARY) {
+            boolean authored = context.getVM().topGuestFrameIsApplication();
+            if (!authored) {
+                machinerySeams.incrementAndGet();
+            }
+            if (mode == Mode.TRACE) {
+                String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
+                out.printf(java.util.Locale.ROOT, "[seam %4d] %-12s t+%8.1fms %-14s staged=%d live=%d run=%d %-3s %-28s %s%s%n",
+                                n, me, millis(), op, pendingWrites, liveApp.get(), runnableApp.get(),
+                                authored ? "app" : "jvm", label(subject), site(), tag);
+            }
         }
         // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
         // model-hooked completes a handoff the model does not carry (§6a). Alarms print in every mode.
@@ -278,6 +295,11 @@ public final class TracingScheduler implements Scheduler {
         // how much of the raw seam stream is provably irrelevant to reorder under Sync-as-Share.
         out.printf("[explore] seams: %d traced -> %d co-enabled -> %d flow-commit -> %d flow-commit & co-enabled%n",
                         tracedSeams.get(), coEnabledSeams.get(), flowCommits.get(), flowCommitsCoEnabled.get());
+        if (mode == Mode.TRACE || mode == Mode.SUMMARY) {
+            int machinery = machinerySeams.get();
+            out.printf("[explore] origin: %d authored (app code) / %d machinery (jvm/library)%n",
+                            tracedSeams.get() - machinery, machinery);
+        }
         if (mode == Mode.ORACLE && alarms.get() == 0) {
             out.println("[explore] no missed handoffs detected");
         }

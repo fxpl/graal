@@ -331,6 +331,7 @@ public final class EspressoOptions {
      */
     public enum ScheduleExploreMode {
         OFF,
+        SUMMARY,
         TRACE,
         STORY,
         ORACLE
@@ -342,12 +343,12 @@ public final class EspressoOptions {
             try {
                 return ScheduleExploreMode.valueOf(s.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("--java.ScheduleExplore: mode can be 'off', 'trace', 'story' or 'oracle'.");
+                throw new IllegalArgumentException("--java.ScheduleExplore: mode can be 'off', 'summary', 'trace', 'story' or 'oracle'.");
             }
         }
     });
 
-    @Option(help = "Schedule exploration mode (independent of the memory model): 'off'; 'trace' (log every synchronization seam as it fires — the full firehose, for investigating what synchronizes and when); 'story' (a reduced, programmer-legible narrative of only the meaningful events — thread spawn/start/end and cross-thread information handoffs); or 'oracle' (report only missed-seam alarms — cross-thread handoffs whose acquire fires no model hook). All end with the funnel counts.", //
+    @Option(help = "Schedule exploration mode (independent of the memory model): 'off'; 'summary' (like 'trace' but print only the closing counts — how many seams fired and how they split — not the individual seams); 'trace' (log every synchronization seam as it fires — the full firehose, for investigating what synchronizes and when); 'story' (a reduced, programmer-legible narrative of only the meaningful events — thread spawn/start/end and cross-thread information handoffs); or 'oracle' (report only missed-seam alarms — cross-thread handoffs whose acquire fires no model hook). All end with the funnel counts.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "off|trace|story|oracle") //
@@ -438,6 +439,47 @@ public final class EspressoOptions {
                     stability = OptionStability.EXPERIMENTAL, //
                     usageSyntax = "<int>") //
     public static final OptionKey<Integer> MemoryModelCollapseEvery = new OptionKey<>(1000);
+
+    /**
+     * Which monitor operations the model actually communicates through. A monitor enter/exit is
+     * classified by the <em>defining class loader of the top guest frame</em> that performs it: a
+     * non-boot loader is <b>application</b> code (programmer-authored {@code synchronized}); the boot
+     * loader is JVM/library <b>machinery</b> (the finalizer lock, class-loader locks, {@code
+     * PrintStream}, {@code ConcurrentHashMap} bin locks, …), synchronization the program never wrote.
+     * <ul>
+     * <li>{@code ALL} (default): every monitor carries the model's share/pull — the faithful semantics,
+     *     in which machinery locks establish happens-before just like the JVM's do.</li>
+     * <li>{@code APP}: only application-authored monitors communicate; machinery monitors still lock for
+     *     real but perform no model share/pull. An experiment — it shows what the story would look like
+     *     if JVM-internal synchronization did <em>not</em> carry program data between threads.</li>
+     * </ul>
+     * Does not affect thread start/join (the fork/join backbone) or the class-init edge, which are not
+     * monitor operations.
+     */
+    public enum MemoryModelSyncMode {
+        ALL,
+        APP
+    }
+
+    private static final OptionType<MemoryModelSyncMode> MEMORY_MODEL_SYNC_OPTION_TYPE = new OptionType<>("MemoryModelSync", new Function<String, MemoryModelSyncMode>() {
+        @Override
+        public MemoryModelSyncMode apply(String s) {
+            String v = s.toLowerCase(Locale.ROOT);
+            if (v.equals("app+jvm") || v.equals("all")) {
+                return MemoryModelSyncMode.ALL;
+            }
+            if (v.equals("app")) {
+                return MemoryModelSyncMode.APP;
+            }
+            throw new IllegalArgumentException("--java.MemoryModelSync: scope can be 'all' (a.k.a. 'app+jvm') or 'app'.");
+        }
+    });
+
+    @Option(help = "Which monitors the model communicates through: 'all' (a.k.a. 'app+jvm', default — every monitor establishes happens-before, faithful semantics) or 'app' (only programmer-authored synchronized carries model share/pull; JVM/library machinery locks still lock but carry no data). Experiment for seeing the effect of JVM-internal synchronization. Ignored under shared.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "all|app") //
+    public static final OptionKey<MemoryModelSyncMode> MemoryModelSync = new OptionKey<>(MemoryModelSyncMode.ALL, MEMORY_MODEL_SYNC_OPTION_TYPE);
 
     public enum VerifyMode {
         NONE,

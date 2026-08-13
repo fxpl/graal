@@ -396,6 +396,39 @@ public final class InterpreterToVM extends ContextAccessImpl {
 
     // region Monitor enter/exit
 
+    /**
+     * Whether the model should share/pull through the monitor operation now executing. Under the
+     * default {@code MemoryModelSync=all} this is a constant {@code true} (the whole gate folds away).
+     * Under {@code app} the model communicates only through synchronization the program authored:
+     * <ul>
+     * <li>A monitor on a {@code Thread} object is a <b>structural</b> primitive — {@code Thread.join} /
+     *     wait-on-thread, whose terminal-head merge is the fork/join backbone. The programmer invoked it
+     *     on purpose ({@code t.join()}), even though the {@code synchronized} lives in boot code, so it
+     *     always communicates. (This is also what keeps a non-blocking join — the joinee already dead,
+     *     so no wait/reacquire fires — from silently dropping its merge.)</li>
+     * <li>Every other monitor is classified by the defining class loader of the top guest frame: an
+     *     application-loaded frame is the programmer's own {@code synchronized} and communicates; a
+     *     boot-loaded frame is JVM/library <b>machinery</b> (the finalizer lock, class-loader locks,
+     *     {@code PrintStream}, {@code ConcurrentHashMap} bins, …) — it still locks for real but carries
+     *     no model data.</li>
+     * </ul>
+     * {@code wait}/{@code notify} on ordinary user objects merge via the internal wait/reacquire path
+     * ({@code VM.JVM_MonitorWait}), which is not gated here, so they too keep communicating.
+     */
+    private static boolean modelSharesMonitor(EspressoContext context, StaticObject obj) {
+        if (!context.getLanguage().isMemoryModelSyncAppOnly()) {
+            return true;
+        }
+        if (isThreadObject(context, obj)) {
+            return true;
+        }
+        return context.getVM().topGuestFrameIsApplication();
+    }
+
+    private static boolean isThreadObject(EspressoContext context, StaticObject obj) {
+        return obj != null && !StaticObject.isNull(obj) && context.getMeta().java_lang_Thread.isAssignableFrom(obj.getKlass());
+    }
+
     public static void monitorEnter(@JavaType(Object.class) StaticObject obj, Meta meta) {
         meta.getContext().getLanguage().getThreadLocalState().blockContinuationSuspension();
         final EspressoLock lock = obj.getLock(meta.getContext());
@@ -403,7 +436,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         if (!monitorTryLock(lock)) {
             contendedMonitorEnter(obj, meta, lock, context);
         }
-        if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+        if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive() && modelSharesMonitor(context, obj)) {
             // Sync-as-Share: lock = pull. After acquiring, import updates published to g by the previous
             // holder's unlock and conflict-check this thread's staged writes. Folds away under shared;
             // off during JDK bootstrap.
@@ -449,7 +482,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         // Seam fires before the publish so it observes the staging about to be pushed (flow-commit
         // detection) and, for the driver, controls order before the release takes effect.
         meta.getContext().seam(SyncOp.MONITOR_EXIT, obj);
-        if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive()) {
+        if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive() && modelSharesMonitor(meta.getContext(), obj)) {
             // Sync-as-Share: unlock = push. Publish this thread's view to g while still holding the
             // lock (may raise a conflict). Folds away under shared; off during JDK bootstrap.
             meta.getContext().getMemoryModel().onMonitorExit(obj);

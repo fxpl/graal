@@ -162,6 +162,9 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     @CompilationFinal private String memoryModelGraphPath;
     @CompilationFinal private EspressoOptions.MemoryModelCollapseMode memoryModelCollapseMode;
     @CompilationFinal private int memoryModelCollapseEvery;
+    // {@code true} iff MemoryModelSync=app: skip the model's share/pull on machinery (boot-loaded)
+    // monitors. Separate PE-constant so the classification frame-walk is emitted only in that mode.
+    @CompilationFinal private boolean memoryModelSyncAppOnly;
     // {@code true} iff a non-stock memory model is active. Kept as a separate PE-constant so the
     // Sync-as-Share hooks on the hot path fold away entirely under {@code SHARED}.
     @CompilationFinal private boolean memoryModelEnabled;
@@ -276,6 +279,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         memoryModelGraphPath = env.getOptions().get(EspressoOptions.MemoryModelGraph);
         memoryModelCollapseMode = env.getOptions().get(EspressoOptions.MemoryModelCollapse);
         memoryModelCollapseEvery = env.getOptions().get(EspressoOptions.MemoryModelCollapseEvery);
+        memoryModelSyncAppOnly = env.getOptions().get(EspressoOptions.MemoryModelSync) == EspressoOptions.MemoryModelSyncMode.APP;
         memoryModelEnabled = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
         scheduleExploreMode = env.getOptions().get(EspressoOptions.ScheduleExplore);
         scheduleExploreEnabled = scheduleExploreMode != EspressoOptions.ScheduleExploreMode.OFF;
@@ -450,6 +454,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelGraph) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelCollapse) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelCollapseEvery) &&
+                        isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelSync) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleExplore) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleDrive) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleFile) &&
@@ -685,6 +690,16 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
 
     public int getMemoryModelCollapseEvery() {
         return memoryModelCollapseEvery;
+    }
+
+    /**
+     * Whether {@code MemoryModelSync=app}: the model communicates (share/pull) only through
+     * application-authored monitors and skips JVM/library machinery locks. PE-constant so the
+     * machinery-classification frame walk in {@code monitorEnter}/{@code monitorExit} is emitted only
+     * when the experiment is on; under the default {@code ALL} the gate folds to a constant true.
+     */
+    public boolean isMemoryModelSyncAppOnly() {
+        return memoryModelSyncAppOnly;
     }
 
     /**
