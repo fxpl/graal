@@ -337,6 +337,7 @@ import com.oracle.truffle.espresso.impl.Method.MethodVersion;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.memory.MemoryView;
 import com.oracle.truffle.espresso.memory.MemoryModel;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.helper.EspressoReferenceArrayStoreNode;
@@ -1992,12 +1993,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         }
     }
 
-    // Sync-as-Share: scope array interception to accesses made by application (non-boot) code. Arrays
-    // have no declaring class of their own, so we key off the executing method's class.
-    private boolean isVersionedArrayAccess() {
-        return !StaticObject.isNull(getMethod().getDeclaringKlass().getDefiningClassLoader());
-    }
-
     // Sync-as-Share (versioned model): read an array element through the calling thread's view
     // (per-index). Returns the versioned value if the element has one, else the stock frozen-heap read
     // (= version 0), which also bounds-checks. Present values were written at a valid index.
@@ -2065,7 +2060,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         CompilerAsserts.partialEvaluationConstant(loadOpcode);
         int index = popInt(frame, top - 1);
         StaticObject array = nullCheck(popObject(frame, top - 2));
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && isVersionedArrayAccess() && array.isEspressoObject()) {
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && Versioning.versionsArrayAccess(getMethod()) && array.isEspressoObject()) {
             arrayLoadViaModel(frame, top, index, array, loadOpcode);
             return;
         }
@@ -2102,7 +2097,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         int offset = (storeOpcode == LASTORE || storeOpcode == DASTORE) ? 2 : 1;
         int index = popInt(frame, top - 1 - offset);
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && isVersionedArrayAccess() && array.isEspressoObject()) {
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && Versioning.versionsArrayAccess(getMethod()) && array.isEspressoObject()) {
             arrayStoreViaModel(frame, top, index, array, storeOpcode);
             return;
         }
@@ -2847,7 +2842,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         CompilerAsserts.partialEvaluationConstant(field);
         CompilerAsserts.partialEvaluationConstant(mode);
 
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && isVersionedField(field)) {
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && Versioning.versionsField(field)) {
             // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap;
             // scoped to application classes.
             return putFieldViaModel(frame, top, field, statementIndex, mode);
@@ -2962,14 +2957,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
      *   curBCI = bs.next(curBCI);
      * </pre>
      */
-    // Sync-as-Share: only version fields of application (non-boot-loaded) classes. JDK core classes
-    // stay on the stock heap path, so library code, VM substitutions, and daemon threads keep reading
-    // and writing real fields (versioning them causes spurious conflicts and stale reads via native).
-    // `field` is a partial-evaluation constant, so this resolves to a per-site constant.
-    private static boolean isVersionedField(Field field) {
-        return !StaticObject.isNull(field.getDeclaringKlass().getDefiningClassLoader());
-    }
-
     // Sync-as-Share (versioned model): read a field through the calling thread's view. Mirrors the
     // stock getField per-kind switch, but sources each value from the MemoryModel, falling back to the
     // real heap when the location has no versioned value (MemoryModel.ABSENT). Assumes Espresso-object
@@ -3135,7 +3122,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         Method method = getMethod();
         EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
 
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && isVersionedField(field)) {
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && Versioning.versionsField(field)) {
             // Sync-as-Share seam. isMemoryModelEnabled() is the PE-constant, so the whole hook folds
             // away under --java.MemoryModel=shared; isActive() keeps it off during JDK bootstrap;
             // isVersionedField scopes it to application classes.

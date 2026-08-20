@@ -56,6 +56,7 @@ import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
 import com.oracle.truffle.espresso.ffi.NativeAccess;
 import com.oracle.truffle.espresso.ffi.memory.NativeMemory;
 import com.oracle.truffle.espresso.ffi.memory.NativeMemory.MemoryAccessMode;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
 import com.oracle.truffle.espresso.impl.EspressoClassLoadingException;
@@ -405,7 +406,7 @@ public final class Target_sun_misc_Unsafe {
         // class loader), so a field inherited from a boot/JDK superclass is not versioned and normal VM
         // and JDK Unsafe usage is unaffected; the model is also inactive throughout bootstrap.
         if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive() &&
-                        !StaticObject.isNull(field.getDeclaringKlass().getDefiningClassLoader())) {
+                        Versioning.versionsField(field)) {
             throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
                             "Sync-as-Share (--java.MemoryModel=" + meta.getContext().getLanguage().getMemoryModelMode().name().toLowerCase() +
                                             "): reflective/Unsafe access to versioned field " +

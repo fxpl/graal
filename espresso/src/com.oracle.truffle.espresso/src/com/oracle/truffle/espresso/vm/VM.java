@@ -127,6 +127,7 @@ import com.oracle.truffle.espresso.impl.EspressoClassLoadingException;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.impl.ModuleTable;
 import com.oracle.truffle.espresso.impl.ModuleTable.ModuleEntry;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
@@ -3034,8 +3035,8 @@ public final class VM extends NativeEnv {
                 if (top[0] == null) {
                     top[0] = where;
                 }
-                // Application frame = declared by a non-boot class loader (matches isVersionedField).
-                if (!StaticObject.isNull(root.getMethod().getDeclaringKlass().getDefiningClassLoader())) {
+                // Application frame = declared by a non-boot class loader (Versioning's class atom).
+                if (Versioning.isApplicationClass(root.getMethod().getDeclaringKlass())) {
                     return where;   // nearest application frame — stop walking
                 }
                 return null;
@@ -3068,7 +3069,7 @@ public final class VM extends NativeEnv {
                     return null;   // not an espresso frame — keep walking
                 }
                 // First (top) guest frame decides: is the code taking the lock application or boot?
-                return !StaticObject.isNull(root.getMethod().getDeclaringKlass().getDefiningClassLoader());
+                return Versioning.isApplicationClass(root.getMethod().getDeclaringKlass());
             }
         });
         return app != null && app;
