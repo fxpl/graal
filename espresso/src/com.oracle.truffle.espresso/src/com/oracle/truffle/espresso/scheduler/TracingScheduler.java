@@ -121,9 +121,14 @@ public final class TracingScheduler implements Scheduler {
     private final AtomicInteger coEnabledSeams = new AtomicInteger();
     private final AtomicInteger flowCommits = new AtomicInteger();
     private final AtomicInteger flowCommitsCoEnabled = new AtomicInteger();
-    // authored: the programmer wrote this synchronized (the monitor op is in an application-loaded
-    // method). machinery: a boot-loaded library method or pure VM code took the lock (finalizer list,
-    // loader CHM, class-init, System.out, ...) — the programmer never wrote it. Split by frame loader.
+    // The origin split (see classify): what a seam is to the *model*, not merely who owns the top
+    // frame. authored = a synchronized the programmer wrote (app-loaded monitor). structural = the
+    // model's own backbone (spawn/start/end, wait/notify, join) — always communicates in every sync
+    // mode. machinery = a monitor taken by boot library/VM code (finalizer, loader map, PrintStream,
+    // ConcurrentHashMap bins, ...) the program never wrote. The point of splitting structural out:
+    // under MemoryModelSync=authored every FLOW lands on authored or structural, never machinery.
+    private final AtomicInteger authoredSeams = new AtomicInteger();
+    private final AtomicInteger structuralSeams = new AtomicInteger();
     private final AtomicInteger machinerySeams = new AtomicInteger();
 
     // The reduced story (trace mode). A flow-commit records (publisher, count) per subject; a later
@@ -157,14 +162,16 @@ public final class TracingScheduler implements Scheduler {
         runnableApp.set(1);
         if (mode == Mode.TRACE) {
             out.println("# schedule trace. one line per synchronization seam an application thread passes.");
-            out.println("#   [seam N] <thread>  t+<ms>  OP  staged=<w>  live=<L>  run=<r>  <app|jvm>  <subject>  <guest site>  [FLAGS]");
+            out.println("#   [seam N] <thread>  t+<ms>  OP  staged=<w>  live=<L>  run=<r>  <origin>  <subject>  <guest site>  [FLAGS]");
             out.println("#   thread   the acting thread (main, Thread-1, ...)");
             out.println("#   staged=w w writes sit in the thread's private view (published if OP is a release)");
             out.println("#   live=L   application threads alive (started, not yet ended)");
             out.println("#   run=r    application threads runnable right now (r>=2 => this order could matter)");
             out.println("#   subject  the monitor / thread object;  site  the guest Class.method:line doing it");
-            out.println("#   app/jvm  app = the programmer wrote this synchronized (app-loaded frame);");
-            out.println("#            jvm = library/VM machinery took the lock (finalizer, loader map, class-init, System.out, ...)");
+            out.println("#   origin   what the seam is to the model:");
+            out.println("#            aut = authored — a synchronized the programmer wrote (app-loaded frame)");
+            out.println("#            mdl = structural — the model's backbone (spawn/start/end, wait/notify, join); always communicates");
+            out.println("#            jvm = machinery — a lock boot library/VM code took (finalizer, loader map, System.out, ConcurrentHashMap, ...)");
             out.println("#   FLAGS    FLOW = this release publishes staged writes;  * = co-enabled (run>=2)");
         }
     }
@@ -212,22 +219,22 @@ public final class TracingScheduler implements Scheduler {
         }
         String me = Thread.currentThread().getName();
         boolean hasSubject = subject != null && !StaticObject.isNull(subject);
-        // trace / summary: classify this seam's origin and count the machinery split. authored (app):
-        // the monitor op sits in an application-loaded method — the programmer wrote this synchronized.
-        // jvm: a boot-loaded library method or VM code took the lock (finalizer, loader map, class-init,
-        // System.out, ...) — machinery the programmer never wrote. TRACE also prints the seam line — the
-        // full firehose, tagged FLOW if it publishes and * if co-enabled; SUMMARY prints nothing here and
-        // only reports the totals at the end.
+        // trace / summary: classify this seam's origin (authored / structural / machinery — see
+        // classify) and count the split. TRACE also prints the seam line — the full firehose, tagged
+        // FLOW if it publishes and * if co-enabled; SUMMARY prints nothing here and only reports the
+        // totals at the end.
         if (mode == Mode.TRACE || mode == Mode.SUMMARY) {
-            boolean authored = context.getVM().topGuestFrameIsApplication();
-            if (!authored) {
-                machinerySeams.incrementAndGet();
+            Origin origin = classify(op, subject);
+            switch (origin) {
+                case AUTHORED -> authoredSeams.incrementAndGet();
+                case STRUCTURAL -> structuralSeams.incrementAndGet();
+                case MACHINERY -> machinerySeams.incrementAndGet();
             }
             if (mode == Mode.TRACE) {
                 String tag = (flow ? " FLOW" : "") + (coEnabled ? "*" : "");
                 out.printf(java.util.Locale.ROOT, "[seam %4d] %-12s t+%8.1fms %-14s staged=%d live=%d run=%d %-3s %-28s %s%s%n",
                                 n, me, millis(), op, pendingWrites, liveApp.get(), runnableApp.get(),
-                                authored ? "app" : "jvm", label(subject), site(), tag);
+                                originTag(origin), label(subject), site(), tag);
             }
         }
         // Completeness oracle: a release publishes to the subject; a cross-thread acquire that is not
@@ -296,9 +303,8 @@ public final class TracingScheduler implements Scheduler {
         out.printf("[explore] seams: %d traced -> %d co-enabled -> %d flow-commit -> %d flow-commit & co-enabled%n",
                         tracedSeams.get(), coEnabledSeams.get(), flowCommits.get(), flowCommitsCoEnabled.get());
         if (mode == Mode.TRACE || mode == Mode.SUMMARY) {
-            int machinery = machinerySeams.get();
-            out.printf("[explore] origin: %d authored (app code) / %d machinery (jvm/library)%n",
-                            tracedSeams.get() - machinery, machinery);
+            out.printf("[explore] origin: %d authored (your synchronized) / %d structural (spawn/start/end, wait/notify, join) / %d machinery (jvm/library locks)%n",
+                            authoredSeams.get(), structuralSeams.get(), machinerySeams.get());
         }
         if (mode == Mode.ORACLE && alarms.get() == 0) {
             out.println("[explore] no missed handoffs detected");
@@ -354,6 +360,52 @@ public final class TracingScheduler implements Scheduler {
 
     private static boolean isThread(StaticObject subject) {
         return subject.getKlass().getType().toString().endsWith("Thread;");
+    }
+
+    /** What a seam is to the model, not merely who owns the top frame. See {@link #authoredSeams}. */
+    private enum Origin {
+        AUTHORED,
+        STRUCTURAL,
+        MACHINERY
+    }
+
+    /**
+     * Classify a seam. STRUCTURAL is the model's own synchronization backbone — thread spawn/start/end
+     * and wait/notify (join rides wait-on-thread) — which always communicates in every sync mode. A
+     * plain monitor is AUTHORED when its top guest frame is application code (a {@code synchronized} the
+     * programmer wrote), MACHINERY when boot library/VM code took it; a monitor on a {@code Thread}
+     * object is join's {@code synchronized} method, hence STRUCTURAL rather than machinery. This is the
+     * exact authored-vs-machinery line {@code MemoryModelSync=authored} gates on (structural split out),
+     * so the invariant holds: under {@code authored}, every FLOW is on an AUTHORED or STRUCTURAL seam.
+     */
+    private Origin classify(SyncOp op, StaticObject subject) {
+        switch (op) {
+            case SPAWN, THREAD_START, THREAD_END, WAIT_RELEASE, WAIT_REACQUIRE, NOTIFY, NOTIFY_ALL -> {
+                return Origin.STRUCTURAL;
+            }
+            case MONITOR_ENTER, MONITOR_EXIT -> {
+                if (context.getVM().topGuestFrameIsApplication()) {
+                    return Origin.AUTHORED;
+                }
+                return isThreadObject(subject) ? Origin.STRUCTURAL : Origin.MACHINERY;
+            }
+            default -> {
+                // PARK / UNPARK / SLEEP: not the model's communicating backbone (and never a FLOW).
+                return Origin.MACHINERY;
+            }
+        }
+    }
+
+    private static String originTag(Origin origin) {
+        return switch (origin) {
+            case AUTHORED -> "aut";
+            case STRUCTURAL -> "mdl";
+            case MACHINERY -> "jvm";
+        };
+    }
+
+    private boolean isThreadObject(StaticObject subject) {
+        return subject != null && !StaticObject.isNull(subject) && context.getMeta().java_lang_Thread.isAssignableFrom(subject.getKlass());
     }
 
     /** {@code Ljava/lang/Object;} -> {@code Object@1a2b3c}. */

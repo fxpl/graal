@@ -443,42 +443,44 @@ public final class EspressoOptions {
     /**
      * Which monitor operations the model actually communicates through. A monitor enter/exit is
      * classified by the <em>defining class loader of the top guest frame</em> that performs it: a
-     * non-boot loader is <b>application</b> code (programmer-authored {@code synchronized}); the boot
-     * loader is JVM/library <b>machinery</b> (the finalizer lock, class-loader locks, {@code
-     * PrintStream}, {@code ConcurrentHashMap} bin locks, …), synchronization the program never wrote.
+     * non-boot loader is <b>authored</b> code (programmer-written {@code synchronized}); the boot loader
+     * is JVM/library <b>machinery</b> (the finalizer lock, class-loader locks, {@code PrintStream},
+     * {@code ConcurrentHashMap} bin locks, …), synchronization the program never wrote.
      * <ul>
      * <li>{@code ALL} (default): every monitor carries the model's share/pull — the faithful semantics,
      *     in which machinery locks establish happens-before just like the JVM's do.</li>
-     * <li>{@code APP}: only application-authored monitors communicate; machinery monitors still lock for
-     *     real but perform no model share/pull. An experiment — it shows what the story would look like
-     *     if JVM-internal synchronization did <em>not</em> carry program data between threads.</li>
+     * <li>{@code AUTHORED}: only programmer-authored monitors communicate; machinery monitors still lock
+     *     for real but perform no model share/pull. An experiment — it shows what the story would look
+     *     like if JVM-internal synchronization did <em>not</em> carry program data between threads.</li>
      * </ul>
-     * Does not affect thread start/join (the fork/join backbone) or the class-init edge, which are not
-     * monitor operations.
+     * The <em>structural</em> synchronization the model owns is never gated by this: thread
+     * start/end/join and wait/notify are the fork/join backbone and always communicate (a monitor on a
+     * {@code Thread} object — join's {@code synchronized} — is treated as authored for the same reason).
+     * The class-init edge is likewise unaffected (it is not a monitor operation).
      */
     public enum MemoryModelSyncMode {
         ALL,
-        APP
+        AUTHORED
     }
 
     private static final OptionType<MemoryModelSyncMode> MEMORY_MODEL_SYNC_OPTION_TYPE = new OptionType<>("MemoryModelSync", new Function<String, MemoryModelSyncMode>() {
         @Override
         public MemoryModelSyncMode apply(String s) {
             String v = s.toLowerCase(Locale.ROOT);
-            if (v.equals("app+jvm") || v.equals("all")) {
+            if (v.equals("all") || v.equals("app+jvm")) {
                 return MemoryModelSyncMode.ALL;
             }
-            if (v.equals("app")) {
-                return MemoryModelSyncMode.APP;
+            if (v.equals("authored") || v.equals("app")) {
+                return MemoryModelSyncMode.AUTHORED;
             }
-            throw new IllegalArgumentException("--java.MemoryModelSync: scope can be 'all' (a.k.a. 'app+jvm') or 'app'.");
+            throw new IllegalArgumentException("--java.MemoryModelSync: scope can be 'all' (a.k.a. 'app+jvm') or 'authored' (a.k.a. 'app').");
         }
     });
 
-    @Option(help = "Which monitors the model communicates through: 'all' (a.k.a. 'app+jvm', default — every monitor establishes happens-before, faithful semantics) or 'app' (only programmer-authored synchronized carries model share/pull; JVM/library machinery locks still lock but carry no data). Experiment for seeing the effect of JVM-internal synchronization. Ignored under shared.", //
+    @Option(help = "Which monitors the model communicates through: 'all' (a.k.a. 'app+jvm', default — every monitor establishes happens-before, faithful semantics) or 'authored' (a.k.a. 'app' — only programmer-written synchronized carries model share/pull; JVM/library machinery locks still lock but carry no data). Structural sync (thread start/end/join, wait/notify) always communicates in both. Experiment for seeing the effect of JVM-internal synchronization. Ignored under shared.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "all|app") //
+                    usageSyntax = "all|authored") //
     public static final OptionKey<MemoryModelSyncMode> MemoryModelSync = new OptionKey<>(MemoryModelSyncMode.ALL, MEMORY_MODEL_SYNC_OPTION_TYPE);
 
     public enum VerifyMode {

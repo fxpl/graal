@@ -399,7 +399,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
     /**
      * Whether the model should share/pull through the monitor operation now executing. Under the
      * default {@code MemoryModelSync=all} this is a constant {@code true} (the whole gate folds away).
-     * Under {@code app} the model communicates only through synchronization the program authored:
+     * Under {@code authored} the model communicates only through synchronization the program authored:
      * <ul>
      * <li>A monitor on a {@code Thread} object is a <b>structural</b> primitive — {@code Thread.join} /
      *     wait-on-thread, whose terminal-head merge is the fork/join backbone. The programmer invoked it
@@ -416,7 +416,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
      * ({@code VM.JVM_MonitorWait}), which is not gated here, so they too keep communicating.
      */
     private static boolean modelSharesMonitor(EspressoContext context, StaticObject obj) {
-        if (!context.getLanguage().isMemoryModelSyncAppOnly()) {
+        if (!context.getLanguage().isMemoryModelSyncAuthoredOnly()) {
             return true;
         }
         if (isThreadObject(context, obj)) {
