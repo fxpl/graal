@@ -514,6 +514,16 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
                 getLanguage().tryInitializeJavaVersion(contextJavaVersion);
             }
 
+            // A versioned memory model targets the post-Java17 JDK layout only: object provenance and the
+            // version-aware VM reads assume the Thread.FieldHolder split (JDK 18+). Fail loud on an older
+            // JDK rather than silently mis-handle the pre-17 Thread layout. (Checked here, once the guest
+            // Java version is known.)
+            if (getLanguage().getMemoryModelMode() != EspressoOptions.MemoryModelMode.SHARED && contextJavaVersion.java17OrEarlier()) {
+                throw EspressoError.fatal("Sync-as-Share memory models (--java.MemoryModel=" +
+                                getLanguage().getMemoryModelMode().name().toLowerCase() +
+                                ") require JDK 18 or later (the Thread.FieldHolder layout); this JDK is " + contextJavaVersion + ".");
+            }
+
             if (!getJavaVersion().java21Or25() && getLanguage().useEspressoLibs()) {
                 throw EspressoError.fatal("Unsupported Java version for EspressoLibs. Use Java 21 or 25");
             }

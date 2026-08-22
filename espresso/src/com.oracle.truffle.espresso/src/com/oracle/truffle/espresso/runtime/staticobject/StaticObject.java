@@ -69,6 +69,15 @@ public class StaticObject implements TruffleObject, Cloneable {
 
     private EspressoLock lockOrForeignMarker;
 
+    // Sync-as-Share provenance (design/versioning-provenance.md): true iff this object/array is
+    // application data — created by application code, or reachable via a store into an already-owned
+    // object. It is the discriminator the versioned model keys on (via memory.Versioning), decided at
+    // allocation and propagated on stores; read identically from every frame. Default false: the
+    // pre-existing physical heap, VM/bootstrap allocations, NULL, foreign and mirror objects are all
+    // runtime-owned. Monotonic (only ever set true); a boolean write needs no synchronisation. Only
+    // touched under a versioned model; inert (always false) under --java.MemoryModel=shared.
+    private boolean appOwned;
+
     // region Constructors
     protected StaticObject(Klass klass) {
         this(klass, false);
@@ -175,6 +184,16 @@ public class StaticObject implements TruffleObject, Cloneable {
 
     public final boolean isEspressoObject() {
         return !isForeignObject();
+    }
+
+    /** Sync-as-Share provenance: is this object/array application data? See the {@code appOwned} field. */
+    public final boolean isAppOwned() {
+        return appOwned;
+    }
+
+    /** Mark this object/array as application data (monotonic: set once at allocation or on propagation). */
+    public final void markAppOwned() {
+        appOwned = true;
     }
 
     public final Object rawForeignObject(EspressoLanguage language) {

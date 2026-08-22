@@ -1747,18 +1747,30 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     private StaticObject newReferenceObject(Klass klass) {
         assert !klass.isPrimitive() : "Verifier guarantee";
         GuestAllocator.AllocationChecks.checkCanAllocateNewReference(getMethod().getMeta(), klass, true, this);
-        return getAllocator().createNew((ObjectKlass) klass);
+        return markProvenance(getAllocator().createNew((ObjectKlass) klass));
     }
 
     private StaticObject newPrimitiveArray(byte jvmPrimitiveType, int length) {
         Meta meta = getMethod().getMeta();
         GuestAllocator.AllocationChecks.checkCanAllocateArray(meta, length, this);
-        return getAllocator().createNewPrimitiveArray(meta, jvmPrimitiveType, length);
+        return markProvenance(getAllocator().createNewPrimitiveArray(meta, jvmPrimitiveType, length));
     }
 
     private StaticObject newReferenceArray(Klass componentType, int length) {
         GuestAllocator.AllocationChecks.checkCanAllocateArray(getMethod().getMeta(), length, this);
-        return getAllocator().createNewReferenceArray(componentType, length);
+        return markProvenance(getAllocator().createNewReferenceArray(componentType, length));
+    }
+
+    // Sync-as-Share: stamp a freshly-allocated object/array with application provenance when the method
+    // performing the allocation is application code. The allocating frame IS this node, so the check is
+    // O(1) off getMethod() -- no stack walk. Under --java.MemoryModel=shared isMemoryModelEnabled() is a
+    // PE-constant false, so this folds away entirely. Design: versioning-provenance.md §4.1.
+    private StaticObject markProvenance(StaticObject obj) {
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() &&
+                        Versioning.isApplicationClass(getMethod().getDeclaringKlass())) {
+            obj.markAppOwned();
+        }
+        return obj;
     }
 
     private BaseQuickNode getBaseQuickNode(int curBCI, int top, int statementIndex, BaseQuickNode quickNode) {
@@ -2060,7 +2072,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         CompilerAsserts.partialEvaluationConstant(loadOpcode);
         int index = popInt(frame, top - 1);
         StaticObject array = nullCheck(popObject(frame, top - 2));
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && Versioning.versionsArrayAccess(getMethod()) && array.isEspressoObject()) {
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && array.isEspressoObject() && Versioning.versionsArray(array)) {
             arrayLoadViaModel(frame, top, index, array, loadOpcode);
             return;
         }
@@ -2097,7 +2109,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         int offset = (storeOpcode == LASTORE || storeOpcode == DASTORE) ? 2 : 1;
         int index = popInt(frame, top - 1 - offset);
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && Versioning.versionsArrayAccess(getMethod()) && array.isEspressoObject()) {
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && array.isEspressoObject() && Versioning.versionsArray(array)) {
             arrayStoreViaModel(frame, top, index, array, storeOpcode);
             return;
         }
@@ -2684,7 +2696,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         }
         Klass component = ((ArrayKlass) klass).getComponentType();
         GuestAllocator.AllocationChecks.checkCanAllocateMultiArray(getMethod().getMeta(), component, dimensions, this);
-        StaticObject value = getAllocator().createNewMultiArray(component, dimensions);
+        StaticObject value = markProvenance(getAllocator().createNewMultiArray(component, dimensions));
         putObject(frame, top - allocatedDimensions, value);
         return -allocatedDimensions; // Does not include the created (pushed) array.
     }
@@ -2837,14 +2849,31 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
      *   curBCI = bs.next(curBCI);
      * </pre>
      */
+    // Sync-as-Share: does the versioned model handle this field access? Statics key on the declaring
+    // class (its owner); instance fields key on the RECEIVER's provenance -- peeked non-destructively
+    // from the stack at receiverSlot -- so an app-created instance of a library class is versioned while
+    // the runtime's own instances are not. Foreign or null receivers return false and stay on the stock
+    // path (which handles them / throws NPE). isMemoryModelEnabled() is the PE-constant that folds the
+    // whole thing away under shared. See design/versioning-provenance.md §4.
+    private boolean fieldViaModel(VirtualFrame frame, int receiverSlot, Field field, FieldAccessType mode) {
+        if (!getLanguage().isMemoryModelEnabled() || !getContext().getMemoryModel().isActive()) {
+            return false;
+        }
+        if (mode.isStatic()) {
+            return Versioning.versionsStatic(field);
+        }
+        StaticObject receiver = peekObject(frame, receiverSlot);
+        return !StaticObject.isNull(receiver) && receiver.isEspressoObject() && Versioning.versionsInstance(receiver);
+    }
+
     private int putField(VirtualFrame frame, int top, Field field, int curBCI, int opcode, int statementIndex, FieldAccessType mode) {
         assert opcode == PUTFIELD || opcode == PUTSTATIC;
         CompilerAsserts.partialEvaluationConstant(field);
         CompilerAsserts.partialEvaluationConstant(mode);
 
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && Versioning.versionsField(field)) {
-            // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap;
-            // scoped to application classes.
+        // Instance receiver sits below the value(s): top - slotCount - 1 (slotCount 2 for long/double).
+        if (fieldViaModel(frame, top - field.getKind().getSlotCount() - 1, field, mode)) {
+            // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap.
             return putFieldViaModel(frame, top, field, statementIndex, mode);
         }
 
@@ -3122,10 +3151,9 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         Method method = getMethod();
         EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
 
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && Versioning.versionsField(field)) {
-            // Sync-as-Share seam. isMemoryModelEnabled() is the PE-constant, so the whole hook folds
-            // away under --java.MemoryModel=shared; isActive() keeps it off during JDK bootstrap;
-            // isVersionedField scopes it to application classes.
+        // Instance receiver sits on top of the stack (top - 1); statics have none.
+        if (fieldViaModel(frame, top - 1, field, mode)) {
+            // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap.
             return getFieldViaModel(frame, top, field, statementIndex, mode);
         }
 

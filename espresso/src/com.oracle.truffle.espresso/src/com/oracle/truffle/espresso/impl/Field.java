@@ -65,6 +65,8 @@ import com.oracle.truffle.espresso.jdwp.api.TagConstants;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoException;
+import com.oracle.truffle.espresso.memory.MemoryModel;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.runtime.staticobject.FieldStorageObject;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.shared.meta.FieldAccess;
@@ -414,6 +416,16 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
 
+        // Sync-as-Share: an app-owned receiver's non-volatile reference field is read through the acting
+        // thread's view, so VM/boot reads (e.g. Thread.holder in createJavaThread) see the same value
+        // guest bytecode does, not the stale physical slot. ABSENT ⇒ not view-routed ⇒ raw path below.
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return versioned;
+            }
+        }
+
         if (!getDeclaringKlass().getContext().anyHierarchyChanged()) {
             if (isVolatile() || forceVolatile) {
                 return linkedField.getObjectVolatile(obj);
@@ -456,6 +468,17 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
 
         if (getDeclaringKlass().getContext().anyHierarchyChanged()) {
             checkSetValueValidity(value);
+        }
+        // Sync-as-Share tripwire: the versioned setters aren't wired yet, so assert this raw write isn't
+        // shadowing a staged value (readInstance == ABSENT). Benign VM-only fields (e.g. Thread.eetop)
+        // pass; a raw write over a guest-staged field would trip here, pointing at the site that needs it.
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
         }
         if (isVolatile() || forceVolatile) {
             linkedField.setObjectVolatile(obj, value);
@@ -571,6 +594,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public boolean getBoolean(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share: app-owned receiver reads through the acting thread's view (ABSENT ⇒ raw),
+        // like getObjectHelper. readInstance returns the boxed value for primitive kinds.
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return (Boolean) versioned;
+            }
+        }
         if (isVolatile() || forceVolatile) {
             return linkedField.getBooleanVolatile(obj);
         } else {
@@ -585,6 +616,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public void setBoolean(StaticObject obj, boolean value, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
+        }
         if (isVolatile() || forceVolatile) {
             linkedField.setBooleanVolatile(obj, value);
         } else {
@@ -613,6 +652,12 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public byte getByte(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return (Byte) versioned;
+            }
+        }
         if (isVolatile() || forceVolatile) {
             return linkedField.getByteVolatile(obj);
         } else {
@@ -627,6 +672,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public void setByte(StaticObject obj, byte value, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
+        }
         if (isVolatile() || forceVolatile) {
             linkedField.setByteVolatile(obj, value);
         } else {
@@ -655,6 +708,12 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public char getChar(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return (Character) versioned;
+            }
+        }
         if (isVolatile() || forceVolatile) {
             return linkedField.getCharVolatile(obj);
         } else {
@@ -669,6 +728,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public void setChar(StaticObject obj, char value, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
+        }
         if (isVolatile() || forceVolatile) {
             linkedField.setCharVolatile(obj, value);
         } else {
@@ -697,6 +764,12 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public double getDouble(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return (Double) versioned;
+            }
+        }
         if (isVolatile() || forceVolatile) {
             return linkedField.getDoubleVolatile(obj);
         } else {
@@ -711,6 +784,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public void setDouble(StaticObject obj, double value, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
+        }
         if (isVolatile() || forceVolatile) {
             linkedField.setDoubleVolatile(obj, value);
         } else {
@@ -739,6 +820,12 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public float getFloat(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return (Float) versioned;
+            }
+        }
         if (isVolatile() || forceVolatile) {
             return linkedField.getFloatVolatile(obj);
         } else {
@@ -753,6 +840,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public void setFloat(StaticObject obj, float value, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
+        }
         if (isVolatile() || forceVolatile) {
             linkedField.setFloatVolatile(obj, value);
         } else {
@@ -781,6 +876,12 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public int getInt(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return (Integer) versioned;
+            }
+        }
         if (isVolatile() || forceVolatile) {
             return linkedField.getIntVolatile(obj);
         } else {
@@ -795,6 +896,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public void setInt(StaticObject obj, int value, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
+        }
         if (isVolatile() || forceVolatile) {
             linkedField.setIntVolatile(obj, value);
         } else {
@@ -830,6 +939,12 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return (Long) versioned;
+            }
+        }
         if (isVolatile() || forceVolatile) {
             return linkedField.getLongVolatile(obj);
         } else {
@@ -845,6 +960,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
+        }
         if (isVolatile() || forceVolatile) {
             linkedField.setLongVolatile(obj, value);
         } else {
@@ -881,6 +1004,12 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public short getShort(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (!forceVolatile) {
+            Object versioned = Versioning.readInstance(obj, this);
+            if (versioned != MemoryModel.ABSENT) {
+                return (Short) versioned;
+            }
+        }
         if (isVolatile() || forceVolatile) {
             return linkedField.getShortVolatile(obj);
         } else {
@@ -895,6 +1024,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public void setShort(StaticObject obj, short value, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share: symmetric with the view-aware getters — a write to a versioned location (app-owned
+        // receiver, non-volatile, live model) is always staged in the acting thread's view, never written
+        // to the physical slot, so it stays isolated like a guest putfield through the gate (the heap slot
+        // stays at version 0). Returns false — falling through to the raw write below — only for a
+        // non-versioned location: a non-app-owned receiver, a volatile field, or the shared model.
+        if (!forceVolatile && Versioning.writeInstance(obj, this, value)) {
+            return;
+        }
         if (isVolatile() || forceVolatile) {
             linkedField.setShortVolatile(obj, value);
         } else {

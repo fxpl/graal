@@ -398,15 +398,15 @@ public final class Target_sun_misc_Unsafe {
             return null;
         }
         assert field != null;
-        // Sync-as-Share: under any versioned model, reflective/Unsafe access to a versioned application
-        // field would bypass the calling thread's view and read/write the frozen physical heap
-        // (version 0), silently diverging from the model. Rather than return stale data, fail loudly --
-        // this is undesigned territory (same stance as arrays before they were implemented; see
-        // array-design.md). Scoped exactly like BytecodeNode.isVersionedField (on the field's declaring
-        // class loader), so a field inherited from a boot/JDK superclass is not versioned and normal VM
-        // and JDK Unsafe usage is unaffected; the model is also inactive throughout bootstrap.
-        if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive() &&
-                        Versioning.versionsField(field)) {
+        // Sync-as-Share: under any versioned model, reflective/Unsafe access to a versioned location
+        // would bypass the calling thread's view and read/write the frozen physical heap (version 0),
+        // silently diverging from the model. Rather than return stale data, fail loudly -- undesigned
+        // territory. Same discriminator as the bytecode gates (memory.Versioning): an instance field is
+        // versioned by the HOLDER's provenance, a static by its declaring class. So Unsafe on the
+        // runtime's own objects is unaffected; only app-owned data (or an app static) trips it. Inactive
+        // throughout bootstrap.
+        boolean versioned = field.isStatic() ? Versioning.versionsStatic(field) : Versioning.versionsInstance(holder);
+        if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive() && versioned) {
             throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
                             "Sync-as-Share (--java.MemoryModel=" + meta.getContext().getLanguage().getMemoryModelMode().name().toLowerCase() +
                                             "): reflective/Unsafe access to versioned field " +
