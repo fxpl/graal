@@ -327,7 +327,15 @@ public class StaticObject implements TruffleObject, Cloneable {
      * Start of Array manipulation.
      */
     private Object getArray(EspressoLanguage language) {
-        return language.getArrayProperty().getObject(this);
+        Object physical = language.getArrayProperty().getObject(this);
+        // Sync-as-Share (working-copy realisation): an app-owned array's backing store is resolved to the
+        // acting thread's working copy (cloned lazily on first touch), so bytecode, arraycopy and native
+        // all operate on the same per-thread copy. Non-app-owned arrays fast-path to the physical store.
+        // See design/view-realisation.md.
+        if (physical != null && appOwned) {
+            return language.getThreadLocalState().arrayWorkingCopy(this, physical);
+        }
+        return physical;
     }
 
     /**

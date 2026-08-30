@@ -2072,10 +2072,9 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         CompilerAsserts.partialEvaluationConstant(loadOpcode);
         int index = popInt(frame, top - 1);
         StaticObject array = nullCheck(popObject(frame, top - 2));
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && array.isEspressoObject() && Versioning.versionsArray(array)) {
-            arrayLoadViaModel(frame, top, index, array, loadOpcode);
-            return;
-        }
+        // Sync-as-Share (working-copy realisation): no side-map gate here — array access flows to
+        // InterpreterToVM -> unwrap -> StaticObject.getArray, which resolves an app-owned array to the
+        // acting thread's working copy. See design/view-realisation.md.
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
             EspressoLanguage language = getLanguage();
             // @formatter:off
@@ -2109,10 +2108,8 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         int offset = (storeOpcode == LASTORE || storeOpcode == DASTORE) ? 2 : 1;
         int index = popInt(frame, top - 1 - offset);
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && array.isEspressoObject() && Versioning.versionsArray(array)) {
-            arrayStoreViaModel(frame, top, index, array, storeOpcode);
-            return;
-        }
+        // Sync-as-Share (working-copy realisation): no side-map gate — array store flows to
+        // InterpreterToVM -> unwrap -> StaticObject.getArray -> the acting thread's working copy.
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
             EspressoLanguage language = getLanguage();
             // @formatter:off
