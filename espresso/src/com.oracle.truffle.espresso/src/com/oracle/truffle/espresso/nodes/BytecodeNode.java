@@ -2072,9 +2072,13 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         CompilerAsserts.partialEvaluationConstant(loadOpcode);
         int index = popInt(frame, top - 1);
         StaticObject array = nullCheck(popObject(frame, top - 2));
-        // Sync-as-Share (working-copy realisation): no side-map gate here — array access flows to
-        // InterpreterToVM -> unwrap -> StaticObject.getArray, which resolves an app-owned array to the
-        // acting thread's working copy. See design/view-realisation.md.
+        // Sync-as-Share: a versioned (app-owned) array is staged per element in the model — precise
+        // stage/read via arrayLoadViaModel, so the FastTrack merge/conflict covers arrays. The per-thread
+        // working copy StaticObject.getArray hands out is only for the native/unwrap read path.
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && array.isEspressoObject() && Versioning.versionsArray(array)) {
+            arrayLoadViaModel(frame, top, index, array, loadOpcode);
+            return;
+        }
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
             EspressoLanguage language = getLanguage();
             // @formatter:off
@@ -2108,8 +2112,12 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         int offset = (storeOpcode == LASTORE || storeOpcode == DASTORE) ? 2 : 1;
         int index = popInt(frame, top - 1 - offset);
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
-        // Sync-as-Share (working-copy realisation): no side-map gate — array store flows to
-        // InterpreterToVM -> unwrap -> StaticObject.getArray -> the acting thread's working copy.
+        // Sync-as-Share: versioned array store goes through the model (precise per-element staging), so
+        // merge/conflict covers arrays. getArray's working copy is only for the native/unwrap read path.
+        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && array.isEspressoObject() && Versioning.versionsArray(array)) {
+            arrayStoreViaModel(frame, top, index, array, storeOpcode);
+            return;
+        }
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
             EspressoLanguage language = getLanguage();
             // @formatter:off
