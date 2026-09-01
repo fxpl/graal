@@ -85,6 +85,25 @@ public interface MemoryModel {
     /** As {@link #writeField} but for an array element (per-index). Bounds/ArrayStore checks are the caller's job. */
     void writeArray(StaticObject array, int index, Object value);
 
+    /**
+     * Sync-as-Share (stage-on-access): a host-array projection of an app-owned array as seen through the
+     * acting thread's view — each element is that thread's {@link #readArray staged/committed} value where
+     * it has one, else the physical (version-0) element. Returned by {@link StaticObject#unwrap} for
+     * app-owned arrays so the native / reflection / {@code arraycopy} READ path operates on the thread's
+     * view rather than raw physical. Model-agnostic: {@code readArray} already resolves staged-or-committed
+     * for both linear and branching. Materialised on access; native writes back through it are out of
+     * scope. Boxing is generic (Integer for int[], StaticObject for reference). See design/view-realisation.md.
+     */
+    default Object arrayWorkingCopy(StaticObject array, Object physical) {
+        int n = java.lang.reflect.Array.getLength(physical);
+        Object copy = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), n);
+        for (int i = 0; i < n; i++) {
+            Object v = readArray(array, i);
+            java.lang.reflect.Array.set(copy, i, v == ABSENT ? java.lang.reflect.Array.get(physical, i) : v);
+        }
+        return copy;
+    }
+
     // --- Synchronisation actions (Table 1). May report a conflict. ---
 
     void onThreadStart();

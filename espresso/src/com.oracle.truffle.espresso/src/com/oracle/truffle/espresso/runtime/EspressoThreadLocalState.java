@@ -70,11 +70,6 @@ public class EspressoThreadLocalState {
     // Owned by this guest thread, so a plain set is safe. Lazily created (null under shared/off).
     private java.util.Set<StaticObject> classInitAcquired;
 
-    // Sync-as-Share (working-copy realisation): this thread's private working copies of app-owned array
-    // backing stores, keyed by canonical array identity. Lazily created; only app-owned arrays are ever
-    // cloned, so it costs nothing under shared / for runtime arrays. See design/view-realisation.md.
-    private java.util.Map<StaticObject, Object> arrayWorkingCopies;
-
     @SuppressWarnings("unused")
     public EspressoThreadLocalState(EspressoContext context, Thread t) {
         typeStack = new ClassRegistry.TypeStack();
@@ -103,27 +98,6 @@ public class EspressoThreadLocalState {
      * introspection (the schedule explorer's flow-commit count) that must not allocate a view. */
     public MemoryView peekMemoryView() {
         return memoryView;
-    }
-
-    /**
-     * Sync-as-Share (working-copy realisation): this thread's working copy of an app-owned array's host
-     * backing store, cloned lazily from {@code physical} on first touch and cached by canonical identity,
-     * so a thread always sees one working copy per array. Intended to back {@link StaticObject#unwrap} for
-     * app-owned arrays, so bytecode, {@code arraycopy} and native all operate on the same per-thread copy.
-     * The clone is generic over host array kind (primitive or reference). See design/view-realisation.md.
-     */
-    public Object arrayWorkingCopy(StaticObject canonical, Object physical) {
-        if (arrayWorkingCopies == null) {
-            arrayWorkingCopies = new java.util.IdentityHashMap<>();
-        }
-        Object copy = arrayWorkingCopies.get(canonical);
-        if (copy == null) {
-            int len = java.lang.reflect.Array.getLength(physical);
-            copy = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), len);
-            System.arraycopy(physical, 0, copy, 0, len);
-            arrayWorkingCopies.put(canonical, copy);
-        }
-        return copy;
     }
 
     public StaticObject getPendingExceptionObject() {

@@ -328,12 +328,13 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     private Object getArray(EspressoLanguage language) {
         Object physical = language.getArrayProperty().getObject(this);
-        // Sync-as-Share (working-copy realisation): an app-owned array's backing store is resolved to the
-        // acting thread's working copy (cloned lazily on first touch), so bytecode, arraycopy and native
-        // all operate on the same per-thread copy. Non-app-owned arrays fast-path to the physical store.
-        // See design/view-realisation.md.
+        // Sync-as-Share (stage-on-access): for an app-owned array, unwrap resolves to a host-array
+        // projection of the acting thread's view (staged/committed elements overlaid on physical), so the
+        // native / arraycopy / reflection READ path sees the same data bytecode staged. Bytecode array
+        // access goes through the model directly (the gate), not here. Non-app-owned arrays fast-path to
+        // the physical store. See design/view-realisation.md.
         if (physical != null && appOwned) {
-            return language.getThreadLocalState().arrayWorkingCopy(this, physical);
+            return EspressoContext.get(null).getMemoryModel().arrayWorkingCopy(this, physical);
         }
         return physical;
     }
