@@ -30,6 +30,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+
 /**
  * A guest thread's view in the branching model (the prototype's {@code branching::LocalVersionStore},
  * eager variant): a {@code head} into the commit DAG, a {@code staging} map of uncommitted writes, a
@@ -59,6 +61,15 @@ public final class BranchingView implements MemoryView {
     private boolean clockShared;                           // clock handed to a tip; copy-on-write next mutation
     private Map<VersionedLocation, Object> staging = new HashMap<>();  // reassigned (moved) on commit
     private final Map<VersionedLocation, Commit> lastWriter = new HashMap<>();  // eager committed cache
+    // Sync-as-Share (stage-on-access): per-app-owned-array working copy, materialised on first access and
+    // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging and
+    // cleared at each commit, so it rebuilds from post-commit committed state next epoch.
+    private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
+    // Sync-as-Share (stage-on-access): lazily captured genesis (version-0) field values, so a versioned
+    // read never falls through to the live physical slot more than once. A read cache, not a write set:
+    // never published at a commit, shadowed by any committed value (read consults it only after staging and
+    // lastWriter). The physical genesis is immutable, so entries never go stale.
+    private final Map<VersionedLocation, Object> captured = new HashMap<>();
     private String pendingConflict;
 
     public BranchingView(long threadId, GraphTrace trace) {
@@ -103,18 +114,64 @@ public final class BranchingView implements MemoryView {
         VersioningStats.observeStaging(staging.size());
     }
 
-    /** Staged value, else the committed value (materialised in lastWriter), else ABSENT (read heap). */
+    // --- Sync-as-Share array working copies (stage-on-access) ---
+
+    /** The acting thread's cached working copy of {@code array}, or {@code null} if not yet materialised. */
+    ArrayVersion arrayVersion(StaticObject array) {
+        return arrays.get(array);
+    }
+
+    /** Cache a freshly materialised working copy of {@code array}. */
+    void putArrayVersion(StaticObject array, ArrayVersion av) {
+        arrays.put(array, av);
+    }
+
+    /**
+     * Fold each array working copy's touched indices into per-index {@link ArrayLocation} staging, so the
+     * commit/merge machinery sees exactly the elements this thread wrote. Reads (untouched copies) flush
+     * nothing. Called just before a commit.
+     */
+    void flushArrays() {
+        for (Map.Entry<StaticObject, ArrayVersion> e : arrays.entrySet()) {
+            StaticObject array = e.getKey();
+            ArrayVersion av = e.getValue();
+            for (int i = av.touched.nextSetBit(0); i >= 0; i = av.touched.nextSetBit(i + 1)) {
+                stage(new ArrayLocation(array, i), java.lang.reflect.Array.get(av.host, i));
+            }
+        }
+    }
+
+    /** Drop all working copies; they rebuild from committed state on next access. */
+    void clearArrays() {
+        arrays.clear();
+    }
+
+    /** Staged value, else the committed value (lastWriter), else the captured genesis, else ABSENT. */
     Object read(VersionedLocation loc) {
         Object staged = staging.get(loc);
         if (staged != null) {
             return staged;
         }
         Commit writer = lastWriter.get(loc);
-        return writer != null ? writer.changes().get(loc) : MemoryModel.ABSENT;
+        if (writer != null) {
+            return writer.changes().get(loc);
+        }
+        Object cap = captured.get(loc);
+        return cap != null ? cap : MemoryModel.ABSENT;
+    }
+
+    /** Cache a lazily-captured genesis field value (a read, never published). See {@link #captured}. */
+    void captureRead(VersionedLocation loc, Object value) {
+        captured.put(loc, value);
     }
 
     /** Turn staged writes into a new commit on this thread's branch (no-op if nothing staged). */
     void commitStaging() {
+        // Fold array working-copy writes into per-index staging, then drop the copies (they rebuild from
+        // post-commit committed state next epoch). Done before the empty check so a commit whose only
+        // writes are array writes still lands.
+        flushArrays();
+        clearArrays();
         if (staging.isEmpty()) {
             return;
         }

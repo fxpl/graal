@@ -188,12 +188,35 @@ public final class LinearMemoryModel implements MemoryModel {
         if (staged != null) {
             return staged;
         }
-        // Value visible at this thread's base, or ABSENT (caller reads through to the heap).
-        return global.snapshot(loc, view.base());
+        // Value visible at this thread's base, else the lazily-captured genesis, else ABSENT (caller reads
+        // through to the heap and captures). Committed shadows a capture — the base snapshot is checked first.
+        Object committed = global.snapshot(loc, view.base());
+        if (committed != MemoryModel.ABSENT) {
+            return committed;
+        }
+        Object cap = view.getCaptured(loc);
+        return cap != null ? cap : MemoryModel.ABSENT;
     }
 
     private void write(VersionedLocation loc, Object value) {
         currentView().stage(loc, value);
+    }
+
+    // Push/pull wrappers that fold array working-copy writes into staging first (so the conflict check and
+    // publication see this thread's array writes at per-index granularity), then drop the working copies
+    // (they rebuild from the freshly-observed base on next access). Every sync action goes through these.
+    private VersionedLocation pushG(LinearLocalView view) {
+        view.flushArrays();
+        VersionedLocation conflict = global.push(view);
+        view.clearArrays();
+        return conflict;
+    }
+
+    private VersionedLocation pullG(LinearLocalView view) {
+        view.flushArrays();
+        VersionedLocation conflict = global.pull(view);
+        view.clearArrays();
+        return conflict;
     }
 
     @Override
@@ -207,27 +230,71 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
+    public void captureRead(StaticObject holder, Field field, Object value) {
+        currentView().captureRead(new FieldLocation(holder, field), value);
+    }
+
+    @Override
     public Object readArray(StaticObject array, int index) {
-        return read(new ArrayLocation(array, index));
+        return java.lang.reflect.Array.get(arrayVersionFor(array).host, index);
     }
 
     @Override
     public void writeArray(StaticObject array, int index, Object value) {
-        write(new ArrayLocation(array, index), value);
+        ArrayVersion av = arrayVersionFor(array);
+        java.lang.reflect.Array.set(av.host, index, value);
+        av.touched.set(index);
+    }
+
+    @Override
+    public Object arrayView(StaticObject array) {
+        return arrayVersionFor(array).host;
+    }
+
+    @Override
+    public void markArrayRange(StaticObject array, int destPos, int length) {
+        arrayVersionFor(array).touched.set(destPos, destPos + length);
+    }
+
+    /**
+     * The acting thread's working copy of {@code array}, materialising it on first access: a real host
+     * array of the array's component type, seeded from the physical (version-0) array and overlaid with
+     * this thread's staged-or-committed elements ({@link #read}, i.e. staged else the value visible at the
+     * view's base). Cached on the view and reused until the next push/pull clears it. See {@link
+     * ArrayVersion}.
+     */
+    private ArrayVersion arrayVersionFor(StaticObject array) {
+        LinearLocalView view = currentView();
+        ArrayVersion av = view.arrayVersion(array);
+        if (av == null) {
+            Object physical = context.getLanguage().getArrayProperty().getObject(array);
+            int n = java.lang.reflect.Array.getLength(physical);
+            Object host = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), n);
+            System.arraycopy(physical, 0, host, 0, n);
+            for (int i = 0; i < n; i++) {
+                Object v = read(new ArrayLocation(array, i));
+                if (v != MemoryModel.ABSENT) {
+                    java.lang.reflect.Array.set(host, i, v);
+                }
+            }
+            av = new ArrayVersion(host);
+            view.putArrayVersion(array, av);
+        }
+        return av;
     }
 
     @Override
     public void onThreadStart() {
         // Fresh thread with empty staging: pull can never conflict.
         LinearLocalView view = currentView();
-        VersionedLocation conflict = global.pull(view);
+        VersionedLocation conflict = pullG(view);
         assert conflict == null : "starting thread cannot conflict";
     }
 
     @Override
     public void onThreadEnd() {
         LinearLocalView view = currentView();
-        handleConflict(global.push(view), view, "thread exit");
+        handleConflict(pushG(view), view, "thread exit");
         if (collapsing()) {
             // Retire this view before collapsing so the ending thread no longer clamps the threshold.
             liveViews.remove(view);
@@ -240,7 +307,7 @@ public final class LinearMemoryModel implements MemoryModel {
         // Parent publishes its view so the child (which pulls on start) inherits the parent's writes.
         // Linear communicates through the single global g, not per-child, so childThread is unused.
         LinearLocalView view = currentView();
-        handleConflict(global.push(view), view, "spawn");
+        handleConflict(pushG(view), view, "spawn");
         maybeCollapse();
     }
 
@@ -248,13 +315,13 @@ public final class LinearMemoryModel implements MemoryModel {
     public void onMonitorEnter(StaticObject lock) {
         // Linear communicates through the single global g, not per-lock, so the lock object is unused.
         LinearLocalView view = currentView();
-        handleConflict(global.pull(view), view, MemoryModel.monitorSyncLabel(context, lock, true));
+        handleConflict(pullG(view), view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
     @Override
     public void onMonitorExit(StaticObject lock) {
         LinearLocalView view = currentView();
-        handleConflict(global.push(view), view, MemoryModel.monitorSyncLabel(context, lock, false));
+        handleConflict(pushG(view), view, MemoryModel.monitorSyncLabel(context, lock, false));
         maybeCollapse();
     }
 
@@ -267,13 +334,13 @@ public final class LinearMemoryModel implements MemoryModel {
         // the read, and every writer's field.set happens-before its push, so g's lock carries the value.
         if (field == null) {   // class-init acquire (init-state volatile read): merge only, no heap value
             LinearLocalView v = currentView();
-            handleConflict(global.pull(v), v, "class init");
+            handleConflict(pullG(v), v, "class init");
             return StaticObject.NULL;
         }
         LinearLocalView view = currentView();
         Object value;
         synchronized (volatileLock(new FieldLocation(holder, field))) {
-            handleConflict(global.pull(view), view, "volatile read");
+            handleConflict(pullG(view), view, "volatile read");
             value = field.get(holder, true);   // forceVolatile; atomic with the pull (see volatileLocks)
         }
         return value;
@@ -287,16 +354,16 @@ public final class LinearMemoryModel implements MemoryModel {
         // slot; only the ordinary writes published alongside are conflict-checked, by the pull/push.
         if (field == null) {   // class-init release (init-state volatile write): publish staged writes, no heap value
             LinearLocalView v = currentView();
-            handleConflict(global.pull(v), v, "class init");
-            handleConflict(global.push(v), v, "class init");
+            handleConflict(pullG(v), v, "class init");
+            handleConflict(pushG(v), v, "class init");
             maybeCollapse();
             return;
         }
         LinearLocalView view = currentView();
         synchronized (volatileLock(new FieldLocation(holder, field))) {
-            handleConflict(global.pull(view), view, "volatile write (acquire)");
+            handleConflict(pullG(view), view, "volatile write (acquire)");
             field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
-            handleConflict(global.push(view), view, "volatile write (release)");
+            handleConflict(pushG(view), view, "volatile write (release)");
         }
         maybeCollapse();
     }

@@ -430,7 +430,11 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
             if (isVolatile() || forceVolatile) {
                 return linkedField.getObjectVolatile(obj);
             } else {
-                return linkedField.getObject(obj);
+                // Sync-as-Share (stage-on-access): readInstance was ABSENT; capture this genesis read so a
+                // versioned field never falls through to the live slot again. No-op for a non-versioned field.
+                Object raw = linkedField.getObject(obj);
+                Versioning.captureGenesisRead(obj, this, raw);
+                return raw;
             }
         } else {
             // class hierarchy changes have been made, so enable
@@ -605,7 +609,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (isVolatile() || forceVolatile) {
             return linkedField.getBooleanVolatile(obj);
         } else {
-            return linkedField.getBoolean(obj);
+            boolean raw = linkedField.getBoolean(obj);
+            Versioning.captureGenesisRead(obj, this, raw);
+            return raw;
         }
     }
 
@@ -661,7 +667,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (isVolatile() || forceVolatile) {
             return linkedField.getByteVolatile(obj);
         } else {
-            return linkedField.getByte(obj);
+            byte raw = linkedField.getByte(obj);
+            Versioning.captureGenesisRead(obj, this, raw);
+            return raw;
         }
     }
 
@@ -717,7 +725,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (isVolatile() || forceVolatile) {
             return linkedField.getCharVolatile(obj);
         } else {
-            return linkedField.getChar(obj);
+            char raw = linkedField.getChar(obj);
+            Versioning.captureGenesisRead(obj, this, raw);
+            return raw;
         }
     }
 
@@ -773,7 +783,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (isVolatile() || forceVolatile) {
             return linkedField.getDoubleVolatile(obj);
         } else {
-            return linkedField.getDouble(obj);
+            double raw = linkedField.getDouble(obj);
+            Versioning.captureGenesisRead(obj, this, raw);
+            return raw;
         }
     }
 
@@ -829,7 +841,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (isVolatile() || forceVolatile) {
             return linkedField.getFloatVolatile(obj);
         } else {
-            return linkedField.getFloat(obj);
+            float raw = linkedField.getFloat(obj);
+            Versioning.captureGenesisRead(obj, this, raw);
+            return raw;
         }
     }
 
@@ -885,7 +899,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (isVolatile() || forceVolatile) {
             return linkedField.getIntVolatile(obj);
         } else {
-            return linkedField.getInt(obj);
+            int raw = linkedField.getInt(obj);
+            Versioning.captureGenesisRead(obj, this, raw);
+            return raw;
         }
     }
 
@@ -948,7 +964,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (isVolatile() || forceVolatile) {
             return linkedField.getLongVolatile(obj);
         } else {
-            return linkedField.getLong(obj);
+            long raw = linkedField.getLong(obj);
+            Versioning.captureGenesisRead(obj, this, raw);
+            return raw;
         }
     }
 
@@ -1013,7 +1031,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (isVolatile() || forceVolatile) {
             return linkedField.getShortVolatile(obj);
         } else {
-            return linkedField.getShort(obj);
+            short raw = linkedField.getShort(obj);
+            Versioning.captureGenesisRead(obj, this, raw);
+            return raw;
         }
     }
 

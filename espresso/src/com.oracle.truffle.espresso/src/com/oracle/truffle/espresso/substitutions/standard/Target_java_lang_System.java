@@ -38,6 +38,8 @@ import com.oracle.truffle.espresso.classfile.perf.DebugCounter;
 import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
+import com.oracle.truffle.espresso.memory.MemoryModel;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.helper.TypeCheckNode;
@@ -127,6 +129,19 @@ public final class Target_java_lang_System {
             return ((ArrayKlass) array.getKlass()).getComponentType();
         }
 
+        // Sync-as-Share (stage-on-access): an arraycopy writes dest.unwrap(), which for an app-owned array
+        // under a live model is that thread's working copy. The elements have already landed there; record
+        // the destination range in the array's write set so the next sync flushes exactly those indices to
+        // per-index staging (and cross-thread conflict-checks them). A no-op (folded) under shared.
+        static void recordVersionedDest(StaticObject dest, int destPos, int length, EspressoLanguage language, Meta meta) {
+            if (length > 0 && language.isMemoryModelEnabled() && dest.isEspressoObject() && Versioning.versionsArray(dest)) {
+                MemoryModel model = meta.getContext().getMemoryModel();
+                if (model.isActive()) {
+                    model.markArrayRange(dest, destPos, length);
+                }
+            }
+        }
+
         @SuppressWarnings("unused")
         @Specialization(guards = "nullOrNotArray(src, dest)")
         void doEarlyError(@JavaType(Object.class) StaticObject src, int srcPos, @JavaType(Object.class) StaticObject dest, int destPos, int length,
@@ -171,6 +186,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @Specialization(guards = {"areCompatiblePrimitiveArrays(src, dest, meta._int_array)", "!foreignArgument(src, dest)"})
@@ -184,6 +200,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @Specialization(guards = {"areCompatiblePrimitiveArrays(src, dest, meta._double_array)", "!foreignArgument(src, dest)"})
@@ -197,6 +214,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @Specialization(guards = {"areCompatiblePrimitiveArrays(src, dest, meta._long_array)", "!foreignArgument(src, dest)"})
@@ -210,6 +228,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @Specialization(guards = {"areCompatiblePrimitiveArrays(src, dest, meta._char_array)", "!foreignArgument(src, dest)"})
@@ -223,6 +242,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @Specialization(guards = {"areCompatiblePrimitiveArrays(src, dest, meta._short_array)", "!foreignArgument(src, dest)"})
@@ -236,6 +256,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @Specialization(guards = {"areCompatiblePrimitiveArrays(src, dest, meta._float_array)", "!foreignArgument(src, dest)"})
@@ -249,6 +270,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @SuppressWarnings("unused")
@@ -274,6 +296,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @Specialization(guards = {"length == 0", "!nullOrNotArray(src, dest)", "!isPrimitiveArray(src)", "!isPrimitiveArray(dest)", "!foreignArgument(src, dest)"})
@@ -303,6 +326,7 @@ public final class Target_java_lang_System {
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
 
         @Specialization(guards = {"!nullOrNotArray(src, dest)",
@@ -328,6 +352,7 @@ public final class Target_java_lang_System {
                 }
                 d[destPos + i] = cpy;
             }
+            recordVersionedDest(dest, destPos, length, language, meta);
         }
     }
 

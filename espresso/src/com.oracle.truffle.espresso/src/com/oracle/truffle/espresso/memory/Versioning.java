@@ -132,4 +132,20 @@ public final class Versioning {
         field.getDeclaringKlass().getContext().getMemoryModel().writeField(obj, field, value);
         return true;
     }
+
+    /**
+     * Sync-as-Share (stage-on-access): lazily capture the genesis (version-0) {@code value} of a versioned
+     * instance {@code field} of {@code obj} — the value just read from the physical slot because {@link
+     * #readInstance} returned {@link MemoryModel#ABSENT}. Gated on the <em>same</em> {@link
+     * #versionsInstanceField} eligibility as read/write, so an ABSENT that meant "not a versioned location"
+     * (non-app-owned receiver, volatile/hidden field, shared/inactive model) captures nothing and the field
+     * stays raw. For a versioned location it captures the value into the acting thread's view, so the next
+     * read resolves there instead of reading the live slot again — closing the uncontrolled read-through.
+     */
+    public static void captureGenesisRead(StaticObject obj, Field field, Object value) {
+        if (!versionsInstanceField(obj, field)) {
+            return;
+        }
+        field.getDeclaringKlass().getContext().getMemoryModel().captureRead(obj, field, value);
+    }
 }

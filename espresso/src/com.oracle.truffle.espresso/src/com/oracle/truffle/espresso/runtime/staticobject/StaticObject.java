@@ -42,6 +42,7 @@ import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
+import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
@@ -328,13 +329,17 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     private Object getArray(EspressoLanguage language) {
         Object physical = language.getArrayProperty().getObject(this);
-        // Sync-as-Share (stage-on-access): for an app-owned array, unwrap resolves to a host-array
-        // projection of the acting thread's view (staged/committed elements overlaid on physical), so the
-        // native / arraycopy / reflection READ path sees the same data bytecode staged. Bytecode array
-        // access goes through the model directly (the gate), not here. Non-app-owned arrays fast-path to
-        // the physical store. See design/view-realisation.md.
-        if (physical != null && appOwned) {
-            return EspressoContext.get(null).getMemoryModel().arrayWorkingCopy(this, physical);
+        // Sync-as-Share (stage-on-access): for an app-owned array under a live versioned model, unwrap
+        // resolves to the acting thread's working copy of the array — a real host array holding that
+        // thread's staged/committed elements, the same array the bytecode gate reads/writes and that an
+        // arraycopy writes into. Non-app-owned arrays (and shared/inactive models) fast-path to the
+        // physical store; the isMemoryModelEnabled() guard is a PE constant that folds this away under
+        // --java.MemoryModel=shared. See design/view-realisation.md.
+        if (physical != null && appOwned && language.isMemoryModelEnabled()) {
+            MemoryModel model = EspressoContext.get(null).getMemoryModel();
+            if (model.isActive()) {
+                return model.arrayView(this);
+            }
         }
         return physical;
     }

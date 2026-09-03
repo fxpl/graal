@@ -188,13 +188,56 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     @Override
+    public void captureRead(StaticObject holder, Field field, Object value) {
+        currentView().captureRead(new FieldLocation(holder, field), value);
+    }
+
+    @Override
     public Object readArray(StaticObject array, int index) {
-        return currentView().read(new ArrayLocation(array, index));
+        return java.lang.reflect.Array.get(arrayVersionFor(array).host, index);
     }
 
     @Override
     public void writeArray(StaticObject array, int index, Object value) {
-        currentView().stage(new ArrayLocation(array, index), value);
+        ArrayVersion av = arrayVersionFor(array);
+        java.lang.reflect.Array.set(av.host, index, value);
+        av.touched.set(index);
+    }
+
+    @Override
+    public Object arrayView(StaticObject array) {
+        return arrayVersionFor(array).host;
+    }
+
+    @Override
+    public void markArrayRange(StaticObject array, int destPos, int length) {
+        arrayVersionFor(array).touched.set(destPos, destPos + length);
+    }
+
+    /**
+     * The acting thread's working copy of {@code array}, materialising it on first access: a real host
+     * array of the array's component type, seeded from the physical (version-0) array and overlaid with
+     * this thread's staged-or-committed elements ({@link BranchingView#read}). Cached on the view and
+     * reused until the next commit clears it. See {@link ArrayVersion}.
+     */
+    private ArrayVersion arrayVersionFor(StaticObject array) {
+        BranchingView view = currentView();
+        ArrayVersion av = view.arrayVersion(array);
+        if (av == null) {
+            Object physical = context.getLanguage().getArrayProperty().getObject(array);
+            int n = java.lang.reflect.Array.getLength(physical);
+            Object host = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), n);
+            System.arraycopy(physical, 0, host, 0, n);
+            for (int i = 0; i < n; i++) {
+                Object v = view.read(new ArrayLocation(array, i));
+                if (v != MemoryModel.ABSENT) {
+                    java.lang.reflect.Array.set(host, i, v);
+                }
+            }
+            av = new ArrayVersion(host);
+            view.putArrayVersion(array, av);
+        }
+        return av;
     }
 
     // --- Synchronisation actions (Table 1). May report a conflict at the merge. ---

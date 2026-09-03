@@ -79,6 +79,20 @@ public interface MemoryModel {
     /** Stage a write of a field of {@code holder} into the calling thread's view (boxed value). */
     void writeField(StaticObject holder, Field field, Object value);
 
+    /**
+     * Sync-as-Share (stage-on-access): lazily capture the genesis (version-0) value of a versioned field
+     * into the calling thread's view. Called by {@link com.oracle.truffle.espresso.impl.Field} the first
+     * time a versioned field is read with no staged or committed value — instead of reading through to the
+     * live physical slot on every such read, the physical value is captured once (it is the immutable
+     * initial committed version) so the view is self-contained: a later non-versioned mutation of that slot
+     * (Unsafe / atomics / native) cannot leak into a versioned reader. The capture is a <em>read</em>, never
+     * a write: it is not published at a commit and never enters conflict detection; a committed value that
+     * later appears for the location shadows it (read precedence: staged, then committed, then captured).
+     * A no-op by default (shared / models without genesis capture); only ever called for versioned fields.
+     */
+    default void captureRead(StaticObject holder, Field field, Object value) {
+    }
+
     /** As {@link #readField} but for an array element (per-index): staged, else base snapshot, else {@link #ABSENT}. */
     Object readArray(StaticObject array, int index);
 
@@ -86,22 +100,31 @@ public interface MemoryModel {
     void writeArray(StaticObject array, int index, Object value);
 
     /**
-     * Sync-as-Share (stage-on-access): a host-array projection of an app-owned array as seen through the
-     * acting thread's view — each element is that thread's {@link #readArray staged/committed} value where
-     * it has one, else the physical (version-0) element. Returned by {@link StaticObject#unwrap} for
-     * app-owned arrays so the native / reflection / {@code arraycopy} READ path operates on the thread's
-     * view rather than raw physical. Model-agnostic: {@code readArray} already resolves staged-or-committed
-     * for both linear and branching. Materialised on access; native writes back through it are out of
-     * scope. Boxing is generic (Integer for int[], StaticObject for reference). See design/view-realisation.md.
+     * Sync-as-Share (stage-on-access): the acting thread's working copy of an app-owned array — a
+     * <em>real</em> host array of the array's exact component type ({@code byte[]}, {@code int[]},
+     * {@code StaticObject[]}, ...), materialised once on first access from the thread's staged-or-committed
+     * elements over the physical (version-0) array, then cached in the thread's view and reused. Returned
+     * by {@link StaticObject#unwrap} for app-owned arrays, so the native / reflection / {@code arraycopy}
+     * path reads AND writes the very same array the bytecode gate ({@link #readArray}/{@link #writeArray})
+     * uses — an {@code arraycopy} into it simply lands, no throwaway projection. Bulk writes into it record
+     * their touched range via {@link #markArrayRange}. Only ever consulted with the model live (the caller
+     * guards on {@code isMemoryModelEnabled() && isActive()}), so the default is unreachable.
+     * See design/view-realisation.md.
      */
-    default Object arrayWorkingCopy(StaticObject array, Object physical) {
-        int n = java.lang.reflect.Array.getLength(physical);
-        Object copy = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), n);
-        for (int i = 0; i < n; i++) {
-            Object v = readArray(array, i);
-            java.lang.reflect.Array.set(copy, i, v == ABSENT ? java.lang.reflect.Array.get(physical, i) : v);
-        }
-        return copy;
+    default Object arrayView(StaticObject array) {
+        throw com.oracle.truffle.espresso.meta.EspressoError.shouldNotReachHere("arrayView on a model without array working copies");
+    }
+
+    /**
+     * Record that indices {@code [destPos, destPos+length)} of {@code array} were written in bulk — an
+     * {@code arraycopy} whose destination is this app-owned array. The elements themselves already landed
+     * in the working copy ({@link #arrayView}) that the {@code arraycopy} wrote through; this only marks
+     * them in the array's write set so the next synchronisation flushes exactly those indices to per-index
+     * staging (and, cross-thread, conflict-checks them). Bytecode {@code aastore} marks its single index
+     * inside {@link #writeArray}; this is the range analogue for the native path.
+     */
+    default void markArrayRange(StaticObject array, int destPos, int length) {
+        throw com.oracle.truffle.espresso.meta.EspressoError.shouldNotReachHere("markArrayRange on a model without array working copies");
     }
 
     // --- Synchronisation actions (Table 1). May report a conflict. ---

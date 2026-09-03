@@ -2011,6 +2011,14 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     private void arrayLoadViaModel(VirtualFrame frame, int top, int index, StaticObject array, int loadOpcode) {
         EspressoLanguage language = getLanguage();
         MemoryModel model = getContext().getMemoryModel();
+        // readArray indexes the thread's working copy directly (never ABSENT for a versioned array), so the
+        // guest bounds check must happen here rather than falling through to the stock InterpreterToVM read.
+        int length = InterpreterToVM.arrayLength(array, language);
+        if (Integer.compareUnsigned(index, length) >= 0) {
+            enterImplicitExceptionProfile();
+            Meta meta = getMeta();
+            throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, "Index " + index + " out of bounds for length " + length);
+        }
         Object v = model.readArray(array, index);
         boolean absent = (v == MemoryModel.ABSENT);
         // @formatter:off
