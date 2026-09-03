@@ -73,6 +73,12 @@ public final class BranchingMemoryModel implements MemoryModel {
     private volatile boolean active = false;
     private final AtomicLong threadIds = new AtomicLong();
 
+    // Sync-as-Share (stage-on-access): the shared version-0 cache. The first thread to read a versioned
+    // field with no staged/committed value freezes the physical (genesis) value here; every thread then
+    // reads that one frozen value instead of the live slot, so v0 is a single fixed version (the paper's
+    // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
+    private final Map<VersionedLocation, Object> genesis = new ConcurrentHashMap<>();
+
     /** Per-monitor (and per-thread-object, for join) published branch tip. Keyed by object identity. */
     private final Map<StaticObject, LockState> lockStates = new ConcurrentHashMap<>();
 
@@ -179,7 +185,15 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public Object readField(StaticObject holder, Field field) {
-        return currentView().read(new FieldLocation(holder, field));
+        FieldLocation loc = new FieldLocation(holder, field);
+        Object v = currentView().read(loc);
+        if (v != MemoryModel.ABSENT) {
+            return v;
+        }
+        // Not staged and no committed version: the shared frozen genesis, else ABSENT (caller reads the
+        // slot and captures it here). read() checks committed first, so a committed value shadows genesis.
+        Object g = genesis.get(loc);
+        return g != null ? g : MemoryModel.ABSENT;
     }
 
     @Override
@@ -189,7 +203,8 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void captureRead(StaticObject holder, Field field, Object value) {
-        currentView().captureRead(new FieldLocation(holder, field), value);
+        // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
+        genesis.putIfAbsent(new FieldLocation(holder, field), value);
     }
 
     @Override

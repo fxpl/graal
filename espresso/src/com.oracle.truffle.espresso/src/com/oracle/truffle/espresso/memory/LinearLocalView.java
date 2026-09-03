@@ -44,11 +44,6 @@ public final class LinearLocalView implements MemoryView {
     // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging before
     // each push/pull and cleared after, so it rebuilds from the freshly-observed base next epoch.
     private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
-    // Sync-as-Share (stage-on-access): lazily captured genesis (version-0) field values, so a versioned
-    // read never falls through to the live physical slot more than once. A read cache, not a write set:
-    // never pushed, shadowed by any committed value (read consults it only after staging and the base
-    // snapshot). The physical genesis is immutable, so entries never go stale.
-    private final Map<VersionedLocation, Object> captured = new HashMap<>();
     // A conflict detected during a synchronisation action, to be raised at the next safe point (the
     // top of the bytecode loop) rather than from inside the sync op. Null if none pending.
     private String pendingConflict;
@@ -64,16 +59,6 @@ public final class LinearLocalView implements MemoryView {
     /** Staged value for {@code loc}, or {@code null} if not staged (staged values are never null). */
     public Object getStaged(VersionedLocation loc) {
         return staging.get(loc);
-    }
-
-    /** Lazily-captured genesis value for {@code loc}, or {@code null} if none captured. See {@link #captured}. */
-    public Object getCaptured(VersionedLocation loc) {
-        return captured.get(loc);
-    }
-
-    /** Cache a lazily-captured genesis field value (a read, never pushed). See {@link #captured}. */
-    public void captureRead(VersionedLocation loc, Object value) {
-        captured.put(loc, value);
     }
 
     public void stage(VersionedLocation loc, Object value) {

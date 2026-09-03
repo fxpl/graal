@@ -49,6 +49,11 @@ public final class LinearMemoryModel implements MemoryModel {
     private final GlobalHistory global;
     private final EspressoContext context;
     private volatile boolean active = false;
+    // Sync-as-Share (stage-on-access): the shared version-0 cache. The first thread to read a versioned
+    // field with no staged/committed value freezes the physical (genesis) value here; every thread then
+    // reads that one frozen value instead of the live slot, so v0 is a single fixed version (the paper's
+    // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
+    private final Map<VersionedLocation, Object> genesis = new ConcurrentHashMap<>();
     // Per-volatile-field lock making a volatile read's (pull, get-value) and a volatile write's
     // (pull, set-value, push) atomic per field — the paper's pull-push is one action. Without it a
     // reader could see a new volatile value while its pull missed the ordinary writes published with it
@@ -188,14 +193,10 @@ public final class LinearMemoryModel implements MemoryModel {
         if (staged != null) {
             return staged;
         }
-        // Value visible at this thread's base, else the lazily-captured genesis, else ABSENT (caller reads
-        // through to the heap and captures). Committed shadows a capture — the base snapshot is checked first.
-        Object committed = global.snapshot(loc, view.base());
-        if (committed != MemoryModel.ABSENT) {
-            return committed;
-        }
-        Object cap = view.getCaptured(loc);
-        return cap != null ? cap : MemoryModel.ABSENT;
+        // Value visible at this thread's base, or ABSENT. The shared genesis (version-0) cache is consulted
+        // by readField after this (fields only), not here — array materialisation also calls read() and must
+        // not pick up field-genesis values.
+        return global.snapshot(loc, view.base());
     }
 
     private void write(VersionedLocation loc, Object value) {
@@ -221,7 +222,15 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public Object readField(StaticObject holder, Field field) {
-        return read(new FieldLocation(holder, field));
+        FieldLocation loc = new FieldLocation(holder, field);
+        Object v = read(loc);
+        if (v != MemoryModel.ABSENT) {
+            return v;
+        }
+        // Not staged and no committed version: the shared frozen genesis, else ABSENT (caller reads the
+        // slot and captures it here). Committed is checked first (in read()), so it shadows genesis.
+        Object g = genesis.get(loc);
+        return g != null ? g : MemoryModel.ABSENT;
     }
 
     @Override
@@ -231,7 +240,8 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public void captureRead(StaticObject holder, Field field, Object value) {
-        currentView().captureRead(new FieldLocation(holder, field), value);
+        // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
+        genesis.putIfAbsent(new FieldLocation(holder, field), value);
     }
 
     @Override

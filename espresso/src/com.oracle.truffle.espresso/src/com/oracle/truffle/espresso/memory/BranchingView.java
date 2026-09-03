@@ -65,11 +65,6 @@ public final class BranchingView implements MemoryView {
     // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging and
     // cleared at each commit, so it rebuilds from post-commit committed state next epoch.
     private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
-    // Sync-as-Share (stage-on-access): lazily captured genesis (version-0) field values, so a versioned
-    // read never falls through to the live physical slot more than once. A read cache, not a write set:
-    // never published at a commit, shadowed by any committed value (read consults it only after staging and
-    // lastWriter). The physical genesis is immutable, so entries never go stale.
-    private final Map<VersionedLocation, Object> captured = new HashMap<>();
     private String pendingConflict;
 
     public BranchingView(long threadId, GraphTrace trace) {
@@ -146,23 +141,15 @@ public final class BranchingView implements MemoryView {
         arrays.clear();
     }
 
-    /** Staged value, else the committed value (lastWriter), else the captured genesis, else ABSENT. */
+    /** Staged value, else the committed value (materialised in lastWriter), else ABSENT. The shared
+     *  genesis (version-0) cache is consulted by the model after this, not here. */
     Object read(VersionedLocation loc) {
         Object staged = staging.get(loc);
         if (staged != null) {
             return staged;
         }
         Commit writer = lastWriter.get(loc);
-        if (writer != null) {
-            return writer.changes().get(loc);
-        }
-        Object cap = captured.get(loc);
-        return cap != null ? cap : MemoryModel.ABSENT;
-    }
-
-    /** Cache a lazily-captured genesis field value (a read, never published). See {@link #captured}. */
-    void captureRead(VersionedLocation loc, Object value) {
-        captured.put(loc, value);
+        return writer != null ? writer.changes().get(loc) : MemoryModel.ABSENT;
     }
 
     /** Turn staged writes into a new commit on this thread's branch (no-op if nothing staged). */
