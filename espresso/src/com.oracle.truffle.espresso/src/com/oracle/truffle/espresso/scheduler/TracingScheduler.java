@@ -41,7 +41,8 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * <li>{@code summary}: nothing per sync point — only the closing counts.</li>
  * <li>{@code trace}: one line per sync point as it fires — the acting thread, op, subject and guest
  * site, tagged {@code RELEASED(n)} when a release makes n staged writes available to other threads,
- * and {@code ACQUIRED(n)} when a monitor acquire brings in n writes released by other threads.</li>
+ * and {@code ACQUIRED(n)} when an acquire (monitor enter, wait re-acquire, thread start) brings in n
+ * writes released by other threads.</li>
  * </ul>
  *
  * See {@code design/schedule-explorer.md}.
@@ -74,8 +75,8 @@ public final class TracingScheduler implements Scheduler {
     private volatile long baseNanos;          // set at activation; timestamps are relative to it
 
     // Closing counts. syncPoints: every sync point an application thread passed. released: the releases
-    // that made at least one staged write available to other threads. acquired: the monitor acquires
-    // that brought in at least one write released by another thread.
+    // that made at least one staged write available to other threads. acquired: the acquires that
+    // brought in at least one write released by another thread.
     private final AtomicInteger syncPoints = new AtomicInteger();
     private final AtomicInteger released = new AtomicInteger();
     private final AtomicInteger acquired = new AtomicInteger();
@@ -100,7 +101,7 @@ public final class TracingScheduler implements Scheduler {
             out.println("#   [sync N] <thread>  t+<ms>  OP  <subject>  <guest site>  [RELEASED(n) | ACQUIRED(n)]");
             out.println("#   subject      the monitor / thread object;  site  the guest Class.method:line doing it");
             out.println("#   RELEASED(n)  this release made n staged writes available to other threads");
-            out.println("#   ACQUIRED(n)  this monitor acquire brought in n writes released by other threads");
+            out.println("#   ACQUIRED(n)  this acquire brought in n writes released by other threads");
         }
     }
 

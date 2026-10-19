@@ -962,13 +962,13 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
             // Feed the scheduler the model's write count rather than let it reach into the model — keeps
             // order (scheduler) and visibility (model) independent (design/schedule-explorer.md §6). A
             // release seam fires before the model's release, so it sees the writes about to be released;
-            // a monitor-acquire seam fires after the model's acquire, so it sees what that acquire brought
-            // in. 0 under shared and at every other op.
+            // an acquire seam fires after the model's acquire, so it sees what that acquire brought in. 0
+            // under shared and at every other op.
             int writes = 0;
             if (isVersionedMemoryEnabled()) {
                 if (op.isRelease()) {
                     writes = memoryModel.pendingWriteCount();
-                } else if (op == SyncOp.MONITOR_ENTER || op == SyncOp.WAIT_REACQUIRE) {
+                } else if (op.isAcquire()) {
                     writes = memoryModel.acquiredWriteCount();
                 }
             }

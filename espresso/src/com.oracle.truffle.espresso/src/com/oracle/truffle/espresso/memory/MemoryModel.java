@@ -203,8 +203,10 @@ public interface MemoryModel {
     }
 
     /**
-     * The number of writes the calling thread's most recent monitor acquire ({@link #onMonitorEnter})
-     * made visible to it: the total of the released writes of every release that acquire brought in.
+     * The number of writes the calling thread's most recent acquire ({@link #onMonitorEnter} or
+     * {@link #onThreadStart}) made visible to it: the total of the released writes of every release that
+     * acquire brought in. At thread start that is everything the parent could see (branching) or
+     * everything in g (linear).
      * Read by the schedule explorer right after the acquire, for its {@code ACQUIRED(n)} tag. Returns
      * {@code 0} for {@link SharedMemoryModel} and whenever the calling thread has no view yet.
      */

@@ -189,7 +189,7 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public int acquiredWriteCount() {
-        // A monitor acquire is exactly one pull (onMonitorEnter), so the last pull's count is the answer.
+        // A monitor acquire or thread start is exactly one pull, so the last pull's count is the answer.
         MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
         return v == null ? 0 : ((LinearLocalView) v).lastPulledWrites();
     }

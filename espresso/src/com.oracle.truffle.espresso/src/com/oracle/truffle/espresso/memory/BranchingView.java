@@ -66,8 +66,11 @@ public final class BranchingView implements MemoryView {
     // cleared at each commit, so it rebuilds from post-commit committed state next epoch.
     private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
     private String pendingConflict;
-    private long mergedWrites;   // running total of writes brought in by merges (schedule explorer only)
-    private int lastAcquiredWrites;   // writes the most recent monitor acquire brought in
+    // Writes in this view's history: its own commits, plus those its merges brought in, plus the
+    // parent's total adopted at start. The difference across an acquire is what that acquire brought in.
+    // Schedule explorer only.
+    private long historyWrites;
+    private int lastAcquiredWrites;   // writes the most recent acquire (monitor enter, thread start) brought in
 
     public BranchingView(long threadId, GraphTrace trace) {
         this.threadId = threadId;
@@ -175,6 +178,7 @@ public final class BranchingView implements MemoryView {
         Commit c = new Commit(new Timestamp(threadId, ++counter), changes,
                         head == null ? List.of() : List.of(head), false);
         VersioningStats.onCommit(changes.size());
+        historyWrites += changes.size();
         for (VersionedLocation loc : c.changes().keySet()) {
             lastWriter.put(loc, c);
         }
@@ -200,11 +204,14 @@ public final class BranchingView implements MemoryView {
      * Called on the child at start with the snapshot the parent captured at spawn (spawn: child adopts
      * parent).
      */
-    void adopt(Commit forkPoint, Map<VersionedLocation, Commit> forkLastWriter, VectorClock forkClock) {
+    void adopt(Commit forkPoint, Map<VersionedLocation, Commit> forkLastWriter, VectorClock forkClock, long forkHistoryWrites) {
         this.head = forkPoint;
         this.lastWriter.clear();
         this.lastWriter.putAll(forkLastWriter);
         ownClock().join(forkClock);
+        // A fresh view has an empty history, so everything in the parent's history is brought in here.
+        this.historyWrites = forkHistoryWrites;
+        this.lastAcquiredWrites = (int) forkHistoryWrites;
     }
 
     /**
@@ -279,7 +286,7 @@ public final class BranchingView implements MemoryView {
      * already observed. Prunes the DFS at any commit {@code bound} contains — by counter monotonicity
      * that commit and all its ancestry are already in {@code bound} — so this visits only the commits
      * by which {@code tip} diverges from {@code bound}, never the whole DAG. Adds the visited commits'
-     * write counts to {@code into}'s {@link #mergedWrites}.
+     * write counts to {@code into}'s {@link #historyWrites}.
      */
     private static Map<VersionedLocation, Commit> writesNotIn(Commit tip, VectorClock bound, BranchingView into) {
         Map<VersionedLocation, Commit> out = new HashMap<>();
@@ -296,7 +303,7 @@ public final class BranchingView implements MemoryView {
             if (bound.contains(c.id())) {
                 continue;   // bound already has c (and, by monotonicity, all of c's ancestry) -> prune
             }
-            into.mergedWrites += c.changes().size();
+            into.historyWrites += c.changes().size();
             for (VersionedLocation loc : c.changes().keySet()) {
                 out.putIfAbsent(loc, c);   // first (newest, DFS from tip) writer dominates
             }
@@ -307,9 +314,9 @@ public final class BranchingView implements MemoryView {
         return out;
     }
 
-    /** Running total of writes brought in by merges; the difference across an acquire is what it brought in. */
-    long mergedWrites() {
-        return mergedWrites;
+    /** Writes in this view's history; the difference across an acquire is what it brought in. */
+    long historyWrites() {
+        return historyWrites;
     }
 
     int lastAcquiredWrites() {

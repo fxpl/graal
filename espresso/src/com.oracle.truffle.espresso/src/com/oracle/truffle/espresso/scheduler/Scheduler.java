@@ -43,9 +43,9 @@ public interface Scheduler {
      * wait and notify ops, the target thread for park, unpark and spawn, or {@code StaticObject.NULL}
      * where there is no natural subject (sleep, thread start/end). Called on the host thread
      * performing the op. {@code writes} comes from the memory model (0 under {@code shared}): at a
-     * release, the writes the calling thread is about to release; at a monitor acquire
-     * ({@code MONITOR_ENTER}, {@code WAIT_REACQUIRE}), the writes that acquire brought in; 0 at every
-     * other op. The context supplies it so the scheduler need not reach into the model (§6
+     * release, the writes the calling thread is about to release; at an acquire ({@code MONITOR_ENTER},
+     * {@code WAIT_REACQUIRE}, {@code THREAD_START}), the writes that acquire brought in; 0 at every other
+     * op. The context supplies it so the scheduler need not reach into the model (§6
      * independence).
      */
     void atSeam(SyncOp op, StaticObject subject, int writes);

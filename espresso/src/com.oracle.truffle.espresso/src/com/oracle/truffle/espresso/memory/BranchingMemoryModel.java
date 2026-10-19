@@ -112,7 +112,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     /** A snapshot of the parent's branch tip, committed cache, and frontier clock, captured at spawn. */
-    private record ForkPoint(Commit head, Map<VersionedLocation, Commit> lastWriter, VectorClock clock) {
+    private record ForkPoint(Commit head, Map<VersionedLocation, Commit> lastWriter, VectorClock clock, long historyWrites) {
     }
 
     /**
@@ -269,7 +269,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         StaticObject self = context.getCurrentPlatformThread();
         ForkPoint fork = pendingForks.remove(self);
         if (fork != null) {
-            currentView().adopt(fork.head(), fork.lastWriter(), fork.clock());
+            currentView().adopt(fork.head(), fork.lastWriter(), fork.clock(), fork.historyWrites());
         }
     }
 
@@ -292,7 +292,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // for the child, which adopts it at start. Runs on the parent, before the child begins.
         BranchingView view = currentView();
         view.commitStaging();
-        pendingForks.put(childThread, new ForkPoint(view.head(), view.snapshotLastWriter(), view.publishClock()));
+        pendingForks.put(childThread, new ForkPoint(view.head(), view.snapshotLastWriter(), view.publishClock(), view.historyWrites()));
     }
 
     @Override
@@ -301,12 +301,12 @@ public final class BranchingMemoryModel implements MemoryModel {
         // a terminated thread's head if this monitor is a join target (see mergeTerminal).
         BranchingView view = currentView();
         view.commitStaging();
-        long before = view.mergedWrites();
+        long before = view.historyWrites();
         LockState state = lockState(lock);
         VersionedLocation conflict = view.merge(state.commit, state.clock);
         publish(state, view);
         VersionedLocation joinConflict = mergeTerminal(lock, view);
-        view.setLastAcquiredWrites((int) (view.mergedWrites() - before));
+        view.setLastAcquiredWrites((int) (view.historyWrites() - before));
         handleConflict(conflict != null ? conflict : joinConflict, view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
