@@ -203,6 +203,16 @@ public interface MemoryModel {
     }
 
     /**
+     * The number of writes the calling thread's most recent monitor acquire ({@link #onMonitorEnter})
+     * made visible to it: the total of the released writes of every release that acquire brought in.
+     * Read by the schedule explorer right after the acquire, for its {@code ACQUIRED(n)} tag. Returns
+     * {@code 0} for {@link SharedMemoryModel} and whenever the calling thread has no view yet.
+     */
+    default int acquiredWriteCount() {
+        return 0;
+    }
+
+    /**
      * A human label for the sync point a monitor op represents, for conflict diagnostics. A monitor op
      * whose subject is a {@code Thread} object <em>is</em> a {@code join} — {@link Thread#join} is
      * implemented as {@code synchronized (thread) { ... wait() ... }}, so it routes through the monitor

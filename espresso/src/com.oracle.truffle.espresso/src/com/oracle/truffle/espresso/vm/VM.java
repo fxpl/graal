@@ -940,12 +940,13 @@ public final class VM extends NativeEnv {
             } else {
                 timedOut = !InterpreterToVM.monitorWait(self.getLock(context), timeout);
             }
-            context.seam(SyncOp.WAIT_REACQUIRE, self);
             // wait() re-acquired the monitor on wake: merge whatever the notifier published, as a
             // normal monitorenter would (the internal re-lock fires no bytecode hook otherwise).
             if (context.isVersionedMemoryEnabled()) {
                 context.getMemoryModel().onMonitorEnter(self);
             }
+            // Seam after the model's acquire, as in monitorEnter, so it observes what the acquire brought in.
+            context.seam(SyncOp.WAIT_REACQUIRE, self);
             if (report) {
                 context.reportMonitorWaited(self, timedOut);
             }
@@ -3049,30 +3050,6 @@ public final class VM extends NativeEnv {
             return top[0];
         }
         return top[0] + " (from " + app + ")";
-    }
-
-    /**
-     * Whether the <em>topmost guest frame</em> — the method actually performing the current operation
-     * (e.g. the {@code monitorenter}) — is application code, i.e. defined by a non-boot class loader
-     * (the same predicate {@code isVersionedField} versions by). Used to classify a synchronization seam
-     * as <b>authored</b> (the programmer wrote this {@code synchronized}) vs <b>machinery</b> (a
-     * boot-loaded library method, or pure VM code with no guest frame at all, took the lock — the
-     * programmer never wrote it). {@code false} when there is no guest frame (VM-internal lock).
-     */
-    @TruffleBoundary
-    public boolean topGuestFrameIsApplication() {
-        Boolean app = Truffle.getRuntime().iterateFrames(new FrameInstanceVisitor<Boolean>() {
-            @Override
-            public Boolean visitFrame(FrameInstance frame) {
-                EspressoRootNode root = getEspressoRootFromFrame(frame);
-                if (root == null) {
-                    return null;   // not an espresso frame — keep walking
-                }
-                // First (top) guest frame decides: is the code taking the lock application or boot?
-                return Versioning.isApplicationClass(root.getMethod().getDeclaringKlass());
-            }
-        });
-        return app != null && app;
     }
 
     private static String formatFrame(EspressoRootNode root, FrameInstance frame) {

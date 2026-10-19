@@ -42,12 +42,13 @@ public interface Scheduler {
      * Announce that {@code op} is occurring, on {@code subject} — the monitor for the monitor,
      * wait and notify ops, the target thread for park, unpark and spawn, or {@code StaticObject.NULL}
      * where there is no natural subject (sleep, thread start/end). Called on the host thread
-     * performing the op. {@code pendingWrites} is the number of writes the calling thread has staged
-     * but not yet published (from the memory model; 0 under {@code shared}) — a release-type seam is a
-     * <em>flow-commit</em> iff this is {@code > 0}. The context supplies it so the scheduler need not
-     * reach into the model (§6 independence).
+     * performing the op. {@code writes} comes from the memory model (0 under {@code shared}): at a
+     * release, the writes the calling thread is about to release; at a monitor acquire
+     * ({@code MONITOR_ENTER}, {@code WAIT_REACQUIRE}), the writes that acquire brought in; 0 at every
+     * other op. The context supplies it so the scheduler need not reach into the model (§6
+     * independence).
      */
-    void atSeam(SyncOp op, StaticObject subject, int pendingWrites);
+    void atSeam(SyncOp op, StaticObject subject, int writes);
 
     /** Whether announcements should be delivered yet (i.e. we are past JDK bootstrap). */
     default boolean isActive() {

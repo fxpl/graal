@@ -66,6 +66,8 @@ public final class BranchingView implements MemoryView {
     // cleared at each commit, so it rebuilds from post-commit committed state next epoch.
     private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
     private String pendingConflict;
+    private long mergedWrites;   // running total of writes brought in by merges (schedule explorer only)
+    private int lastAcquiredWrites;   // writes the most recent monitor acquire brought in
 
     public BranchingView(long threadId, GraphTrace trace) {
         this.threadId = threadId;
@@ -235,7 +237,7 @@ public final class BranchingView implements MemoryView {
             // previous holders already merged my last commit, so on re-acquire I am strictly behind, and
             // the DAG stays a linear chain instead of growing a merge node per acquisition.
             VersioningStats.onMerge(true);
-            writesNotIn(otherHead, clock).forEach(lastWriter::put);
+            writesNotIn(otherHead, clock, this).forEach(lastWriter::put);
             if (trace != null) {
                 trace.fastForward(threadId, head == null ? null : head.id(), otherHead.id());
             }
@@ -247,7 +249,7 @@ public final class BranchingView implements MemoryView {
         VersioningStats.onMerge(false);
         // Walk only the other branch's commits I have not seen (pruned by my clock), newest writer per
         // location. For each, a conflict iff the other side never saw my current writer of that location.
-        Map<VersionedLocation, Commit> theirs = writesNotIn(otherHead, clock);
+        Map<VersionedLocation, Commit> theirs = writesNotIn(otherHead, clock, this);
         VersionedLocation conflict = null;
         for (Map.Entry<VersionedLocation, Commit> e : theirs.entrySet()) {
             Commit mine = lastWriter.get(e.getKey());
@@ -276,9 +278,10 @@ public final class BranchingView implements MemoryView {
      * The newest writer of each location on {@code tip}'s branch that {@code bound} has <em>not</em>
      * already observed. Prunes the DFS at any commit {@code bound} contains — by counter monotonicity
      * that commit and all its ancestry are already in {@code bound} — so this visits only the commits
-     * by which {@code tip} diverges from {@code bound}, never the whole DAG.
+     * by which {@code tip} diverges from {@code bound}, never the whole DAG. Adds the visited commits'
+     * write counts to {@code into}'s {@link #mergedWrites}.
      */
-    private static Map<VersionedLocation, Commit> writesNotIn(Commit tip, VectorClock bound) {
+    private static Map<VersionedLocation, Commit> writesNotIn(Commit tip, VectorClock bound, BranchingView into) {
         Map<VersionedLocation, Commit> out = new HashMap<>();
         Set<Commit> visited = new HashSet<>();
         Deque<Commit> stack = new ArrayDeque<>();
@@ -293,6 +296,7 @@ public final class BranchingView implements MemoryView {
             if (bound.contains(c.id())) {
                 continue;   // bound already has c (and, by monotonicity, all of c's ancestry) -> prune
             }
+            into.mergedWrites += c.changes().size();
             for (VersionedLocation loc : c.changes().keySet()) {
                 out.putIfAbsent(loc, c);   // first (newest, DFS from tip) writer dominates
             }
@@ -301,6 +305,19 @@ public final class BranchingView implements MemoryView {
             }
         }
         return out;
+    }
+
+    /** Running total of writes brought in by merges; the difference across an acquire is what it brought in. */
+    long mergedWrites() {
+        return mergedWrites;
+    }
+
+    int lastAcquiredWrites() {
+        return lastAcquiredWrites;
+    }
+
+    void setLastAcquiredWrites(int n) {
+        this.lastAcquiredWrites = n;
     }
 
     // --- MemoryView: deferred-conflict flag (raised at the bytecode safe point / thread end) ---

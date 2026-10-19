@@ -959,13 +959,20 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
      */
     public void seam(SyncOp op, StaticObject subject) {
         if ((getLanguage().isScheduleExploreEnabled() || getLanguage().isScheduleDriveEnabled()) && scheduler.isActive()) {
-            // Feed the scheduler the model's flow datum (writes staged but not yet published by the
-            // calling thread) rather than let it reach into the model — keeps order (scheduler) and
-            // visibility (model) independent (design/schedule-explorer.md §6). 0 under shared.
-            int pendingWrites = isVersionedMemoryEnabled()
-                            ? memoryModel.pendingWriteCount()
-                            : 0;
-            scheduler.atSeam(op, subject, pendingWrites);
+            // Feed the scheduler the model's write count rather than let it reach into the model — keeps
+            // order (scheduler) and visibility (model) independent (design/schedule-explorer.md §6). A
+            // release seam fires before the model's release, so it sees the writes about to be released;
+            // a monitor-acquire seam fires after the model's acquire, so it sees what that acquire brought
+            // in. 0 under shared and at every other op.
+            int writes = 0;
+            if (isVersionedMemoryEnabled()) {
+                if (op.isRelease()) {
+                    writes = memoryModel.pendingWriteCount();
+                } else if (op == SyncOp.MONITOR_ENTER || op == SyncOp.WAIT_REACQUIRE) {
+                    writes = memoryModel.acquiredWriteCount();
+                }
+            }
+            scheduler.atSeam(op, subject, writes);
         }
     }
 

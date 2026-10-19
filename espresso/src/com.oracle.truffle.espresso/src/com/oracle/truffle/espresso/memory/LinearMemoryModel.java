@@ -187,6 +187,13 @@ public final class LinearMemoryModel implements MemoryModel {
         return v == null ? 0 : ((LinearLocalView) v).stagingSize();
     }
 
+    @Override
+    public int acquiredWriteCount() {
+        // A monitor acquire is exactly one pull (onMonitorEnter), so the last pull's count is the answer.
+        MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
+        return v == null ? 0 : ((LinearLocalView) v).lastPulledWrites();
+    }
+
     private Object read(VersionedLocation loc) {
         LinearLocalView view = currentView();
         Object staged = view.getStaged(loc);

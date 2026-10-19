@@ -28,10 +28,10 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * The single authority for "does the Sync-as-Share model version this location?" — the discriminator
- * every gate consults (bytecode getfield/putfield/aaload/aastore, {@code Unsafe}, reflection, and the
- * {@code MemoryModelSync} synchronization classifier), so the decision is defined once instead of
- * re-derived at each site (where it previously drifted: fields keyed on the field's declaring class,
- * arrays on the executing frame, {@code Unsafe} hand-copied the field test).
+ * every gate consults (bytecode getfield/putfield/aaload/aastore, {@code Unsafe}, reflection), so the
+ * decision is defined once instead of re-derived at each site (where it previously drifted: fields
+ * keyed on the field's declaring class, arrays on the executing frame, {@code Unsafe} hand-copied the
+ * field test).
  *
  * <p>The criterion is instance <b>provenance</b>: an object/array is versioned iff it is application
  * data — {@link StaticObject#isAppOwned()}, set at allocation and propagated on stores — not by the

@@ -164,6 +164,12 @@ public final class BranchingMemoryModel implements MemoryModel {
         return v == null ? 0 : ((BranchingView) v).stagingSize();
     }
 
+    @Override
+    public int acquiredWriteCount() {
+        MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
+        return v == null ? 0 : ((BranchingView) v).lastAcquiredWrites();
+    }
+
     private LockState lockState(StaticObject key) {
         return lockStates.computeIfAbsent(key, k -> new LockState());
     }
@@ -295,10 +301,12 @@ public final class BranchingMemoryModel implements MemoryModel {
         // a terminated thread's head if this monitor is a join target (see mergeTerminal).
         BranchingView view = currentView();
         view.commitStaging();
+        long before = view.mergedWrites();
         LockState state = lockState(lock);
         VersionedLocation conflict = view.merge(state.commit, state.clock);
         publish(state, view);
         VersionedLocation joinConflict = mergeTerminal(lock, view);
+        view.setLastAcquiredWrites((int) (view.mergedWrites() - before));
         handleConflict(conflict != null ? conflict : joinConflict, view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 

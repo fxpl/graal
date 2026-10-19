@@ -47,6 +47,7 @@ public final class LinearLocalView implements MemoryView {
     // A conflict detected during a synchronisation action, to be raised at the next safe point (the
     // top of the bytecode loop) rather than from inside the sync op. Null if none pending.
     private String pendingConflict;
+    private int lastPulledWrites;   // writes the most recent pull brought in (schedule explorer only)
 
     public long base() {
         return base;
@@ -54,6 +55,14 @@ public final class LinearLocalView implements MemoryView {
 
     public void advanceBase(long counter) {
         this.base = counter;
+    }
+
+    public int lastPulledWrites() {
+        return lastPulledWrites;
+    }
+
+    public void setLastPulledWrites(int n) {
+        this.lastPulledWrites = n;
     }
 
     /** Staged value for {@code loc}, or {@code null} if not staged (staged values are never null). */

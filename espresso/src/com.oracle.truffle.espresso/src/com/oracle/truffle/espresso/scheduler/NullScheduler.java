@@ -36,7 +36,7 @@ public final class NullScheduler implements Scheduler {
     }
 
     @Override
-    public void atSeam(SyncOp op, StaticObject subject, int pendingWrites) {
+    public void atSeam(SyncOp op, StaticObject subject, int writes) {
     }
 
     @Override

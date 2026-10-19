@@ -67,7 +67,7 @@ public abstract class AbstractDriveScheduler implements Scheduler {
 
     @Override
     @TruffleBoundary
-    public final void atSeam(SyncOp op, StaticObject subject, int pendingWrites) {
+    public final void atSeam(SyncOp op, StaticObject subject, int writes) {
         if (!active) {
             return;
         }
@@ -84,7 +84,7 @@ public abstract class AbstractDriveScheduler implements Scheduler {
         }
         long n = seq.incrementAndGet();
         int subjectId = hasSubject ? subjectIds.computeIfAbsent(subject, s -> nextSubjectId.getAndIncrement()) : -1;
-        onAppSeam(n, Thread.currentThread().getName(), op, subject, hasSubject, subjectId, pendingWrites);
+        onAppSeam(n, Thread.currentThread().getName(), op, subject, hasSubject, subjectId, writes);
     }
 
     /** Called for every application-thread seam, on the acting host thread, after id assignment. */

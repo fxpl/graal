@@ -22,6 +22,7 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -62,6 +63,10 @@ public final class GlobalVersionStore implements GlobalHistory {
     // firstConflict.
     private final ConcurrentHashMap<VersionedLocation, Version> history = new ConcurrentHashMap<>();
     private final AtomicLong counter = new AtomicLong(0);
+    // writesThrough[c] = total writes published by the pushes numbered 1..c, so the writes a pull brings
+    // in are writesThrough[new base] - writesThrough[old base]. Written under the write lock, read under
+    // the read lock. One long per committing push.
+    private long[] writesThrough = new long[64];
     private final ReentrantReadWriteLock gLock = new ReentrantReadWriteLock();
     private final GraphTrace trace;   // non-null only under --java.MemoryModelGraph
 
@@ -105,9 +110,12 @@ public final class GlobalVersionStore implements GlobalHistory {
             VersionedLocation conflict = firstConflict(view);
             if (conflict != null) {
                 traceConflict(view, conflict);
+                view.setLastPulledWrites(0);
                 return conflict;
             }
-            view.advanceBase(counter.get());
+            long now = counter.get();
+            view.setLastPulledWrites((int) (writesThrough[(int) now] - writesThrough[(int) view.base()]));
+            view.advanceBase(now);
             return null;
         } finally {
             read.unlock();
@@ -144,6 +152,10 @@ public final class GlobalVersionStore implements GlobalHistory {
                 return conflict;
             }
             long next = counter.incrementAndGet();
+            if (next >= writesThrough.length) {
+                writesThrough = Arrays.copyOf(writesThrough, writesThrough.length * 2);
+            }
+            writesThrough[(int) next] = writesThrough[(int) next - 1] + view.staging().size();
             for (Map.Entry<VersionedLocation, Object> e : view.staging().entrySet()) {
                 // New head whose prev is the old head (null if first): O(1), no copy.
                 history.compute(e.getKey(), (k, old) -> new Version(next, e.getValue(), old));

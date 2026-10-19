@@ -72,25 +72,9 @@ public enum SyncOp {
      * A release publishes this thread's staged view to {@code subject} (the "release" side): a monitor
      * exit, the release on entering {@code wait}, a spawn (parent publishes to the child's {@code Thread}
      * object), or a thread's termination (which a joiner acquires by waiting on the {@code Thread}
-     * object). A release with writes staged is a flow-commit.
+     * object).
      */
     public boolean isRelease() {
         return this == MONITOR_EXIT || this == WAIT_RELEASE || this == SPAWN || this == THREAD_END;
-    }
-
-    /**
-     * Whether the memory model has a synchronization hook wired at this op, i.e. whether the model
-     * actually propagates flow here. The completeness oracle flags a cross-thread handoff whose acquire
-     * is <em>not</em> model-hooked. It was built to catch the wait/notify shape — a {@code WAIT_REACQUIRE}
-     * carrying no merge because the internal re-lock bypassed {@code onMonitorEnter}. That gap is now
-     * closed (sync-as-share {@code a59a0be} brackets {@code JVM_MonitorWait} with
-     * {@code onMonitorExit}/{@code onMonitorEnter}), so the wait seams are hooked and the oracle is
-     * silent on them — it remains as a regression guard for any future acquire op left un-hooked.
-     */
-    public boolean isModelHooked() {
-        return switch (this) {
-            case MONITOR_ENTER, MONITOR_EXIT, WAIT_RELEASE, WAIT_REACQUIRE, THREAD_START, THREAD_END, SPAWN -> true;
-            default -> false;   // NOTIFY*, PARK, UNPARK, SLEEP: no model hook
-        };
     }
 }
