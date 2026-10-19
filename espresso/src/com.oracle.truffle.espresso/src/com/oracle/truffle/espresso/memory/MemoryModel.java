@@ -32,7 +32,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * <p>A {@code MemoryModel} mediates ordinary shared-memory accesses and synchronisation actions.
  * The stock, sequentially-consistent behaviour is provided by {@link SharedMemoryModel}, which is
  * the identity: it is never consulted on the interpreter hot path because the hooks are guarded by
- * {@link com.oracle.truffle.espresso.EspressoLanguage#isMemoryModelEnabled()}, a partial-evaluation
+ * {@link com.oracle.truffle.espresso.EspressoLanguage#isVersionedMemorySelected()}, a partial-evaluation
  * constant that is {@code false} under {@code --java.MemoryModel=shared}, so the entire hook folds
  * away and the compiled code is identical to stock Espresso.
  *
@@ -55,7 +55,7 @@ public interface MemoryModel {
     /**
      * Whether this model changes shared-memory semantics. {@code false} for the stock
      * {@link SharedMemoryModel}; {@code true} for version-controlled models. Mirrors
-     * {@link com.oracle.truffle.espresso.EspressoLanguage#isMemoryModelEnabled()}.
+     * {@link com.oracle.truffle.espresso.EspressoLanguage#isVersionedMemorySelected()}.
      */
     boolean isEnabled();
 
@@ -108,7 +108,7 @@ public interface MemoryModel {
      * path reads AND writes the very same array the bytecode gate ({@link #readArray}/{@link #writeArray})
      * uses — an {@code arraycopy} into it simply lands, no throwaway projection. Bulk writes into it record
      * their touched range via {@link #markArrayRange}. Only ever consulted with the model live (the caller
-     * guards on {@code isMemoryModelEnabled() && isActive()}), so the default is unreachable.
+     * guards on {@code EspressoContext.isVersionedMemoryEnabled()}), so the default is unreachable.
      * See design/view-realisation.md.
      */
     default Object arrayView(StaticObject array) {
@@ -174,9 +174,9 @@ public interface MemoryModel {
     /**
      * Whether versioning is live. It is <em>off</em> during JDK bootstrap — the pre-main heap is the
      * initial committed version, and versioning it would both be pointless and break VM substitutions
-     * that read fields directly off the heap — and flipped on before user {@code main}. The hot-path
-     * hooks test {@code isMemoryModelEnabled() && model.isActive()}; the first conjunct is the
-     * PE-constant, so the whole hook still folds away under {@code shared}.
+     * that read fields directly off the heap — and flipped on before user {@code main}. Hooks test
+     * {@code EspressoContext.isVersionedMemoryEnabled()}, which checks the PE-constant selection first,
+     * so the whole hook still folds away under {@code shared}.
      */
     default boolean isActive() {
         return false;

@@ -29,7 +29,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 /**
  * The stock, sequentially-consistent shared-memory model (the identity). This is the default and is
  * never consulted on the interpreter hot path: the Sync-as-Share hooks are guarded by the
- * partial-evaluation constant {@code EspressoLanguage.isMemoryModelEnabled()}, which is
+ * partial-evaluation constant {@code EspressoLanguage.isVersionedMemorySelected()}, which is
  * {@code false} for this model, so the hooks fold away entirely and the compiled code matches stock
  * Espresso.
  */
@@ -46,7 +46,7 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     // None of the following are ever reached: the hot-path hooks are guarded by the PE-constant
-    // EspressoLanguage.isMemoryModelEnabled() (false for shared), so they fold away before any call.
+    // EspressoLanguage.isVersionedMemorySelected() (false for shared), so they fold away before any call.
 
     @Override
     public MemoryView newThreadView() {

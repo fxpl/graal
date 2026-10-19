@@ -797,7 +797,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                     setBCI(frame, curBCI);
                 }
 
-                if (getLanguage().isMemoryModelEnabled()) {
+                if (getLanguage().isVersionedMemorySelected()) {
                     // Sync-as-Share: raise a conflict detected by the previous synchronisation action
                     // here, at a safe point (past any just-executed monitorexit), so it propagates as an
                     // ordinary catchable guest exception. Folds away under shared (PE-constant guard).
@@ -1763,10 +1763,10 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
 
     // Sync-as-Share: stamp a freshly-allocated object/array with application provenance when the method
     // performing the allocation is application code. The allocating frame IS this node, so the check is
-    // O(1) off getMethod() -- no stack walk. Under --java.MemoryModel=shared isMemoryModelEnabled() is a
+    // O(1) off getMethod() -- no stack walk. Under --java.MemoryModel=shared isVersionedMemorySelected() is a
     // PE-constant false, so this folds away entirely. Design: versioning-provenance.md §4.1.
     private StaticObject markProvenance(StaticObject obj) {
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() &&
+        if (getContext().isVersionedMemoryEnabled() &&
                         Versioning.isApplicationClass(getMethod().getDeclaringKlass())) {
             obj.markAppOwned();
         }
@@ -2083,7 +2083,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         // Sync-as-Share: a versioned (app-owned) array is staged per element in the model — precise
         // stage/read via arrayLoadViaModel, so the FastTrack merge/conflict covers arrays. The per-thread
         // working copy StaticObject.getArray hands out is only for the native/unwrap read path.
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && array.isEspressoObject() && Versioning.versionsArray(array)) {
+        if (getContext().isVersionedMemoryEnabled() && array.isEspressoObject() && Versioning.versionsArray(array)) {
             arrayLoadViaModel(frame, top, index, array, loadOpcode);
             return;
         }
@@ -2122,7 +2122,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
         // Sync-as-Share: versioned array store goes through the model (precise per-element staging), so
         // merge/conflict covers arrays. getArray's working copy is only for the native/unwrap read path.
-        if (getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive() && array.isEspressoObject() && Versioning.versionsArray(array)) {
+        if (getContext().isVersionedMemoryEnabled() && array.isEspressoObject() && Versioning.versionsArray(array)) {
             arrayStoreViaModel(frame, top, index, array, storeOpcode);
             return;
         }
@@ -2866,10 +2866,10 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     // class (its owner); instance fields key on the RECEIVER's provenance -- peeked non-destructively
     // from the stack at receiverSlot -- so an app-created instance of a library class is versioned while
     // the runtime's own instances are not. Foreign or null receivers return false and stay on the stock
-    // path (which handles them / throws NPE). isMemoryModelEnabled() is the PE-constant that folds the
-    // whole thing away under shared. See design/versioning-provenance.md §4.
+    // path (which handles them / throws NPE). isVersionedMemoryEnabled() folds the whole thing away under
+    // shared. See design/versioning-provenance.md §4.
     private boolean fieldViaModel(VirtualFrame frame, int receiverSlot, Field field, FieldAccessType mode) {
-        if (!getLanguage().isMemoryModelEnabled() || !getContext().getMemoryModel().isActive()) {
+        if (!getContext().isVersionedMemoryEnabled()) {
             return false;
         }
         if (mode.isStatic()) {

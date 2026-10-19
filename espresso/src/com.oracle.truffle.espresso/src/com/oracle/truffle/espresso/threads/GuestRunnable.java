@@ -62,7 +62,7 @@ final class GuestRunnable implements Runnable {
             context.getVM().attachThread(Thread.currentThread());
             try {
                 // Sync-as-Share: thread start = pull g into this thread's view (cannot conflict).
-                if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+                if (context.isVersionedMemoryEnabled()) {
                     context.getMemoryModel().onThreadStart();
                 }
                 context.seam(SyncOp.THREAD_START, thread);
@@ -72,7 +72,7 @@ final class GuestRunnable implements Runnable {
                 context.getThreadAccess().checkDeprecatedThreadStatus(thread);
                 context.seam(SyncOp.THREAD_END, thread);
                 // Sync-as-Share: thread end = push this thread's view to g.
-                if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+                if (context.isVersionedMemoryEnabled()) {
                     context.getMemoryModel().onThreadEnd();
                     // A conflict in the thread's final push has no active guest frame to catch it, so
                     // raise it as an uncaught exception on this terminating thread (dispatched below).

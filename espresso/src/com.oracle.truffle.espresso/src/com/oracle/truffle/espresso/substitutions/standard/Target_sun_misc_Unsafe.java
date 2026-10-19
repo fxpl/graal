@@ -406,7 +406,7 @@ public final class Target_sun_misc_Unsafe {
         // runtime's own objects is unaffected; only app-owned data (or an app static) trips it. Inactive
         // throughout bootstrap.
         boolean versioned = field.isStatic() ? Versioning.versionsStatic(field) : Versioning.versionsInstance(holder);
-        if (meta.getContext().getLanguage().isMemoryModelEnabled() && meta.getContext().getMemoryModel().isActive() && versioned) {
+        if (meta.getContext().isVersionedMemoryEnabled() && versioned) {
             throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
                             "Sync-as-Share (--java.MemoryModel=" + meta.getContext().getLanguage().getMemoryModelMode().name().toLowerCase() +
                                             "): reflective/Unsafe access to versioned field " +

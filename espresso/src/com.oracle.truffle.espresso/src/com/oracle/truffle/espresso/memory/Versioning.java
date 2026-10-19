@@ -103,7 +103,7 @@ public final class Versioning {
             return false;
         }
         var ctx = field.getDeclaringKlass().getContext();
-        return ctx.getLanguage().isMemoryModelEnabled() && ctx.getMemoryModel().isActive();
+        return ctx.isVersionedMemoryEnabled();
     }
 
     public static Object readInstance(StaticObject obj, Field field) {

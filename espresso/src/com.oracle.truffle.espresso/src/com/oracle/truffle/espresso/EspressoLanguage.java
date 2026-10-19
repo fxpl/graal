@@ -167,7 +167,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     @CompilationFinal private boolean memoryModelSyncAuthoredOnly;
     // {@code true} iff a non-stock memory model is active. Kept as a separate PE-constant so the
     // Sync-as-Share hooks on the hot path fold away entirely under {@code SHARED}.
-    @CompilationFinal private boolean memoryModelEnabled;
+    @CompilationFinal private boolean versionedMemorySelected;
     @CompilationFinal private EspressoOptions.ScheduleExploreMode scheduleExploreMode;
     @CompilationFinal private boolean scheduleExploreEnabled;
     @CompilationFinal private EspressoOptions.ScheduleDriveMode scheduleDriveMode;
@@ -280,7 +280,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         memoryModelCollapseMode = env.getOptions().get(EspressoOptions.MemoryModelCollapse);
         memoryModelCollapseEvery = env.getOptions().get(EspressoOptions.MemoryModelCollapseEvery);
         memoryModelSyncAuthoredOnly = env.getOptions().get(EspressoOptions.MemoryModelSync) == EspressoOptions.MemoryModelSyncMode.AUTHORED;
-        memoryModelEnabled = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
+        versionedMemorySelected = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
         scheduleExploreMode = env.getOptions().get(EspressoOptions.ScheduleExplore);
         scheduleExploreEnabled = scheduleExploreMode != EspressoOptions.ScheduleExploreMode.OFF;
         scheduleDriveMode = env.getOptions().get(EspressoOptions.ScheduleDrive);
@@ -703,11 +703,13 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     }
 
     /**
-     * Whether a non-stock memory model (Sync-as-Share) is active. Reads as a partial-evaluation
-     * constant, so the memory-model hooks fold away on the hot path when {@code SHARED} is selected.
+     * Whether a versioned memory model (linear or branching) was selected, as opposed to the stock
+     * {@code shared} model. Reads as a partial-evaluation constant, so the memory-model hooks fold
+     * away on the hot path under {@code shared}. Says nothing about bootstrap; hooks normally test
+     * {@link com.oracle.truffle.espresso.runtime.EspressoContext#isVersionedMemoryEnabled()}.
      */
-    public boolean isMemoryModelEnabled() {
-        return memoryModelEnabled;
+    public boolean isVersionedMemorySelected() {
+        return versionedMemorySelected;
     }
 
     public EspressoOptions.ScheduleExploreMode getScheduleExploreMode() {

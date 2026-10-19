@@ -333,9 +333,9 @@ public class StaticObject implements TruffleObject, Cloneable {
         // resolves to the acting thread's working copy of the array — a real host array holding that
         // thread's staged/committed elements, the same array the bytecode gate reads/writes and that an
         // arraycopy writes into. Non-app-owned arrays (and shared/inactive models) fast-path to the
-        // physical store; the isMemoryModelEnabled() guard is a PE constant that folds this away under
+        // physical store; the isVersionedMemorySelected() guard is a PE constant that folds this away under
         // --java.MemoryModel=shared. See design/view-realisation.md.
-        if (physical != null && appOwned && language.isMemoryModelEnabled()) {
+        if (physical != null && appOwned && language.isVersionedMemorySelected()) {
             MemoryModel model = EspressoContext.get(null).getMemoryModel();
             if (model.isActive()) {
                 return model.arrayView(this);

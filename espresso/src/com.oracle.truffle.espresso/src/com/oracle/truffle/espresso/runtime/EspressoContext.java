@@ -937,6 +937,16 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
         return memoryModel;
     }
 
+    /**
+     * Whether reads and writes currently go through the versioned memory model: a versioned model
+     * (linear or branching) was selected, and it has been activated (after JDK bootstrap, before user
+     * {@code main}). The selection check comes first and is a partial-evaluation constant, so every
+     * hook guarded by this folds away under {@code --java.MemoryModel=shared}.
+     */
+    public boolean isVersionedMemoryEnabled() {
+        return getLanguage().isVersionedMemorySelected() && memoryModel.isActive();
+    }
+
     public Scheduler getScheduler() {
         return scheduler;
     }
@@ -952,7 +962,7 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
             // Feed the scheduler the model's flow datum (writes staged but not yet published by the
             // calling thread) rather than let it reach into the model — keeps order (scheduler) and
             // visibility (model) independent (design/schedule-explorer.md §6). 0 under shared.
-            int pendingWrites = (getLanguage().isMemoryModelEnabled() && memoryModel.isActive())
+            int pendingWrites = isVersionedMemoryEnabled()
                             ? memoryModel.pendingWriteCount()
                             : 0;
             scheduler.atSeam(op, subject, pendingWrites);

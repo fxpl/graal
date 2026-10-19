@@ -462,7 +462,7 @@ public final class ObjectKlass extends Klass implements AttributedElement {
     // JDK class-init HB rides unversioned boot fields, so versioning it is neither needed nor wanted
     // (it would also route the whole JDK enum-<clinit> storm through here).
     private boolean classInitVersioned() {
-        return getContext().getLanguage().isMemoryModelEnabled() && getContext().getMemoryModel().isActive()
+        return getContext().isVersionedMemoryEnabled()
                         && !StaticObject.isNull(getDefiningClassLoader());
     }
 

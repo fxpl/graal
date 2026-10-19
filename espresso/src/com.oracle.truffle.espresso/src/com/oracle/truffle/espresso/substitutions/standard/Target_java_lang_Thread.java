@@ -144,7 +144,7 @@ public final class Target_java_lang_Thread {
                 // Sync-as-Share: spawn = the parent publishes its view so the child (which pulls on
                 // start) inherits the parent's pre-spawn writes. Runs on the parent, before the child
                 // starts. No-op/folded under shared; off during JDK bootstrap.
-                if (context.getLanguage().isMemoryModelEnabled() && context.getMemoryModel().isActive()) {
+                if (context.isVersionedMemoryEnabled()) {
                     context.getMemoryModel().onSpawn(self);
                 }
                 hostThread.start();
