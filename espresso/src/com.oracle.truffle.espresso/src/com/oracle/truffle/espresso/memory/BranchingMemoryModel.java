@@ -101,18 +101,14 @@ public final class BranchingMemoryModel implements MemoryModel {
      *
      * <p><b>Unbounded retention (never removed).</b> Grows with total thread count. Weak keys on the
      * {@code Thread} object do not help: the model versions a constructed thread's own fields, so the
-     * constructor's {@code lastWriter} pins every {@code Thread} it makes (an ended thread is not
+     * commits holding those writes pin every {@code Thread} it makes (an ended thread is not
      * collectable under this model), so the weak key never clears. The retention here is a bounded
      * per-thread constant — a terminal is a shared commit, not a copy.
      */
-    private final Map<StaticObject, Tip> terminalHeads = new ConcurrentHashMap<>();
+    private final Map<StaticObject, Commit> terminalHeads = new ConcurrentHashMap<>();
 
-    /** A published branch tip: a commit and the publisher's frontier clock at publication. */
-    private record Tip(Commit head, VectorClock clock) {
-    }
-
-    /** A snapshot of the parent's branch tip, committed cache, and frontier clock, captured at spawn. */
-    private record ForkPoint(Commit head, Map<VersionedLocation, Commit> lastWriter, VectorClock clock, long historyWrites) {
+    /** The parent's branch tip captured at spawn. */
+    private record ForkPoint(Commit head) {
     }
 
     /**
@@ -162,12 +158,6 @@ public final class BranchingMemoryModel implements MemoryModel {
     public int pendingWriteCount() {
         MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
         return v == null ? 0 : ((BranchingView) v).stagingSize();
-    }
-
-    @Override
-    public int acquiredWriteCount() {
-        MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
-        return v == null ? 0 : ((BranchingView) v).lastAcquiredWrites();
     }
 
     private LockState lockState(StaticObject key) {
@@ -269,7 +259,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         StaticObject self = context.getCurrentPlatformThread();
         ForkPoint fork = pendingForks.remove(self);
         if (fork != null) {
-            currentView().adopt(fork.head(), fork.lastWriter(), fork.clock(), fork.historyWrites());
+            currentView().adopt(fork.head());
         }
     }
 
@@ -282,17 +272,17 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         if (view.head() != null) {
-            terminalHeads.put(context.getCurrentPlatformThread(), new Tip(view.head(), view.publishClock()));
+            terminalHeads.put(context.getCurrentPlatformThread(), view.head());
         }
     }
 
     @Override
     public void onSpawn(StaticObject childThread) {
-        // Fork: commit the parent's staging, then snapshot its tip + committed cache + frontier clock
-        // for the child, which adopts it at start. Runs on the parent, before the child begins.
+        // Fork: commit the parent's staging, then capture its tip for the child, which adopts it at
+        // start. Runs on the parent, before the child begins.
         BranchingView view = currentView();
         view.commitStaging();
-        pendingForks.put(childThread, new ForkPoint(view.head(), view.snapshotLastWriter(), view.publishClock(), view.historyWrites()));
+        pendingForks.put(childThread, new ForkPoint(view.head()));
     }
 
     @Override
@@ -301,12 +291,10 @@ public final class BranchingMemoryModel implements MemoryModel {
         // a terminated thread's head if this monitor is a join target (see mergeTerminal).
         BranchingView view = currentView();
         view.commitStaging();
-        long before = view.historyWrites();
         LockState state = lockState(lock);
-        VersionedLocation conflict = view.merge(state.commit, state.clock);
+        VersionedLocation conflict = view.merge(state.commit);
         publish(state, view);
         VersionedLocation joinConflict = mergeTerminal(lock, view);
-        view.setLastAcquiredWrites((int) (view.historyWrites() - before));
         handleConflict(conflict != null ? conflict : joinConflict, view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
@@ -322,20 +310,19 @@ public final class BranchingMemoryModel implements MemoryModel {
         handleConflict(mergeTerminal(lock, view), view, MemoryModel.monitorSyncLabel(context, lock, false));
     }
 
-    /** Publish the view's current tip and frontier clock to a lock state (clock shared copy-on-write). */
+    /** Publish the view's current tip to a lock state. */
     private static void publish(LockState state, BranchingView view) {
         state.commit = view.head();
-        state.clock = view.publishClock();
     }
 
     /**
      * If {@code lock} is a thread object that has ended, merge its terminal tip into this view (join
-     * semantics); otherwise a no-op. Idempotent: once merged, the terminal tip is already in this
-     * view's clock and {@link BranchingView#merge} short-circuits. Never mutates {@link #terminalHeads}.
+     * semantics); otherwise a no-op. Merged at both enter and exit, so must be idempotent. Never
+     * mutates {@link #terminalHeads}.
      */
     private VersionedLocation mergeTerminal(StaticObject lock, BranchingView view) {
-        Tip terminal = terminalHeads.get(lock);
-        return terminal == null ? null : view.merge(terminal.head(), terminal.clock());
+        Commit terminal = terminalHeads.get(lock);
+        return terminal == null ? null : view.merge(terminal);
     }
 
     @Override
@@ -352,7 +339,7 @@ public final class BranchingMemoryModel implements MemoryModel {
             synchronized (t) {
                 v.commitStaging();
                 if (t.commit != null) {
-                    c = v.merge(t.commit, t.clock);
+                    c = v.merge(t.commit);
                 }
             }
             handleConflict(c, v, "class init");
@@ -365,7 +352,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         synchronized (tip) {
             view.commitStaging();
             if (tip.commit != null) {
-                conflict = view.merge(tip.commit, tip.clock);
+                conflict = view.merge(tip.commit);
             }
             value = field.get(holder, true);   // forceVolatile; value is un-versioned, in the real heap
         }
@@ -387,7 +374,7 @@ public final class BranchingMemoryModel implements MemoryModel {
             synchronized (t) {
                 v.commitStaging();
                 if (t.commit != null) {
-                    c = v.merge(t.commit, t.clock);
+                    c = v.merge(t.commit);
                 }
                 if (c == null) {
                     publish(t, v);
@@ -402,7 +389,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         synchronized (tip) {
             view.commitStaging();
             if (tip.commit != null) {
-                conflict = view.merge(tip.commit, tip.clock);
+                conflict = view.merge(tip.commit);
             }
             if (conflict == null) {
                 field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap

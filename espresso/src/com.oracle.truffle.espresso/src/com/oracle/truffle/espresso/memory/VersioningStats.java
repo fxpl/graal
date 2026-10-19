@@ -47,8 +47,6 @@ final class VersioningStats {
     static final AtomicLong committedChanges = new AtomicLong(); // (location,value) pairs across all commits
                                                                 // = dag's retained value-slots (full history)
     static final AtomicLong merges = new AtomicLong();          // merge() calls that were not no-ops
-    static final AtomicLong fastForwards = new AtomicLong();    // ...of which fast-forwarded (no merge node)
-    static final AtomicLong peakLastWriter = new AtomicLong();  // largest per-view committed cache
 
     // Linear.
     static final AtomicLong gVersions = new AtomicLong();       // Version nodes ever appended to g
@@ -79,12 +77,9 @@ final class VersioningStats {
         }
     }
 
-    static void onMerge(boolean fastForward) {
+    static void onMerge() {
         if (ENABLED) {
             merges.incrementAndGet();
-            if (fastForward) {
-                fastForwards.incrementAndGet();
-            }
         }
     }
 
@@ -108,12 +103,6 @@ final class VersioningStats {
         }
     }
 
-    static void observeLastWriter(int size) {
-        if (ENABLED) {
-            observe(peakLastWriter, size);
-        }
-    }
-
     private static void observe(AtomicLong peak, long value) {
         long cur;
         while (value > (cur = peak.get()) && !peak.compareAndSet(cur, value)) {
@@ -126,9 +115,7 @@ final class VersioningStats {
         if (commits.get() > 0 || merges.get() > 0) {
             sb.append(" branching: commits=").append(commits)
                             .append(" committedChanges=").append(committedChanges)
-                            .append(" merges=").append(merges)
-                            .append(" fastForwards=").append(fastForwards)
-                            .append(" peakLastWriter=").append(peakLastWriter);
+                            .append(" merges=").append(merges);
         }
         if (gVersions.get() > 0) {
             sb.append(" linear: gVersions=").append(gVersions)

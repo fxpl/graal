@@ -24,15 +24,13 @@ package com.oracle.truffle.espresso.memory;
 
 /**
  * The branching model's per-lock synchronisation state (the prototype's {@code branching::LockState}):
- * the commit a lock currently publishes — the tip of the "lock branch" — together with the publisher's
- * {@link VectorClock} frontier at publication (the analogue of FastTrack's per-lock clock {@code L_m}).
- * Acquiring merges this into the thread and republishes; releasing republishes the thread's tip.
- * {@code commit}/{@code clock} are {@code null} until first published. Held in a side map keyed by the
+ * the commit a lock currently publishes — the tip of the "lock branch". Acquiring merges this into the
+ * thread and republishes; releasing republishes the thread's tip. {@code commit} is {@code null} until
+ * first published. Held in a side map keyed by the
  * monitor object; accessed only under that monitor, so it needs no internal synchronisation. (Linear
  * has no per-lock state — communication is the single global {@code g} — which is why the Linear model
  * returns no lock state.)
  */
 public final class LockState {
     Commit commit;
-    VectorClock clock;
 }
