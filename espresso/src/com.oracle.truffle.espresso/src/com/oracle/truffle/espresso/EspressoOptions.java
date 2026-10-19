@@ -332,9 +332,7 @@ public final class EspressoOptions {
     public enum ScheduleExploreMode {
         OFF,
         SUMMARY,
-        TRACE,
-        STORY,
-        ORACLE
+        TRACE
     }
 
     private static final OptionType<ScheduleExploreMode> SCHEDULE_EXPLORE_OPTION_TYPE = new OptionType<>("ScheduleExplore", new Function<String, ScheduleExploreMode>() {
@@ -343,15 +341,15 @@ public final class EspressoOptions {
             try {
                 return ScheduleExploreMode.valueOf(s.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("--java.ScheduleExplore: mode can be 'off', 'summary', 'trace', 'story' or 'oracle'.");
+                throw new IllegalArgumentException("--java.ScheduleExplore: mode can be 'off', 'summary' or 'trace'.");
             }
         }
     });
 
-    @Option(help = "Schedule exploration mode (independent of the memory model): 'off'; 'summary' (like 'trace' but print only the closing counts — how many seams fired and how they split — not the individual seams); 'trace' (log every synchronization seam as it fires — the full firehose, for investigating what synchronizes and when); 'story' (a reduced, programmer-legible narrative of only the meaningful events — thread spawn/start/end and cross-thread information handoffs); or 'oracle' (report only missed-seam alarms — cross-thread handoffs whose acquire fires no model hook). All end with the funnel counts.", //
+    @Option(help = "Schedule exploration mode (independent of the memory model): 'off'; 'summary' (like 'trace' but print only the closing counts — how many seams fired and how they split — not the individual seams); or 'trace' (log every synchronization seam as it fires — the full firehose, for investigating what synchronizes and when). Both end with the funnel counts.", //
                     category = OptionCategory.EXPERT, //
                     stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "off|trace|story|oracle") //
+                    usageSyntax = "off|summary|trace") //
     public static final OptionKey<ScheduleExploreMode> ScheduleExplore = new OptionKey<>(ScheduleExploreMode.OFF, SCHEDULE_EXPLORE_OPTION_TYPE);
 
     /**
