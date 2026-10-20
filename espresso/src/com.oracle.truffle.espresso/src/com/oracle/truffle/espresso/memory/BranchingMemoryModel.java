@@ -22,9 +22,12 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
@@ -292,10 +295,10 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         LockState state = lockState(lock);
-        VersionedLocation conflict = view.merge(state.commit);
+        Set<VersionedLocation> conflicts = new HashSet<>(view.merge(state.commit));
         publish(state, view);
-        VersionedLocation joinConflict = mergeTerminal(lock, view);
-        handleConflict(conflict != null ? conflict : joinConflict, view, MemoryModel.monitorSyncLabel(context, lock, true));
+        conflicts.addAll(mergeTerminal(lock, view));
+        handleConflicts(conflicts, view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
     @Override
@@ -307,7 +310,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         publish(lockState(lock), view);
-        handleConflict(mergeTerminal(lock, view), view, MemoryModel.monitorSyncLabel(context, lock, false));
+        handleConflicts(mergeTerminal(lock, view), view, MemoryModel.monitorSyncLabel(context, lock, false));
     }
 
     /** Publish the view's current tip to a lock state. */
@@ -320,9 +323,9 @@ public final class BranchingMemoryModel implements MemoryModel {
      * semantics); otherwise a no-op. Merged at both enter and exit, so must be idempotent. Never
      * mutates {@link #terminalHeads}.
      */
-    private VersionedLocation mergeTerminal(StaticObject lock, BranchingView view) {
+    private Set<VersionedLocation> mergeTerminal(StaticObject lock, BranchingView view) {
         Commit terminal = terminalHeads.get(lock);
-        return terminal == null ? null : view.merge(terminal);
+        return terminal == null ? Set.of() : view.merge(terminal);
     }
 
     @Override
@@ -335,19 +338,19 @@ public final class BranchingMemoryModel implements MemoryModel {
         if (field == null) {   // class-init acquire: merge the class's init tip only — no republish, no heap value
             BranchingView v = currentView();
             LockState t = classInitTip(holder);
-            VersionedLocation c = null;
+            Set<VersionedLocation> conflicts = Set.of();
             synchronized (t) {
                 v.commitStaging();
                 if (t.commit != null) {
-                    c = v.merge(t.commit);
+                    conflicts = v.merge(t.commit);
                 }
             }
-            handleConflict(c, v, "class init");
+            handleConflicts(conflicts, v, "class init");
             return StaticObject.NULL;
         }
         BranchingView view = currentView();
         LockState tip = volatileTip(new FieldLocation(holder, field));
-        VersionedLocation conflict = null;
+        Set<VersionedLocation> conflict = Set.of();
         Object value;
         synchronized (tip) {
             view.commitStaging();
@@ -356,7 +359,7 @@ public final class BranchingMemoryModel implements MemoryModel {
             }
             value = field.get(holder, true);   // forceVolatile; value is un-versioned, in the real heap
         }
-        handleConflict(conflict, view, "volatile read");
+        handleConflicts(conflict, view, "volatile read");
         return value;
     }
 
@@ -370,45 +373,47 @@ public final class BranchingMemoryModel implements MemoryModel {
         if (field == null) {   // class-init release: merge then publish this thread's tip — no heap value
             BranchingView v = currentView();
             LockState t = classInitTip(holder);
-            VersionedLocation c = null;
+            Set<VersionedLocation> conflicts = Set.of();
             synchronized (t) {
                 v.commitStaging();
                 if (t.commit != null) {
-                    c = v.merge(t.commit);
+                    conflicts = v.merge(t.commit);
                 }
-                if (c == null) {
+                if (conflicts.isEmpty()) {
                     publish(t, v);
                 }
             }
-            handleConflict(c, v, "class init");
+            handleConflicts(conflicts, v, "class init");
             return;
         }
         BranchingView view = currentView();
         LockState tip = volatileTip(new FieldLocation(holder, field));
-        VersionedLocation conflict = null;
+        Set<VersionedLocation> conflicts = Set.of();
         synchronized (tip) {
             view.commitStaging();
             if (tip.commit != null) {
-                conflict = view.merge(tip.commit);
+                conflicts = view.merge(tip.commit);
             }
-            if (conflict == null) {
+            if (conflicts.isEmpty()) {
                 field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
                 publish(tip, view);
             }
         }
-        handleConflict(conflict, view, "volatile write");
+        handleConflicts(conflicts, view, "volatile write");
     }
 
-    private void handleConflict(VersionedLocation conflict, BranchingView view, String at) {
-        if (conflict == null) {
+    private void handleConflicts(Set<VersionedLocation> conflicts, BranchingView view, String at) {
+        if (conflicts.isEmpty()) {
             return;
         }
         // Record a pending conflict, raised as a guest exception at the next safe point (top of the
         // bytecode loop, past any just-executed monitorexit), or by GuestRunnable if this was the
         // thread's final sync. We must NOT throw from inside the monitor op itself: that corrupts the
-        // synchronized block's exit machinery. The conflicted merge commit already advanced head, so
-        // the branch stays consistent if the conflict is caught and execution continues.
-        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict)
+        // synchronized block's exit machinery.
+
+        String where = conflicts.stream().map(BranchingMemoryModel::describe).sorted()
+                            .collect(Collectors.joining(", "));
+        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + where
                         + ", caught at " + at + " in " + context.getVM().topGuestSite());
     }
 

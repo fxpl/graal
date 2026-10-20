@@ -22,18 +22,20 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.ArrayDeque;
+import java.util.List;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * A guest thread's view in the branching model (the prototype's {@code branching::LocalVersionStore}):
  * a {@code head} into the commit DAG and a {@code staging} map of uncommitted writes.
- *
- * <p>The performance machinery (the {@code lastWriter} read cache and the vector-clock conflict check)
- * has been removed; {@link #read} and {@link #merge} are not yet re-implemented.
  *
  * <p>Not thread-safe, and does not need to be: a view is owned by one guest thread. Commits are
  * immutable {@link Commit} nodes shared across views (safe publication via final fields).
@@ -112,7 +114,83 @@ public final class BranchingView implements MemoryView {
         if (staged != null) {
             return staged;
         }
-        throw new UnsupportedOperationException("TODO: branching committed read (lastWriter cache removed)");
+
+        if (head == null) {
+            return MemoryModel.ABSENT;
+        }
+
+        // The pathological cases are:
+        // 1) the value is all the way back at version 0
+        // 2) we have multiple candidates
+
+        // Walk back from the current head through the commit history to find
+        // the most recent committed value for this location.
+        // We know that there is a unique last writer for each location in the
+        // commit history as the merges are conflict free.
+        // We have to make sure to find the latest committed value for this location.
+
+        Set<Commit> visited = new HashSet<>();
+        Set<Commit> candidates = new HashSet<>();
+        Set<Commit> heads = new HashSet<>();
+        heads.add(head);
+
+        while (!heads.isEmpty()) {
+            Commit current = heads.iterator().next();
+            heads.remove(current);
+
+            if (visited.contains(current)) {
+                continue;
+            }
+
+            visited.add(current);
+
+            // once we find a candidate stop
+            if (current.changes().containsKey(loc)) {
+                candidates.add(current);
+            } else {
+                // add the two parents to explore
+                heads.addAll(current.parents());
+            }
+        }
+
+        // If no candidates were found, the location is absent.
+        if (candidates.isEmpty()) {
+            return MemoryModel.ABSENT;
+        }
+
+        Set<Commit> alive = new HashSet<>(candidates);
+        visited = new HashSet<>();
+
+        for (Commit c : candidates) {
+
+            // If we have already visited this commit then we already know about
+            // it and it's ancestry, so continue to the next candidate
+            if (!alive.contains(c)) {
+                continue;
+            }
+
+            // Otherwise, start walking back from c to build up a collection of
+            // nodes visible from c. We reuse visited so eventually we will
+            // end up with just one commit not visible from the others
+            Deque<Commit> stack = new ArrayDeque<>(c.parents());
+            while (!stack.isEmpty()) {
+                Commit x = stack.pop();
+
+                // already went this way
+                if (!visited.add(x)) {
+                    continue;
+                }
+
+                // x is an ancestor of c so it can't be newest
+                alive.remove(x);
+                stack.addAll(x.parents());
+            }
+        }
+
+        // alive now holds exactly one commit: the newest writer
+        assert alive.size() == 1;
+        Commit latest = alive.iterator().next();
+        return latest.changes().get(loc);
     }
 
     /** Turn staged writes into a new commit on this thread's branch (no-op if nothing staged). */
@@ -151,13 +229,96 @@ public final class BranchingView implements MemoryView {
     }
 
     /**
-     * Merge the branch tip {@code otherHead} into this branch. Returns a location written concurrently
-     * on both branches (a conflict), else {@code null}. Staging must be empty — every sync action (lock
+     * Merge the branch tip {@code otherHead} into this branch. Returns a set of locations written
+     * by both branches (empty means none). Staging must be empty — every sync action (lock
      * acquire, join, volatile read/write) commits first.
      */
-    VersionedLocation merge(Commit otherHead) {
+    Set<VersionedLocation> merge(Commit otherHead) {
         assert staging.isEmpty();
-        throw new UnsupportedOperationException("TODO: branching merge (vector-clock conflict check removed)");
+
+        if (head == null) {
+            // either pickup the other commit as head (there is nothing to merge)
+            // or the genuinely is no operation to do here
+            if (otherHead != null) {
+                head = otherHead;
+            }
+            return Set.of();
+        }
+
+        if (otherHead == null) {
+            // just return as there is nothing to merge
+            return Set.of();
+        }
+
+        if (otherHead == head) {
+            // no point in doing this
+            return Set.of();
+        }
+
+        // walk back from head and otherHead and collect their history
+        Set<Commit> headsHistory = new HashSet<>();
+        Set<Commit> visited = new HashSet<>();
+        Set<Commit> heads = new HashSet<>();
+        heads.add(head);
+
+        while(!heads.isEmpty()) {
+            Commit current = heads.iterator().next();
+            heads.remove(current);
+
+            if(visited.contains(current)) {
+                continue;
+            }
+            visited.add(current);
+
+            headsHistory.add(current);
+            heads.addAll(current.parents());
+        }
+
+        Set<Commit> otherHeadsHistory = new HashSet<>();
+        visited.clear();
+        heads.clear();
+        heads.add(otherHead);
+
+        while(!heads.isEmpty()) {
+            Commit current = heads.iterator().next();
+            heads.remove(current);
+
+            if(visited.contains(current)) {
+                continue;
+            }
+            visited.add(current);
+
+            otherHeadsHistory.add(current);
+            heads.addAll(current.parents());
+        }
+
+        Set<Commit> mineOnly = new HashSet<>(headsHistory);
+        mineOnly.removeAll(otherHeadsHistory);
+        Set<Commit> theirsOnly = new HashSet<>(otherHeadsHistory);
+        theirsOnly.removeAll(headsHistory);
+
+        Set<VersionedLocation> changedLocations = new HashSet<>();
+        for (Commit c : mineOnly) {
+            changedLocations.addAll(c.changes().keySet());
+        }
+
+        Set<VersionedLocation> conflicts = new HashSet<>();
+        for (Commit c : theirsOnly) {
+            for (VersionedLocation loc : c.changes().keySet()) {
+                if (changedLocations.contains(loc)) {
+                    conflicts.add(loc);
+                }
+            }
+        }
+
+        if (!conflicts.isEmpty()) {
+            return conflicts;
+        }
+
+        // create the merge of the parents
+        Commit mergeCommit = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(head, otherHead), false);
+        head = mergeCommit;
+        return Set.of();
     }
 
     // --- MemoryView: deferred-conflict flag (raised at the bytecode safe point / thread end) ---
