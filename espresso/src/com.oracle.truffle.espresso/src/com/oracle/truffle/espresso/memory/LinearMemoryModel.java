@@ -77,12 +77,7 @@ public final class LinearMemoryModel implements MemoryModel {
 
     public LinearMemoryModel(EspressoContext context) {
         this.context = context;
-        String graphPath = context.getLanguage().getMemoryModelGraphPath();
-        GraphTrace graphTrace = graphPath.isEmpty() ? null : new GraphTrace(graphPath, true);
-        if (graphTrace != null) {
-            graphTrace.arm();
-        }
-        this.global = new GlobalVersionStore(graphTrace);
+        this.global = new GlobalVersionStore();
         this.collapseMode = context.getLanguage().getMemoryModelCollapseMode();
         this.collapseEvery = Math.max(1, context.getLanguage().getMemoryModelCollapseEvery());
         this.liveViews = collapseMode == EspressoOptions.MemoryModelCollapseMode.OFF ? null : ConcurrentHashMap.newKeySet();

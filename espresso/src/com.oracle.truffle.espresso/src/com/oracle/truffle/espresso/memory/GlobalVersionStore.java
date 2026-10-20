@@ -68,11 +68,6 @@ public final class GlobalVersionStore implements GlobalHistory {
     // the read lock. One long per committing push.
     private long[] writesThrough = new long[64];
     private final ReentrantReadWriteLock gLock = new ReentrantReadWriteLock();
-    private final GraphTrace trace;   // non-null only under --java.MemoryModelGraph
-
-    public GlobalVersionStore(GraphTrace trace) {
-        this.trace = trace;
-    }
 
     @Override
     public long currentCounter() {
@@ -109,7 +104,6 @@ public final class GlobalVersionStore implements GlobalHistory {
         try {
             VersionedLocation conflict = firstConflict(view);
             if (conflict != null) {
-                traceConflict(view, conflict);
                 view.setLastPulledWrites(0);
                 return conflict;
             }
@@ -148,7 +142,6 @@ public final class GlobalVersionStore implements GlobalHistory {
         try {
             VersionedLocation conflict = firstConflict(view);
             if (conflict != null) {
-                traceConflict(view, conflict);
                 return conflict;
             }
             long next = counter.incrementAndGet();
@@ -160,9 +153,6 @@ public final class GlobalVersionStore implements GlobalHistory {
                 // New head whose prev is the old head (null if first): O(1), no copy.
                 history.compute(e.getKey(), (k, old) -> new Version(next, e.getValue(), old));
                 VersioningStats.onGVersion(history.size());
-            }
-            if (trace != null) {
-                trace.push(next, view.staging());   // record the timeline node before staging is cleared
             }
             view.clearStaging();
             view.advanceBase(next);
@@ -187,18 +177,6 @@ public final class GlobalVersionStore implements GlobalHistory {
             }
         }
         return null;
-    }
-
-    /** Record a conflicting push/pull to the information-flow graph (no-op unless graphing is on). Called
-     * while holding {@code gLock}, so the competing head is stable. */
-    private void traceConflict(LinearLocalView view, VersionedLocation conflict) {
-        if (trace == null) {
-            return;
-        }
-        Version competing = history.get(conflict);   // the unseen newer version that firstConflict found
-        if (competing != null) {
-            trace.conflict(view.base(), view.staging(), conflict, competing.counter(), competing.value());
-        }
     }
 
     /**

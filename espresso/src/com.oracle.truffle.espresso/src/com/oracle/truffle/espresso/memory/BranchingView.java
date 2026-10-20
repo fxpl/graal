@@ -43,8 +43,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 public final class BranchingView implements MemoryView {
 
     private final long threadId;
-    private final GraphTrace trace;                        // non-null only under --java.MemoryModelGraph
-    private long counter;                                  // this thread's commit counter (Timestamp)
+    private long counter;                                 // this thread's commit counter (Timestamp)
     private Commit head;                                   // tip of this thread's branch (null = none)
     private Map<VersionedLocation, Object> staging = new HashMap<>();  // reassigned (moved) on commit
     // Sync-as-Share (stage-on-access): per-app-owned-array working copy, materialised on first access and
@@ -53,9 +52,8 @@ public final class BranchingView implements MemoryView {
     private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
     private String pendingConflict;
 
-    public BranchingView(long threadId, GraphTrace trace) {
+    public BranchingView(long threadId) {
         this.threadId = threadId;
-        this.trace = trace;
     }
 
     Commit head() {
@@ -208,16 +206,12 @@ public final class BranchingView implements MemoryView {
         // immutable-after-publication (nothing else aliases it) at no copy cost. A fresh empty map also
         // beats staging.clear() (which would retain the old capacity). The single biggest per-commit
         // allocation, gone.
-        Timestamp parent = head == null ? null : head.id();
         Map<VersionedLocation, Object> changes = staging;
         staging = new HashMap<>();
         Commit c = new Commit(new Timestamp(threadId, ++counter), changes,
-                        head == null ? List.of() : List.of(head), false);
+                        head == null ? List.of() : List.of(head));
         VersioningStats.onCommit(changes.size());
         head = c;
-        if (trace != null) {
-            trace.commit(threadId, counter, parent, c.changes());
-        }
     }
 
     /**
@@ -316,7 +310,7 @@ public final class BranchingView implements MemoryView {
         }
 
         // create the merge of the parents
-        Commit mergeCommit = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(head, otherHead), false);
+        Commit mergeCommit = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(head, otherHead));
         head = mergeCommit;
         return Set.of();
     }

@@ -388,12 +388,6 @@ public final class EspressoOptions {
                     usageSyntax = "<path>") //
     public static final OptionKey<String> ScheduleFile = new OptionKey<>("");
 
-    @Option(help = "Applies to: linear and branching. If set, write the memory model's information-flow graph to this path in Graphviz .dot at JVM shutdown: the commit DAG for branching, or the global-history timeline for linear. Recorded as a stream of commit/push events as they happen (independent of the in-memory structure, so it is correct even under history collapsing), not reconstructed. For small programs / paper figures; render with 'dot -Tpng'. Empty = disabled.", //
-                    category = OptionCategory.EXPERT, //
-                    stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "<path>") //
-    public static final OptionKey<String> MemoryModelGraph = new OptionKey<>("");
-
     /**
      * History-collapsing (reclamation) policy. <b>Applies to {@code MemoryModel=linear} only</b>
      * (ignored under {@code shared} and {@code branching}) — linear chains a version per write, so its

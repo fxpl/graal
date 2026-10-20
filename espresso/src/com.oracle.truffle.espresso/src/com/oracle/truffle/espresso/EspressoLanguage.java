@@ -159,7 +159,6 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     @CompilationFinal private int maxStackTraceDepth;
     @CompilationFinal private boolean implicitInteropEnabled;
     @CompilationFinal private EspressoOptions.MemoryModelMode memoryModelMode;
-    @CompilationFinal private String memoryModelGraphPath;
     @CompilationFinal private EspressoOptions.MemoryModelCollapseMode memoryModelCollapseMode;
     @CompilationFinal private int memoryModelCollapseEvery;
     // {@code true} iff a non-stock memory model is active. Kept as a separate PE-constant so the
@@ -273,7 +272,6 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         maxStackTraceDepth = env.getOptions().get(EspressoOptions.MaxJavaStackTraceDepth);
         implicitInteropEnabled = env.getOptions().get(EspressoOptions.EnableImplicitInterop);
         memoryModelMode = env.getOptions().get(EspressoOptions.MemoryModel);
-        memoryModelGraphPath = env.getOptions().get(EspressoOptions.MemoryModelGraph);
         memoryModelCollapseMode = env.getOptions().get(EspressoOptions.MemoryModelCollapse);
         memoryModelCollapseEvery = env.getOptions().get(EspressoOptions.MemoryModelCollapseEvery);
         versionedMemorySelected = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
@@ -447,7 +445,6 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.EagerFrameAnalysis) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.SpecCompliance) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModel) &&
-                        isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelGraph) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelCollapse) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModelCollapseEvery) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleExplore) &&
@@ -673,10 +670,6 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
 
     public EspressoOptions.MemoryModelMode getMemoryModelMode() {
         return memoryModelMode;
-    }
-
-    public String getMemoryModelGraphPath() {
-        return memoryModelGraphPath;
     }
 
     public EspressoOptions.MemoryModelCollapseMode getMemoryModelCollapseMode() {

@@ -30,14 +30,12 @@ import java.util.Map;
  * {@code changes} are the writes published by this commit (boxed values, keyed by
  * {@link VersionedLocation}); {@code parents} has one entry for an ordinary commit, zero for a
  * thread's first commit, and two for a <em>merge</em> commit (whose {@code changes} are empty).
- * {@code conflicted} marks a merge commit whose two branches wrote a common location (for the
- * revision-graph view; the conflict itself is reported to the guest separately).
  *
  * <p>Immutable: {@code final} fields plus unmodifiable {@code changes}/{@code parents}, so a commit
  * published into the DAG is safely visible to other threads via final-field semantics — the same
  * immutability {@link Version} relies on for the Linear model.
  */
-public record Commit(Timestamp id, Map<VersionedLocation, Object> changes, List<Commit> parents, boolean conflicted) {
+public record Commit(Timestamp id, Map<VersionedLocation, Object> changes, List<Commit> parents) {
 
     public Commit {
         changes = Map.copyOf(changes);
