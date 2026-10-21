@@ -52,6 +52,7 @@ import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.LanguageAccess;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.PackageTable;
+import com.oracle.truffle.espresso.memory.ObjectNumber;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
@@ -101,6 +102,13 @@ public final class GuestAllocator implements LanguageAccess {
         return language;
     }
 
+    private ObjectNumber nextObjectNumber() {
+        EspressoLanguage language = getLanguage();
+        return language.isVersionedMemorySelected()
+                        ? language.getThreadLocalState().nextObjectNumber()
+                        : null;
+    }
+
     /**
      * Allocates a new instance of the given class; does not call any constructor. Initializes the
      * class.
@@ -114,7 +122,7 @@ public final class GuestAllocator implements LanguageAccess {
         assert AllocationChecks.canAllocateNewReference(klass);
         assert klass != klass.getMeta().java_lang_Class;
         klass.safeInitialize();
-        StaticObject newObj = klass.getLinkedKlass().getShape(false).getFactory().create(klass);
+        StaticObject newObj = klass.getLinkedKlass().getShape(false).getFactory().create(klass, nextObjectNumber());
         initInstanceFields(newObj, klass);
         return trackAllocation(klass, newObj);
     }
@@ -157,7 +165,7 @@ public final class GuestAllocator implements LanguageAccess {
         EspressoLanguage lang = ctx.getLanguage();
 
         ObjectKlass guestClass = meta.java_lang_Class;
-        StaticObject newObj = guestClass.getLinkedKlass().getShape(false).getFactory().create(guestClass);
+        StaticObject newObj = guestClass.getLinkedKlass().getShape(false).getFactory().create(guestClass, nextObjectNumber());
 
         initInstanceFields(newObj, guestClass);
 
@@ -188,7 +196,7 @@ public final class GuestAllocator implements LanguageAccess {
     public StaticObject createStatics(ObjectKlass klass) {
         assert klass != null;
         CompilerAsserts.neverPartOfCompilation();
-        StaticObject newObj = klass.getLinkedKlass().getShape(true).getFactory().create(klass);
+        StaticObject newObj = klass.getLinkedKlass().getShape(true).getFactory().create(klass, nextObjectNumber());
         initInitialStaticFields(newObj, klass);
         return trackAllocation(klass, newObj);
     }
@@ -275,7 +283,7 @@ public final class GuestAllocator implements LanguageAccess {
         assert !(array instanceof StaticObject);
         assert array.getClass().isArray();
         assert klass.getComponentType().isPrimitive() || array instanceof StaticObject[];
-        StaticObject newObj = getLanguage().getArrayShape().getFactory().create(klass);
+        StaticObject newObj = getLanguage().getArrayShape().getFactory().create(klass, nextObjectNumber());
         getLanguage().getArrayProperty().setObject(newObj, array);
         return trackAllocation(klass, newObj);
     }
@@ -419,7 +427,7 @@ public final class GuestAllocator implements LanguageAccess {
                 throw EspressoError.shouldNotReachHere("A foreign object typed " + klass.getTypeAsString() + " is created while implicit interop is disabled.");
             }
         }
-        StaticObject newObj = lang.getForeignShape().getFactory().create(klass, true);
+        StaticObject newObj = lang.getForeignShape().getFactory().create(klass, true, null /* do not version foreign objects */);
         lang.getForeignProperty().setObject(newObj, foreignObject);
         if (klass != null) {
             klass.safeInitialize();

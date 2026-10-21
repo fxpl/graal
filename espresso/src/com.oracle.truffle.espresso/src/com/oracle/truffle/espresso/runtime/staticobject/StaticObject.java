@@ -43,6 +43,7 @@ import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
 import com.oracle.truffle.espresso.memory.MemoryModel;
+import com.oracle.truffle.espresso.memory.ObjectNumber;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
@@ -61,7 +62,7 @@ import com.oracle.truffle.espresso.runtime.dispatch.staticobject.SharedInterop;
 public class StaticObject implements TruffleObject, Cloneable {
 
     public static final StaticObject[] EMPTY_ARRAY = new StaticObject[0];
-    public static final StaticObject NULL = new StaticObject(null);
+    public static final StaticObject NULL = new StaticObject(null, null);
     public static final String CLASS_TO_STATIC = "static";
 
     private static final EspressoLock FOREIGN_MARKER = EspressoLock.create(BlockingSupport.UNINTERRUPTIBLE);
@@ -79,18 +80,21 @@ public class StaticObject implements TruffleObject, Cloneable {
     // touched under a versioned model; inert (always false) under --java.MemoryModel=shared.
     private boolean appOwned;
 
+    private final ObjectNumber objectNumber;
+
     // region Constructors
-    protected StaticObject(Klass klass) {
-        this(klass, false);
+    protected StaticObject(Klass klass, ObjectNumber objectNumber) {
+        this(klass, false, objectNumber);
     }
 
-    protected StaticObject(Klass klass, boolean isForeign) {
+    protected StaticObject(Klass klass, boolean isForeign, ObjectNumber objectNumber) {
         if (isForeign) {
             // This assignment is visible by all threads as a side-effect of the setting of the
             // final `klass` field in the constructor.
             lockOrForeignMarker = FOREIGN_MARKER;
         }
         this.klass = klass;
+        this.objectNumber = objectNumber;
     }
 
     @Override
@@ -491,11 +495,15 @@ public class StaticObject implements TruffleObject, Cloneable {
         return !isNull(this) && getKlass().isArray();
     }
 
+    public ObjectNumber objectNumber() {
+        return objectNumber;
+    }
+
     // region Factory interface.
     public interface StaticObjectFactory {
-        StaticObject create(Klass klass);
+        StaticObject create(Klass klass, ObjectNumber objectNumber);
 
-        StaticObject create(Klass klass, boolean isForeign);
+        StaticObject create(Klass klass, boolean isForeign, ObjectNumber objectNumber);
     }
     // endregion Factory interface.
 }

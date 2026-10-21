@@ -33,6 +33,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.memory.MemoryView;
+import com.oracle.truffle.espresso.memory.ObjectNumber;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.vm.VM;
 
@@ -65,6 +66,8 @@ public class EspressoThreadLocalState {
     // costs nothing under shared.
     private MemoryView memoryView;
 
+    private ObjectNumber objectNumber;
+
     // Sync-as-Share: application classes whose init this thread has already acquired (JLS §12.4.2 is
     // init-completion -> FIRST use, so the acquire fires once per class, not on every static access).
     // Owned by this guest thread, so a plain set is safe. Lazily created (null under shared/off).
@@ -74,6 +77,7 @@ public class EspressoThreadLocalState {
     public EspressoThreadLocalState(EspressoContext context, Thread t) {
         typeStack = new ClassRegistry.TypeStack();
         privilegedStack = new VM.PrivilegedStack(context);
+        objectNumber = ObjectNumber.objectNumberForThread(t.threadId());
         assert ((hostThread = new WeakReference<>(t)) != null);
     }
 
@@ -339,5 +343,10 @@ public class EspressoThreadLocalState {
     private static Thread getHost(StaticObject t) {
         assert t != null && StaticObject.notNull(t);
         return t.getKlass().getContext().getThreadAccess().getHost(t);
+    }
+
+    public ObjectNumber nextObjectNumber() {
+        objectNumber = objectNumber.next();
+        return objectNumber;
     }
 }
