@@ -156,6 +156,13 @@ public final class BranchingView implements MemoryView {
             return MemoryModel.ABSENT;
         }
 
+        // There was only one candidate commit, so just return that
+        if (candidates.size() == 1) {
+            return candidates.iterator().next().changes().get(loc);
+        }
+
+        // We had multiple candidates, so now we need to work out which is the only
+        // one which isn't shadowed
         Set<Commit> alive = new HashSet<>(candidates);
         visited = new HashSet<>();
 
