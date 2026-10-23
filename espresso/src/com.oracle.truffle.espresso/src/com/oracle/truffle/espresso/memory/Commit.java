@@ -88,7 +88,7 @@ public class Commit {
         return REF_COUNT.decrementAndGet(this);
     }
 
-    public int getRef() {
+    public int getRefCount() {
         return refCount;
     }
 

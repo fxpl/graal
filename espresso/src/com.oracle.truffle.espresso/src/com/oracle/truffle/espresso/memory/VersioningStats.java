@@ -47,6 +47,8 @@ final class VersioningStats {
     static final AtomicLong committedChanges = new AtomicLong(); // (location,value) pairs across all commits
                                                                 // = dag's retained value-slots (full history)
     static final AtomicLong merges = new AtomicLong();          // merge() calls that were not no-ops
+    static final AtomicLong folds = new AtomicLong();           // commitStaging folded into an exclusive head
+                                                                // (replaced it) instead of adding a commit
     static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
     static final AtomicLong markedForPurging = new AtomicLong();     // ...of which the GC found dead (Cleaner ran)
 
@@ -82,6 +84,13 @@ final class VersioningStats {
     static void onMerge() {
         if (ENABLED) {
             merges.incrementAndGet();
+        }
+    }
+
+    static void onFold(int changes) {
+        if (ENABLED) {
+            folds.incrementAndGet();
+            committedChanges.addAndGet(changes);
         }
     }
 
@@ -127,10 +136,11 @@ final class VersioningStats {
 
     private static void dump() {
         StringBuilder sb = new StringBuilder("[versioning-stats]");
-        if (commits.get() > 0 || merges.get() > 0 || cleanerRegistrations.get() > 0) {
+        if (commits.get() > 0 || merges.get() > 0 || folds.get() > 0 || cleanerRegistrations.get() > 0) {
             sb.append(" branching: commits=").append(commits)
                             .append(" committedChanges=").append(committedChanges)
                             .append(" merges=").append(merges)
+                            .append(" folds=").append(folds)
                             .append(" cleanerRegistrations=").append(cleanerRegistrations)
                             .append(" markedForPurging=").append(markedForPurging);
         }

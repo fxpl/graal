@@ -215,16 +215,29 @@ public final class BranchingView implements MemoryView {
         if (staging.isEmpty()) {
             return;
         }
-        // Move the staging map into the commit rather than copying it (new HashMap<>(staging)): the
-        // commit takes sole ownership and staging gets a fresh empty map, so changes() is still
-        // immutable-after-publication (nothing else aliases it) at no copy cost. A fresh empty map also
-        // beats staging.clear() (which would retain the old capacity). The single biggest per-commit
-        // allocation, gone.
+
+        // Grab the staging and clear it
         Map<VersionedLocation, Object> changes = staging;
         staging = new HashMap<>();
-        Commit c = new Commit(changes, head == null ? List.of() : List.of(head));
-        VersioningStats.onCommit(changes.size());
-        setHead(c);
+
+        // If the head has only one reference, it is this thread, and so we will
+        // replace the head with an updated change set
+        if (head != null && head.getRefCount() == 1) {
+            VersioningStats.onFold(changes.size());
+
+            head.changes().forEach((loc, v) -> {
+                changes.putIfAbsent(loc, v);
+            });
+
+            Commit c = new Commit(changes, head.parents());
+            Commit oldHead = head;
+            setHead(c);
+            oldHead.unlinkFromParents();
+        } else {
+            Commit c = new Commit(changes, head == null ? List.of() : List.of(head));
+            VersioningStats.onCommit(changes.size());
+            setHead(c);
+        }
     }
 
     /**

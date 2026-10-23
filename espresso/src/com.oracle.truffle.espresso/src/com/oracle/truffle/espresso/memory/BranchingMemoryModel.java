@@ -47,25 +47,15 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * <li><b>monitor enter</b> — commit, then merge the lock's published branch ({@link LockState}), then
  *     republish the holder's tip to the lock;</li>
  * <li><b>monitor exit</b> — commit and republish the holder's tip to the lock;</li>
- * <li><b>thread end</b> — commit, and record the terminal tip in {@code terminalHeads} for join.</li>
+ * <li><b>thread end</b> — commit, and record the final commit in {@code finishedThreadCommits} for
+ *     join.</li>
  * </ul>
  *
- * <p><b>Join.</b> There is no dedicated join hook. Guest {@code Thread.join} is
- * {@code synchronized(threadObject)}, so the joiner runs a {@code monitorenter}/{@code monitorexit} on
- * the thread object, and the joinee records its terminal head at {@code onThreadEnd}; the joiner's
- * monitor op then merges it. Two subtleties drive the design:
- * <ul>
- * <li>{@code Object.wait} inside {@code join} releases and re-acquires the monitor <em>without</em> a
- *     bytecode {@code monitorenter}, so the acquire-merge does not fire on wake-up. The joiner's only
- *     reliable post-termination hook is the final {@code monitorexit}, so we merge the joinee's
- *     terminal head at both enter and exit (idempotent).</li>
- * <li>The terminal head must <em>not</em> live in the thread object's {@link LockState}: the joiner's
- *     own {@code monitorenter} republishes its tip to that lock state (and {@code Thread.start} already
- *     took the monitor once), clobbering the joinee's head before the exit could merge it. So terminal
- *     heads live in a separate write-once {@code terminalHeads} map that monitor ops only read.</li>
- * </ul>
- * The {@code signalAll} that wakes the joiner, and the {@code TERMINATED} state it then observes,
- * establish the happens-before from the joinee's record to the joiner's merge.
+ * <p><b>Join (stop-gap).</b> There is no join hook: guest {@code Thread.join} locks the {@code Thread}
+ * object and waits, and Espresso wakes joiners from host code the model never sees. So a finished
+ * thread's final commit is kept in {@code finishedThreadCommits}, and monitor enter/exit on a lock that
+ * is actually a finished thread merges it explicitly. To be replaced by modelling join properly (see
+ * the worklist's "replace {@code terminalHeads}" row).
  *
  * <p>Scope (B1): instance + static fields, monitor lock/unlock, thread start/end, spawn, join. Arrays,
  * volatiles, and the lazy / lazy-suppress conflict policies are later milestones.
@@ -96,18 +86,11 @@ public final class BranchingMemoryModel implements MemoryModel {
     private final Map<StaticObject, ForkPoint> pendingForks = new ConcurrentHashMap<>();
 
     /**
-     * Terminal branch tips of ended threads, keyed by the guest {@code Thread} object, for join.
-     * Write-once by the ending thread at {@link #onThreadEnd}; read (merged, never overwritten) by a
-     * joiner's monitor op on the thread object. Kept separate from {@link #lockStates} precisely so a
-     * joiner's own enter/exit republish cannot clobber the joinee's published head. See class doc.
-     *
-     * <p><b>Unbounded retention (never removed).</b> Grows with total thread count. Weak keys on the
-     * {@code Thread} object do not help: the model versions a constructed thread's own fields, so the
-     * commits holding those writes pin every {@code Thread} it makes (an ended thread is not
-     * collectable under this model), so the weak key never clears. The retention here is a bounded
-     * per-thread constant — a terminal is a shared commit, not a copy.
+     * Stop-gap for join: the final commit of each finished thread, keyed by its guest {@code Thread}
+     * object. Written once at {@link #onThreadEnd}; merged by a monitor op on that {@code Thread} (see
+     * {@link #isLockAFinishedThread}). Never removed, so it pins every finished thread's final commit.
      */
-    private final Map<StaticObject, Commit> terminalHeads = new ConcurrentHashMap<>();
+    private final Map<StaticObject, Commit> finishedThreadCommits = new ConcurrentHashMap<>();
 
     private final Set<ObjectNumber> objectsMarkedForPurging = ConcurrentHashMap.newKeySet();
 
@@ -289,14 +272,12 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onThreadEnd() {
-        // Commit the final staging and record the terminal tip for join. A joiner is synchronized on
-        // this thread object, so its monitor op merges terminalHeads[self]. We record it here (before
-        // the terminating notify that wakes joiners), in a map monitor ops never overwrite. See class
-        // doc for why this cannot live in the thread object's LockState.
+        // Commit the final staging and record the final commit for join (stop-gap, see class doc),
+        // before the terminating notify that wakes joiners.
         BranchingView view = currentView();
         view.commitStaging();
         if (view.head() != null) {
-            terminalHeads.put(context.getCurrentPlatformThread(), view.head());
+            finishedThreadCommits.put(context.getCurrentPlatformThread(), view.head());
 
             // intentionally do _not_ drop the refcount of the final commit
             // so that it persists for the next threads to join
@@ -319,27 +300,26 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onMonitorEnter(StaticObject lock) {
-        // Acquire = commit, merge the lock's published branch, republish this holder's tip. Also merge
-        // a terminated thread's head if this monitor is a join target (see mergeTerminal).
+        // Acquire = commit, merge the lock's published branch, republish this holder's tip.
         BranchingView view = currentView();
         view.commitStaging();
         LockState state = lockState(lock);
         Set<VersionedLocation> conflicts = new HashSet<>(view.merge(state.commit));
-        publish(state, view);
-        conflicts.addAll(mergeTerminal(lock, view));
+
+        // Join stop-gap: a lock that is actually a finished thread also carries its final commit.
+        if (isLockAFinishedThread(lock)) {
+            conflicts.addAll(view.merge(finishedThreadCommits.get(lock)));
+        }
         handleConflicts(conflicts, view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
     @Override
     public void onMonitorExit(StaticObject lock) {
-        // Release = commit, republish this holder's tip to the lock (gitmem on_unlock; no lock-branch
-        // merge — ordinary lock conflicts are caught at the acquire). Also merge a terminated thread's
-        // head if this monitor is a join target: this is the point at which join reliably observes the
-        // joinee's terminal head (the wait-reacquire inside join fires no monitor hook). See class doc.
+        // Release = commit, republish this holder's tip to the lock (no lock-branch merge: ordinary lock
+        // conflicts are caught at the acquire).
         BranchingView view = currentView();
         view.commitStaging();
         publish(lockState(lock), view);
-        handleConflicts(mergeTerminal(lock, view), view, MemoryModel.monitorSyncLabel(context, lock, false));
     }
 
     /** Publish the view's current tip to a lock state. */
@@ -354,14 +334,9 @@ public final class BranchingMemoryModel implements MemoryModel {
         state.commit = newHeadForSyncObject;
     }
 
-    /**
-     * If {@code lock} is a thread object that has ended, merge its terminal tip into this view (join
-     * semantics); otherwise a no-op. Merged at both enter and exit, so must be idempotent. Never
-     * mutates {@link #terminalHeads}.
-     */
-    private Set<VersionedLocation> mergeTerminal(StaticObject lock, BranchingView view) {
-        Commit terminal = terminalHeads.get(lock);
-        return terminal == null ? Set.of() : view.merge(terminal);
+    /** Join stop-gap: is this lock actually a {@code Thread} object whose thread has finished? */
+    private boolean isLockAFinishedThread(StaticObject lock) {
+        return finishedThreadCommits.containsKey(lock);
     }
 
     @Override
