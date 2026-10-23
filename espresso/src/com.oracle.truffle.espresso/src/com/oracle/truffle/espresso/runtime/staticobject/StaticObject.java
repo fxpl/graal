@@ -504,8 +504,9 @@ public class StaticObject implements TruffleObject, Cloneable {
         return objectNumber;
     }
 
-    public void setObjectNumber(ObjectNumber objectNumber) {
+    public void resetObjectNumberForClone(ObjectNumber objectNumber) {
         this.objectNumber = objectNumber;
+        this.hasBeenVersioned = false;
     }
 
     public boolean hasBeenVersioned() {
