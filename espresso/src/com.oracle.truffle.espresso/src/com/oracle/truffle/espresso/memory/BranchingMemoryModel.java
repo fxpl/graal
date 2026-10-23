@@ -324,8 +324,14 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Release = commit, republish this holder's tip to the lock (no lock-branch merge: ordinary lock
         // conflicts are caught at the acquire).
         BranchingView view = currentView();
+
+        LockState lockState = lockState(lock);
+        if (lockState.commit != null) {
+            lockState.commit.decRef();
+            lockState.commit = null;
+        }
         view.commitStaging();
-        publish(lockState(lock), view);
+        publish(lockState, view);
     }
 
     /** Publish the view's current tip to a lock state. */
