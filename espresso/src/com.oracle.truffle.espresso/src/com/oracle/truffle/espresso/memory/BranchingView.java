@@ -54,6 +54,19 @@ public final class BranchingView implements MemoryView {
         return head;
     }
 
+    void setHead(Commit c) {
+        // we must increment before decrementing, otherwise in the case that
+        // head == c, we would make the refcount 0 briefly which would represent
+        // an unreferenced node
+        if (c != null) {
+            c.incRef();
+        }
+        if (head != null) {
+            head.decRef();
+        }
+        head = c;
+    }
+
     boolean stagingEmpty() {
         return staging.isEmpty();
     }
@@ -211,7 +224,7 @@ public final class BranchingView implements MemoryView {
         staging = new HashMap<>();
         Commit c = new Commit(changes, head == null ? List.of() : List.of(head));
         VersioningStats.onCommit(changes.size());
-        head = c;
+        setHead(c);
     }
 
     /**
@@ -219,7 +232,7 @@ public final class BranchingView implements MemoryView {
      * the parent captured at spawn (spawn: child adopts parent).
      */
     void adopt(Commit forkPoint) {
-        this.head = forkPoint;
+        setHead(forkPoint);
     }
 
     /**
@@ -234,7 +247,7 @@ public final class BranchingView implements MemoryView {
             // either pickup the other commit as head (there is nothing to merge)
             // or the genuinely is no operation to do here
             if (otherHead != null) {
-                head = otherHead;
+                setHead(otherHead);
             }
             return Set.of();
         }
@@ -311,7 +324,7 @@ public final class BranchingView implements MemoryView {
 
         // create the merge of the parents
         Commit mergeCommit = new Commit(Map.of(), List.of(head, otherHead));
-        head = mergeCommit;
+        setHead(mergeCommit);
         return Set.of();
     }
 

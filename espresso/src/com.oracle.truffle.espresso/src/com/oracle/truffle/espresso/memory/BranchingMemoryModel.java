@@ -281,6 +281,9 @@ public final class BranchingMemoryModel implements MemoryModel {
         ForkPoint fork = pendingForks.remove(self);
         if (fork != null) {
             currentView().adopt(fork.head());
+            if (fork.head() != null) {
+                fork.head().decRef();
+            }
         }
     }
 
@@ -294,6 +297,9 @@ public final class BranchingMemoryModel implements MemoryModel {
         view.commitStaging();
         if (view.head() != null) {
             terminalHeads.put(context.getCurrentPlatformThread(), view.head());
+
+            // intentionally do _not_ drop the refcount of the final commit
+            // so that it persists for the next threads to join
         }
     }
 
@@ -304,6 +310,11 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         pendingForks.put(childThread, new ForkPoint(view.head()));
+
+        // set an extra reference to the head for the child which is waiting to start
+        if (view.head() != null) {
+            view.head().incRef();
+        }
     }
 
     @Override
@@ -333,7 +344,14 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     /** Publish the view's current tip to a lock state. */
     private static void publish(LockState state, BranchingView view) {
-        state.commit = view.head();
+        Commit newHeadForSyncObject = view.head();
+        if (newHeadForSyncObject != null) {
+            newHeadForSyncObject.incRef();
+        }
+        if (state.commit != null) {
+            state.commit.decRef();
+        }
+        state.commit = newHeadForSyncObject;
     }
 
     /**
