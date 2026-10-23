@@ -24,6 +24,7 @@ package com.oracle.truffle.espresso.memory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
 /**
  * An immutable node in the branching model's commit DAG (the prototype's {@code branching::Commit}).
@@ -35,19 +36,26 @@ import java.util.Map;
  * published into the DAG is safely visible to other threads via final-field semantics — the same
  * immutability {@link Version} relies on for the Linear model.
  */
-public record Commit(Timestamp id, Map<VersionedLocation, Object> changes, List<Commit> parents) {
+public class Commit {
 
-    public Commit {
-        changes = Map.copyOf(changes);
-        parents = List.copyOf(parents);
+    private final Map<VersionedLocation, Object> changes;
+    private final List<Commit> parents;
+
+    private volatile int refCount;
+    private static final AtomicIntegerFieldUpdater<Commit> REF_COUNT =
+                AtomicIntegerFieldUpdater.newUpdater(Commit.class, "refCount");
+
+    public Commit(Map<VersionedLocation, Object> changes, List<Commit> parents) {
+        this.changes = Map.copyOf(changes);
+        this.parents = List.copyOf(parents);
+
+        for (Commit p : this.parents) {
+            p.incRef();
+        }
     }
 
     // Identity equality: a Commit is a NODE in the DAG -- two distinct node objects are distinct even
-    // with identical content. This is not just semantics: the record's default value-based equals/
-    // hashCode recurse through `parents`, so hashing one commit would hash its entire ancestry (O(DAG)),
-    // making the O(1) `visited`-set operations in a DAG walk O(DAG) each and the walk O(DAG^2). All
-    // uses compare commits by identity (`==`) or key maps by VersionedLocation/StaticObject, so identity
-    // equality here is both correct and what the callers already assume.
+    // with identical content.
     @Override
     public boolean equals(Object o) {
         return this == o;
@@ -60,5 +68,37 @@ public record Commit(Timestamp id, Map<VersionedLocation, Object> changes, List<
 
     boolean isMerge() {
         return parents.size() >= 2;
+    }
+
+    public Map<VersionedLocation, Object> changes() {
+        return changes;
+    }
+
+    public List<Commit> parents() {
+        return parents;
+    }
+
+    public void incRef() {
+        // don't allow a commits refcount to be bumped back from -1
+        int previous = REF_COUNT.getAndIncrement(this);
+        assert previous >= 0 : "incRef on a commit already unlinked from the graph";
+    }
+
+    public int decRef() {
+        return REF_COUNT.decrementAndGet(this);
+    }
+
+    public int getRef() {
+        return refCount;
+    }
+
+    void unlinkFromParents() {
+        // do not unlink the parents unless the count for this node is already
+        // set to 0, we then set the node to -1 to ensure this only runs once
+        assert refCount == 0 : "unlinkFromParents on a commit with references or already unlinked";
+        for (Commit p : parents) {
+            p.decRef();
+        }
+        decRef();
     }
 }

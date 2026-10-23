@@ -27,7 +27,6 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import com.oracle.truffle.espresso.impl.Field;
@@ -75,7 +74,6 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     private final EspressoContext context;
     private volatile boolean active = false;
-    private final AtomicLong threadIds = new AtomicLong();
 
     // Sync-as-Share (stage-on-access): the shared version-0 cache. The first thread to read a versioned
     // field with no staged/committed value freezes the physical (genesis) value here; every thread then
@@ -119,7 +117,10 @@ public final class BranchingMemoryModel implements MemoryModel {
     record MarkObjectForPurging(ObjectNumber objectNumber, Set<ObjectNumber> objectsToPurge) implements Runnable {
 
         @Override
-        public void run() { objectsToPurge.add(objectNumber); }
+        public void run() {
+            objectsToPurge.add(objectNumber);
+            VersioningStats.onMarkedForPurging();
+        }
     }
 
     /* A cleaner to purge out object numbers that represent objects GC'd */
@@ -129,6 +130,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         if (!object.isCleanerRegistered()) {
             object.markCleanerRegistered();
             cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), objectsMarkedForPurging));
+            VersioningStats.onCleanerRegistered();
         }
     }
 
@@ -148,7 +150,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        return new BranchingView(threadIds.getAndIncrement());
+        return new BranchingView();
     }
 
     @Override

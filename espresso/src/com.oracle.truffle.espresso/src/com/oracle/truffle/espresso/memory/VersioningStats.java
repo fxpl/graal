@@ -47,6 +47,8 @@ final class VersioningStats {
     static final AtomicLong committedChanges = new AtomicLong(); // (location,value) pairs across all commits
                                                                 // = dag's retained value-slots (full history)
     static final AtomicLong merges = new AtomicLong();          // merge() calls that were not no-ops
+    static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
+    static final AtomicLong markedForPurging = new AtomicLong();     // ...of which the GC found dead (Cleaner ran)
 
     // Linear.
     static final AtomicLong gVersions = new AtomicLong();       // Version nodes ever appended to g
@@ -83,6 +85,19 @@ final class VersioningStats {
         }
     }
 
+    static void onCleanerRegistered() {
+        if (ENABLED) {
+            cleanerRegistrations.incrementAndGet();
+        }
+    }
+
+    /** Called on the Cleaner's thread, after a GC found a registered object unreachable. */
+    static void onMarkedForPurging() {
+        if (ENABLED) {
+            markedForPurging.incrementAndGet();
+        }
+    }
+
     static void onGVersion(int distinctLocations) {
         if (ENABLED) {
             gVersions.incrementAndGet();
@@ -112,10 +127,12 @@ final class VersioningStats {
 
     private static void dump() {
         StringBuilder sb = new StringBuilder("[versioning-stats]");
-        if (commits.get() > 0 || merges.get() > 0) {
+        if (commits.get() > 0 || merges.get() > 0 || cleanerRegistrations.get() > 0) {
             sb.append(" branching: commits=").append(commits)
                             .append(" committedChanges=").append(committedChanges)
-                            .append(" merges=").append(merges);
+                            .append(" merges=").append(merges)
+                            .append(" cleanerRegistrations=").append(cleanerRegistrations)
+                            .append(" markedForPurging=").append(markedForPurging);
         }
         if (gVersions.get() > 0) {
             sb.append(" linear: gVersions=").append(gVersions)

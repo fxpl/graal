@@ -42,19 +42,13 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  */
 public final class BranchingView implements MemoryView {
 
-    private final long threadId;
-    private long counter;                                 // this thread's commit counter (Timestamp)
-    private Commit head;                                   // tip of this thread's branch (null = none)
+    private Commit head;                                 // tip of this thread's branch (null = none)
     private Map<VersionedLocation, Object> staging = new HashMap<>();  // reassigned (moved) on commit
     // Sync-as-Share (stage-on-access): per-app-owned-array working copy, materialised on first access and
     // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging and
     // cleared at each commit, so it rebuilds from post-commit committed state next epoch.
     private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
     private String pendingConflict;
-
-    public BranchingView(long threadId) {
-        this.threadId = threadId;
-    }
 
     Commit head() {
         return head;
@@ -215,8 +209,7 @@ public final class BranchingView implements MemoryView {
         // allocation, gone.
         Map<VersionedLocation, Object> changes = staging;
         staging = new HashMap<>();
-        Commit c = new Commit(new Timestamp(threadId, ++counter), changes,
-                        head == null ? List.of() : List.of(head));
+        Commit c = new Commit(changes, head == null ? List.of() : List.of(head));
         VersioningStats.onCommit(changes.size());
         head = c;
     }
@@ -317,7 +310,7 @@ public final class BranchingView implements MemoryView {
         }
 
         // create the merge of the parents
-        Commit mergeCommit = new Commit(new Timestamp(threadId, ++counter), Map.of(), List.of(head, otherHead));
+        Commit mergeCommit = new Commit(Map.of(), List.of(head, otherHead));
         head = mergeCommit;
         return Set.of();
     }
