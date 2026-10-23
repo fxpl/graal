@@ -279,12 +279,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // the reference count of the terminalHead.
         // The Commit itself will be GC'd but we need to not lose transitive refCounts
         Commit terminalHead = view.head();
-        cleaner.register(thread, () -> {
-            terminalHead.decRef();
-        });
-
-        // intentionally do _not_ drop the refcount of the final commit
-        // so that it persists for the next threads to join
+        cleaner.register(thread, () -> { terminalHead.decRef(); });
     }
 
     @Override
