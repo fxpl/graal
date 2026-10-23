@@ -307,7 +307,16 @@ public final class LinearMemoryModel implements MemoryModel {
     @Override
     public void onThreadEnd() {
         LinearLocalView view = currentView();
-        handleConflict(pushG(view), view, "thread exit");
+        VersionedLocation conflict = pushG(view);
+        if (conflict != null) {
+            // OPEN DESIGN DECISION (worklist: "what a failed thread end does"). Thread end now runs at
+            // the real end of the thread (ThreadAccess.setTerminateStatusAndNotify), where no guest frame
+            // can catch a conflict, and what should happen is not designed yet. Fail loudly until it is.
+            String msg = "Sync-as-Share conflict in a thread's final push, on " + describe(conflict)
+                            + ": UNDESIGNED — what a failed thread end does is an open design decision";
+            System.err.println("[sync-as-share] " + msg);
+            assert false : msg;
+        }
         if (collapsing()) {
             // Retire this view before collapsing so the ending thread no longer clamps the threshold.
             liveViews.remove(view);
@@ -386,8 +395,8 @@ public final class LinearMemoryModel implements MemoryModel {
             return;
         }
         // Record a pending conflict; it is raised as a guest exception at the next safe point (the top
-        // of the bytecode loop, past any just-executed monitorexit), or by GuestRunnable if this was
-        // the thread's final push. We must NOT throw from inside the monitor op itself: that corrupts
+        // of the bytecode loop, past any just-executed monitorexit). (A thread's final push does not come
+        // here: see onThreadEnd.) We must NOT throw from inside the monitor op itself: that corrupts
         // the synchronized block's exit machinery (the implicit exception-path monitorexit re-runs).
         // `at` names the synchronization point that caught it, plus the guest site, for diagnosis.
         view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict)

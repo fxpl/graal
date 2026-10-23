@@ -1024,6 +1024,7 @@ public class EspressoSymbols {
         public static final Symbol<Name> HIDDEN_unparkSignals = SYMBOLS.putName("0unparkSignals");
         public static final Symbol<Name> HIDDEN_parkLock = SYMBOLS.putName("0parkLock");
         public static final Symbol<Name> HIDDEN_hostThread = SYMBOLS.putName("0hostThread");
+        public static final Symbol<Name> HIDDEN_finalComit = SYMBOLS.putName("0finalCommit");
         public static final Symbol<Name> HIDDEN_espressoManaged = SYMBOLS.putName("0espressoManaged");
         public static final Symbol<Name> HIDDEN_toNativeLock = SYMBOLS.putName("0toNativeLock");
         public static final Symbol<Name> HIDDEN_interrupted = SYMBOLS.putName("0interrupted");

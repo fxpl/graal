@@ -47,7 +47,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * <li><b>monitor enter</b> — commit, then merge the lock's published branch ({@link LockState}), then
  *     republish the holder's tip to the lock;</li>
  * <li><b>monitor exit</b> — commit and republish the holder's tip to the lock;</li>
- * <li><b>thread end</b> — commit, and record the final commit in {@code finishedThreadCommits} for
+ * <li><b>thread end</b> — commit, and record the final commit in ... for
  *     join.</li>
  * </ul>
  *
@@ -84,13 +84,6 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     /** Fork points recorded at spawn, keyed by the child's guest {@code Thread}; consumed at its start. */
     private final Map<StaticObject, ForkPoint> pendingForks = new ConcurrentHashMap<>();
-
-    /**
-     * Stop-gap for join: the final commit of each finished thread, keyed by its guest {@code Thread}
-     * object. Written once at {@link #onThreadEnd}; merged by a monitor op on that {@code Thread} (see
-     * {@link #isLockAFinishedThread}). Never removed, so it pins every finished thread's final commit.
-     */
-    private final Map<StaticObject, Commit> finishedThreadCommits = new ConcurrentHashMap<>();
 
     private final Set<ObjectNumber> objectsMarkedForPurging = ConcurrentHashMap.newKeySet();
 
@@ -272,16 +265,31 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onThreadEnd() {
-        // Commit the final staging and record the final commit for join (stop-gap, see class doc),
+        // Commit the final staging and record the final commit for join,
         // before the terminating notify that wakes joiners.
         BranchingView view = currentView();
         view.commitStaging();
-        if (view.head() != null) {
-            finishedThreadCommits.put(context.getCurrentPlatformThread(), view.head());
 
-            // intentionally do _not_ drop the refcount of the final commit
-            // so that it persists for the next threads to join
+        // Set the hidden thread slot to store the final commit, this lets a joining thread
+        // pick up the commit even once the thread has been deallocated
+        StaticObject thread = context.getCurrentPlatformThread();
+        context.getMeta().java_lang_Thread_0finalCommit.setHiddenObject(thread, view.head());
+
+        // intentionally do _not_ drop the refcount of the final commit
+        // so that it persists for the next threads to join
+    }
+
+    @Override
+    public void onJoin(StaticObject joined) {
+        // Join (paper Join rule): this thread detected that `joined` terminated, so pull the final
+        // commit the joined thread stored on its Thread object. Absent if it never committed anything.
+        Object finalCommit = context.getMeta().java_lang_Thread_0finalCommit.getHiddenObject(joined);
+        if (!(finalCommit instanceof Commit commit)) {
+            return;
         }
+        BranchingView view = currentView();
+        view.commitStaging();
+        handleConflicts(view.merge(commit), view, "join");
     }
 
     @Override
@@ -305,11 +313,6 @@ public final class BranchingMemoryModel implements MemoryModel {
         view.commitStaging();
         LockState state = lockState(lock);
         Set<VersionedLocation> conflicts = new HashSet<>(view.merge(state.commit));
-
-        // Join stop-gap: a lock that is actually a finished thread also carries its final commit.
-        if (isLockAFinishedThread(lock)) {
-            conflicts.addAll(view.merge(finishedThreadCommits.get(lock)));
-        }
         handleConflicts(conflicts, view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
@@ -332,11 +335,6 @@ public final class BranchingMemoryModel implements MemoryModel {
             state.commit.decRef();
         }
         state.commit = newHeadForSyncObject;
-    }
-
-    /** Join stop-gap: is this lock actually a {@code Thread} object whose thread has finished? */
-    private boolean isLockAFinishedThread(StaticObject lock) {
-        return finishedThreadCommits.containsKey(lock);
     }
 
     @Override

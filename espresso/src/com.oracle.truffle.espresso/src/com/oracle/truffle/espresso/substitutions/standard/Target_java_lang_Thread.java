@@ -201,10 +201,19 @@ public final class Target_java_lang_Thread {
         hostThread.setPriority(newPriority);
     }
 
-    @Substitution(hasReceiver = true, languageFilter = VersionFilter.Java18OrEarlier.class)
+    // Drop the substitution language filter so that we ensure we always replace isAlive to
+    // catch the joining actions
+    @Substitution(hasReceiver = true)
     public static boolean isAlive(@JavaType(Thread.class) StaticObject self,
                     @Inject EspressoContext context) {
-        return context.getThreadAccess().isAlive(self);
+        boolean isAlive = context.getThreadAccess().isAlive(self);
+        // we only need to join when another thread witnesses that the thread
+        // has terminated
+        if (!isAlive && context.isVersionedMemoryEnabled()) {
+            context.getMemoryModel().onJoin(self);
+        }
+
+        return isAlive;
     }
 
     @SuppressWarnings("unused")

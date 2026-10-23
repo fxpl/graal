@@ -589,6 +589,11 @@ public final class ThreadAccess extends ContextAccessImpl implements GuestInterr
     private void setTerminateStatusAndNotify(StaticObject guest) {
         guest.getLock(getContext()).lock();
         try {
+            // Check that we are a guess thread running (and not some host thread?)
+            // and then check if we need to do VersionControl things
+            if(getContext().getCurrentPlatformThread() == guest && getContext().isVersionedMemoryEnabled()) {
+                getContext().getMemoryModel().onThreadEnd();
+            }
             setState(guest, ThreadState.DefaultStates.TERMINATED);
             setEETopDead(guest);
             // Notify waiting threads you are done working

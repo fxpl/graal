@@ -66,7 +66,7 @@ public class EspressoThreadLocalState {
     // costs nothing under shared.
     private MemoryView memoryView;
 
-    private ObjectNumber objectNumber;
+    private ObjectNumber currentObjectNumber;
 
     // Sync-as-Share: application classes whose init this thread has already acquired (JLS §12.4.2 is
     // init-completion -> FIRST use, so the acquire fires once per class, not on every static access).
@@ -77,7 +77,7 @@ public class EspressoThreadLocalState {
     public EspressoThreadLocalState(EspressoContext context, Thread t) {
         typeStack = new ClassRegistry.TypeStack();
         privilegedStack = new VM.PrivilegedStack(context);
-        objectNumber = ObjectNumber.objectNumberForThread(t.threadId());
+        currentObjectNumber = ObjectNumber.objectNumberForThread(t.threadId());
         assert ((hostThread = new WeakReference<>(t)) != null);
     }
 
@@ -346,7 +346,7 @@ public class EspressoThreadLocalState {
     }
 
     public ObjectNumber nextObjectNumber() {
-        objectNumber = objectNumber.next();
-        return objectNumber;
+        currentObjectNumber = currentObjectNumber.next();
+        return currentObjectNumber;
     }
 }

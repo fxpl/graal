@@ -134,6 +134,15 @@ public interface MemoryModel {
     void onThreadEnd();
 
     /**
+     * Join (paper Join rule): the current thread has just detected that {@code joined} terminated
+     * ({@code Thread.isAlive()} returned {@code false}; {@code join} loops on it). This is the point
+     * the joined thread's final action synchronizes-with (JLS 17.4.4). A thread action, not a monitor
+     * action. Default: nothing (linear's monitor operations already pull the global history).
+     */
+    default void onJoin(StaticObject joined) {
+    }
+
+    /**
      * Thread spawn (runs on the parent). Linear: the parent publishes its view so the child (which
      * pulls on start) inherits it. Branching: the parent commits and records a fork point that the
      * {@code childThread} adopts at its start. {@code childThread} is the child's guest {@code Thread}
