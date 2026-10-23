@@ -171,11 +171,15 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public Object readField(StaticObject holder, Field field) {
-        FieldLocation loc = new FieldLocation(holder, field);
-        Object v = currentView().read(loc);
-        if (v != MemoryModel.ABSENT) {
-            return v;
+        FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
+
+        if (holder.hasBeenVersioned()) {
+            Object v = currentView().read(loc);
+            if (v != MemoryModel.ABSENT) {
+                return v;
+            }
         }
+
         // Not staged and no committed version: the shared frozen genesis, else ABSENT (caller reads the
         // slot and captures it here). read() checks committed first, so a committed value shadows genesis.
         Object g = genesis.get(loc);
@@ -184,13 +188,14 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
-        currentView().stage(new FieldLocation(holder, field), value);
+        currentView().stage(new FieldLocation(holder.getObjectNumber(), field), value);
+        holder.markHasBeenVersioned();
     }
 
     @Override
     public void captureRead(StaticObject holder, Field field, Object value) {
         // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
-        genesis.putIfAbsent(new FieldLocation(holder, field), value);
+        genesis.putIfAbsent(new FieldLocation(holder.getObjectNumber(), field), value);
     }
 
     @Override
@@ -336,7 +341,7 @@ public final class BranchingMemoryModel implements MemoryModel {
             return StaticObject.NULL;
         }
         BranchingView view = currentView();
-        LockState tip = volatileTip(new FieldLocation(holder, field));
+        LockState tip = volatileTip(new FieldLocation(holder.getObjectNumber(), field));
         Set<VersionedLocation> conflict = Set.of();
         Object value;
         synchronized (tip) {
@@ -374,7 +379,7 @@ public final class BranchingMemoryModel implements MemoryModel {
             return;
         }
         BranchingView view = currentView();
-        LockState tip = volatileTip(new FieldLocation(holder, field));
+        LockState tip = volatileTip(new FieldLocation(holder.getObjectNumber(), field));
         Set<VersionedLocation> conflicts = Set.of();
         synchronized (tip) {
             view.commitStaging();

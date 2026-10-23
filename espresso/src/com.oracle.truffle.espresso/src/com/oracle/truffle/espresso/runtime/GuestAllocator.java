@@ -144,6 +144,7 @@ public final class GuestAllocator implements LanguageAccess {
                 // Call `this.clone()` rather than `super.clone()` to execute the `clone()` methods
                 // of generated subtypes.
                 obj = (StaticObject) toCopy.clone();
+                obj.setObjectNumber(nextObjectNumber());
             } catch (CloneNotSupportedException e) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw EspressoError.shouldNotReachHere(e);

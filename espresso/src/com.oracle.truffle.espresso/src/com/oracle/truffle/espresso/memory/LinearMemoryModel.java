@@ -224,7 +224,7 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public Object readField(StaticObject holder, Field field) {
-        FieldLocation loc = new FieldLocation(holder, field);
+        FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
         Object v = read(loc);
         if (v != MemoryModel.ABSENT) {
             return v;
@@ -237,13 +237,14 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
-        write(new FieldLocation(holder, field), value);
+        write(new FieldLocation(holder.getObjectNumber(), field), value);
+        holder.markHasBeenVersioned();
     }
 
     @Override
     public void captureRead(StaticObject holder, Field field, Object value) {
         // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
-        genesis.putIfAbsent(new FieldLocation(holder, field), value);
+        genesis.putIfAbsent(new FieldLocation(holder.getObjectNumber(), field), value);
     }
 
     @Override
@@ -351,7 +352,7 @@ public final class LinearMemoryModel implements MemoryModel {
         }
         LinearLocalView view = currentView();
         Object value;
-        synchronized (volatileLock(new FieldLocation(holder, field))) {
+        synchronized (volatileLock(new FieldLocation(holder.getObjectNumber(), field))) {
             handleConflict(pullG(view), view, "volatile read");
             value = field.get(holder, true);   // forceVolatile; atomic with the pull (see volatileLocks)
         }
@@ -372,7 +373,7 @@ public final class LinearMemoryModel implements MemoryModel {
             return;
         }
         LinearLocalView view = currentView();
-        synchronized (volatileLock(new FieldLocation(holder, field))) {
+        synchronized (volatileLock(new FieldLocation(holder.getObjectNumber(), field))) {
             handleConflict(pullG(view), view, "volatile write (acquire)");
             field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
             handleConflict(pushG(view), view, "volatile write (release)");

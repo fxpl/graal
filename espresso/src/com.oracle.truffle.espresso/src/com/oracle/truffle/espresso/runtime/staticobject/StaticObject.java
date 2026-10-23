@@ -80,7 +80,11 @@ public class StaticObject implements TruffleObject, Cloneable {
     // touched under a versioned model; inert (always false) under --java.MemoryModel=shared.
     private boolean appOwned;
 
-    private final ObjectNumber objectNumber;
+    // Ideally the objectNumber would be final, but cloned objects copy the object number
+    // and the number needs to be reset. The issue is that we are a JVM on a JVM, so Espresso
+    // calls the clone() method of the static object which is then cloned including the number.
+    private ObjectNumber objectNumber;
+    private boolean hasBeenVersioned;
 
     // region Constructors
     protected StaticObject(Klass klass, ObjectNumber objectNumber) {
@@ -95,6 +99,7 @@ public class StaticObject implements TruffleObject, Cloneable {
         }
         this.klass = klass;
         this.objectNumber = objectNumber;
+        this.hasBeenVersioned = false;
     }
 
     @Override
@@ -495,8 +500,20 @@ public class StaticObject implements TruffleObject, Cloneable {
         return !isNull(this) && getKlass().isArray();
     }
 
-    public ObjectNumber objectNumber() {
+    public ObjectNumber getObjectNumber() {
         return objectNumber;
+    }
+
+    public void setObjectNumber(ObjectNumber objectNumber) {
+        this.objectNumber = objectNumber;
+    }
+
+    public boolean hasBeenVersioned() {
+        return hasBeenVersioned;
+    }
+
+    public void markHasBeenVersioned() {
+        hasBeenVersioned = true;
     }
 
     // region Factory interface.

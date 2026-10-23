@@ -23,11 +23,13 @@
 package com.oracle.truffle.espresso.memory;
 
 import com.oracle.truffle.espresso.impl.Field;
-import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * A field slot on a holder object. Instance fields use the receiver as holder; static fields use the
  * declaring klass's statics {@link StaticObject}.
  */
-public record FieldLocation(StaticObject holder, Field field) implements VersionedLocation {
+public record FieldLocation(ObjectNumber holder, Field field) implements VersionedLocation {
+    public FieldLocation {
+        assert holder != null : "an unnumbered object reached the memory model";
+    }
 }
