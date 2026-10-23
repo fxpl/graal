@@ -126,7 +126,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        return new BranchingView();
+        return new BranchingView(objectsMarkedForPurging);
     }
 
     @Override

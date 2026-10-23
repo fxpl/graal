@@ -30,6 +30,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -49,6 +50,14 @@ public final class BranchingView implements MemoryView {
     // cleared at each commit, so it rebuilds from post-commit committed state next epoch.
     private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
     private String pendingConflict;
+
+    // A set shared between views for objects who are no longer referenceable and
+    // should be removed when found
+    private final Set<ObjectNumber> objectsMarkedForPurging;
+
+    public BranchingView(Set<ObjectNumber> objectsMarkedForPurging) {
+        this.objectsMarkedForPurging = objectsMarkedForPurging;
+    }
 
     Commit head() {
         return head;
@@ -226,7 +235,11 @@ public final class BranchingView implements MemoryView {
             VersioningStats.onFold(changes.size());
 
             head.changes().forEach((loc, v) -> {
-                changes.putIfAbsent(loc, v);
+                // check if the objects marked for purging include this object
+                // TODO: once array locations work properly this guard will look better
+                if (!(loc instanceof FieldLocation f && objectsMarkedForPurging.contains(f.holder()))) {
+                    changes.putIfAbsent(loc, v);
+                }
             });
 
             setHead(new Commit(changes, head.parents()));
