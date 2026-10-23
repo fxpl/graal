@@ -22,6 +22,8 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -85,20 +87,32 @@ public class Commit {
     }
 
     public int decRef() {
-        return REF_COUNT.decrementAndGet(this);
+        int remaining = REF_COUNT.decrementAndGet(this);
+
+        if (remaining == 0) {
+            // cascade into the parents
+
+            Deque<Commit> dead = new ArrayDeque<>();
+            dead.push(this);
+
+            while (!dead.isEmpty()) {
+                Commit c = dead.pop();
+
+                boolean marked = REF_COUNT.compareAndSet(c, 0, -1);
+                assert marked : "a reference was taken to a commit whose count had reached 0";
+
+                for (Commit p : c.parents()) {
+                    if (REF_COUNT.decrementAndGet(p) == 0) {
+                        dead.push(p);
+                    }
+                }
+            }
+        }
+
+        return remaining;
     }
 
     public int getRefCount() {
         return refCount;
-    }
-
-    void unlinkFromParents() {
-        // do not unlink the parents unless the count for this node is already
-        // set to 0, we then set the node to -1 to ensure this only runs once
-        assert refCount == 0 : "unlinkFromParents on a commit with references or already unlinked";
-        for (Commit p : parents) {
-            p.decRef();
-        }
-        decRef();
     }
 }

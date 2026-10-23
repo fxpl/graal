@@ -229,10 +229,7 @@ public final class BranchingView implements MemoryView {
                 changes.putIfAbsent(loc, v);
             });
 
-            Commit c = new Commit(changes, head.parents());
-            Commit oldHead = head;
-            setHead(c);
-            oldHead.unlinkFromParents();
+            setHead(new Commit(changes, head.parents()));
         } else {
             Commit c = new Commit(changes, head == null ? List.of() : List.of(head));
             VersioningStats.onCommit(changes.size());
