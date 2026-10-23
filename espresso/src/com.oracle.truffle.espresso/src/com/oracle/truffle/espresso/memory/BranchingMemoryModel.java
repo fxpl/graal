@@ -22,6 +22,7 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.lang.ref.Cleaner;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -110,6 +111,27 @@ public final class BranchingMemoryModel implements MemoryModel {
      */
     private final Map<StaticObject, Commit> terminalHeads = new ConcurrentHashMap<>();
 
+    private final Set<ObjectNumber> objectsMarkedForPurging = ConcurrentHashMap.newKeySet();
+
+    // This is a record so that we don't accidentally capture the StaticObject
+    // if we did that, we could end up keeping a reference to the StaticObject in the cleaner
+    // register set and then the object could never be GC'd
+    record MarkObjectForPurging(ObjectNumber objectNumber, Set<ObjectNumber> objectsToPurge) implements Runnable {
+
+        @Override
+        public void run() { objectsToPurge.add(objectNumber); }
+    }
+
+    /* A cleaner to purge out object numbers that represent objects GC'd */
+    private static final Cleaner cleaner = Cleaner.create();
+
+    private void registerForCleaning(StaticObject object) {
+        if (!object.isCleanerRegistered()) {
+            object.markCleanerRegistered();
+            cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), objectsMarkedForPurging));
+        }
+    }
+
     /** The parent's branch tip captured at spawn. */
     private record ForkPoint(Commit head) {
     }
@@ -190,12 +212,14 @@ public final class BranchingMemoryModel implements MemoryModel {
     public void writeField(StaticObject holder, Field field, Object value) {
         currentView().stage(new FieldLocation(holder.getObjectNumber(), field), value);
         holder.markHasBeenVersioned();
+        registerForCleaning(holder);
     }
 
     @Override
     public void captureRead(StaticObject holder, Field field, Object value) {
         // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
         genesis.putIfAbsent(new FieldLocation(holder.getObjectNumber(), field), value);
+        registerForCleaning(holder);
     }
 
     @Override
@@ -342,6 +366,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         }
         BranchingView view = currentView();
         LockState tip = volatileTip(new FieldLocation(holder.getObjectNumber(), field));
+        registerForCleaning(holder);
         Set<VersionedLocation> conflict = Set.of();
         Object value;
         synchronized (tip) {
@@ -380,6 +405,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         }
         BranchingView view = currentView();
         LockState tip = volatileTip(new FieldLocation(holder.getObjectNumber(), field));
+        registerForCleaning(holder);
         Set<VersionedLocation> conflicts = Set.of();
         synchronized (tip) {
             view.commitStaging();

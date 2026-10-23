@@ -85,6 +85,7 @@ public class StaticObject implements TruffleObject, Cloneable {
     // calls the clone() method of the static object which is then cloned including the number.
     private ObjectNumber objectNumber;
     private boolean hasBeenVersioned;
+    private boolean isCleanerRegistered;
 
     // region Constructors
     protected StaticObject(Klass klass, ObjectNumber objectNumber) {
@@ -100,6 +101,7 @@ public class StaticObject implements TruffleObject, Cloneable {
         this.klass = klass;
         this.objectNumber = objectNumber;
         this.hasBeenVersioned = false;
+        this.isCleanerRegistered = false;
     }
 
     @Override
@@ -504,9 +506,10 @@ public class StaticObject implements TruffleObject, Cloneable {
         return objectNumber;
     }
 
-    public void resetObjectNumberForClone(ObjectNumber objectNumber) {
+    public void resetObjectForClone(ObjectNumber objectNumber) {
         this.objectNumber = objectNumber;
         this.hasBeenVersioned = false;
+        this.isCleanerRegistered = false;
     }
 
     public boolean hasBeenVersioned() {
@@ -515,6 +518,14 @@ public class StaticObject implements TruffleObject, Cloneable {
 
     public void markHasBeenVersioned() {
         hasBeenVersioned = true;
+    }
+
+    public boolean isCleanerRegistered() {
+        return isCleanerRegistered;
+    }
+
+    public void markCleanerRegistered() {
+        isCleanerRegistered = true;
     }
 
     // region Factory interface.
