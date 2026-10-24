@@ -24,8 +24,10 @@ package com.oracle.truffle.espresso.memory;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
 /**
@@ -40,7 +42,9 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
  */
 public class Commit {
 
-    private final Map<VersionedLocation, Object> changes;
+    // when we eliminate old commits, we will swap in place to avoid a racy read
+    // so the changes need to be volatile
+    private volatile Map<VersionedLocation, Object> changes;
     private final List<Commit> parents;
 
     private volatile int refCount;
@@ -48,7 +52,7 @@ public class Commit {
                 AtomicIntegerFieldUpdater.newUpdater(Commit.class, "refCount");
 
     public Commit(Map<VersionedLocation, Object> changes, List<Commit> parents) {
-        this.changes = Map.copyOf(changes);
+        this.changes = new HashMap<>(changes);
         this.parents = List.copyOf(parents);
 
         for (Commit p : this.parents) {
@@ -114,5 +118,27 @@ public class Commit {
 
     public int getRefCount() {
         return refCount;
+    }
+
+    // The two following methods are synchronized so that we can use an independent
+    // thread to purge objects without breaking threads that are compacting nodes together
+
+    // we want to update the node with new changes during commit compaction
+    public synchronized void adoptAll(Map<VersionedLocation, Object> newChanges) {
+        assert refCount == 1 : "cannot adopt changes if more than one commit can see this commit";
+        changes.putAll(newChanges);
+    }
+
+    // we build up a new filtered map and swap in place, to avoid other threads
+    // potentially seeing a partly filtered map
+    public synchronized void purgeObjects(Set<ObjectNumber> deadObjectNumbers) {
+        Map<VersionedLocation, Object> filter = new HashMap<>();
+        for (Map.Entry<VersionedLocation, Object> e : changes.entrySet()) {
+            VersionedLocation loc = e.getKey();
+            if (! (loc instanceof FieldLocation f && deadObjectNumbers.contains(f.holder())) ) {
+                filter.put(e.getKey(), e.getValue());
+            }
+        }
+        changes = filter;
     }
 }

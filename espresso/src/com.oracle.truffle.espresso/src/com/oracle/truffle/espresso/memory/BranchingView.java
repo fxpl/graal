@@ -53,10 +53,11 @@ public final class BranchingView implements MemoryView {
 
     // A set shared between views for objects who are no longer referenceable and
     // should be removed when found
-    private final Set<ObjectNumber> objectsMarkedForPurging;
+    private final Set<ObjectNumber> deadObjectNumbers;
+    private int deadSetSizeAtLastPurge;
 
-    public BranchingView(Set<ObjectNumber> objectsMarkedForPurging) {
-        this.objectsMarkedForPurging = objectsMarkedForPurging;
+    public BranchingView(Set<ObjectNumber> deadObjectNumbers) {
+        this.deadObjectNumbers = deadObjectNumbers;
     }
 
     Commit head() {
@@ -221,6 +222,14 @@ public final class BranchingView implements MemoryView {
         // writes are array writes still lands.
         flushArrays();
         clearArrays();
+
+        // before merging the changes into the head, first try to
+        // purge any dead objects from the head commit (non-recursive)
+        if (head != null && deadObjectNumbers.size() > deadSetSizeAtLastPurge) {
+            head.purgeObjects(deadObjectNumbers);
+            deadSetSizeAtLastPurge = deadObjectNumbers.size();
+        }
+
         if (staging.isEmpty()) {
             return;
         }
@@ -229,20 +238,12 @@ public final class BranchingView implements MemoryView {
         Map<VersionedLocation, Object> changes = staging;
         staging = new HashMap<>();
 
-        // If the head has only one reference, it is this thread, and so we will
-        // replace the head with an updated change set
         if (head != null && head.getRefCount() == 1) {
+            // If the head has only one reference, we can update the commit
+            // in place rather than creating a new commit
             VersioningStats.onFold(changes.size());
+            head.adoptAll(changes);
 
-            head.changes().forEach((loc, v) -> {
-                // check if the objects marked for purging include this object
-                // TODO: once array locations work properly this guard will look better
-                if (!(loc instanceof FieldLocation f && objectsMarkedForPurging.contains(f.holder()))) {
-                    changes.putIfAbsent(loc, v);
-                }
-            });
-
-            setHead(new Commit(changes, head.parents()));
         } else {
             Commit c = new Commit(changes, head == null ? List.of() : List.of(head));
             VersioningStats.onCommit(changes.size());

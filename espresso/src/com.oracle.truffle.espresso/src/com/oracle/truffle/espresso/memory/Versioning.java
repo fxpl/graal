@@ -79,14 +79,6 @@ public final class Versioning {
     }
 
     /**
-     * The value of instance {@code field} on {@code obj} as seen through the acting thread's view, or
-     * {@link MemoryModel#ABSENT} when the read is <em>not</em> view-routed — a non-app-owned receiver, a
-     * volatile field (whose value lives in the physical slot), or a shared/inactive model. On ABSENT the
-     * caller reads the physical slot as before; otherwise it uses the returned value. This is the one
-     * place the "should this read go through the view, and if so what" decision lives, so every
-     * accessor — bytecode and VM/boot code alike — is a one-liner over it. Boxed for primitive kinds.
-     */
-    /**
      * Eligibility: is an instance {@code field} of {@code obj} a versioned <em>location</em> — decided
      * purely by the location (an app-owned receiver, a non-volatile field, a live model), independent of
      * whether any value has been staged or committed for it yet. This is the single gate both
@@ -106,6 +98,15 @@ public final class Versioning {
         return ctx.isVersionedMemoryEnabled();
     }
 
+
+    /**
+     * The value of instance {@code field} on {@code obj} as seen through the acting thread's view, or
+     * {@link MemoryModel#ABSENT} when the read is <em>not</em> view-routed — a non-app-owned receiver, a
+     * volatile field (whose value lives in the physical slot), or a shared/inactive model. On ABSENT the
+     * caller reads the physical slot as before; otherwise it uses the returned value. This is the one
+     * place the "should this read go through the view, and if so what" decision lives, so every
+     * accessor — bytecode and VM/boot code alike — is a one-liner over it. Boxed for primitive kinds.
+     */
     public static Object readInstance(StaticObject obj, Field field) {
         if (!versionsInstanceField(obj, field)) {
             return MemoryModel.ABSENT;

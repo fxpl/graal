@@ -85,7 +85,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     /** Fork points recorded at spawn, keyed by the child's guest {@code Thread}; consumed at its start. */
     private final Map<StaticObject, ForkPoint> pendingForks = new ConcurrentHashMap<>();
 
-    private final Set<ObjectNumber> objectsMarkedForPurging = ConcurrentHashMap.newKeySet();
+    private final Set<ObjectNumber> deadObjectNumbers = ConcurrentHashMap.newKeySet();
 
     // This is a record so that we don't accidentally capture the StaticObject
     // if we did that, we could end up keeping a reference to the StaticObject in the cleaner
@@ -105,7 +105,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     private void registerForCleaning(StaticObject object) {
         if (!object.isCleanerRegistered()) {
             object.markCleanerRegistered();
-            cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), objectsMarkedForPurging));
+            cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), deadObjectNumbers));
             VersioningStats.onCleanerRegistered();
         }
     }
@@ -126,7 +126,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        return new BranchingView(objectsMarkedForPurging);
+        return new BranchingView(deadObjectNumbers);
     }
 
     @Override
