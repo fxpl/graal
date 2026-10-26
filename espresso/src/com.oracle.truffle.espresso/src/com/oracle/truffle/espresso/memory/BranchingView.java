@@ -63,7 +63,7 @@ public final class BranchingView implements MemoryView {
         return head;
     }
 
-    void setHead(Commit c) {
+    private void setHead(Commit c) {
         // we must increment before decrementing, otherwise in the case that
         // head == c, we would make the refcount 0 briefly which would represent
         // an unreferenced node
@@ -215,7 +215,7 @@ public final class BranchingView implements MemoryView {
     }
 
     /** Turn staged writes into a new commit on this thread's branch (no-op if nothing staged). */
-    void commitStaging() {
+    private void commitStaging() {
         // Fold array working-copy writes into per-index staging, then drop the copies (they rebuild from
         // post-commit committed state next epoch). Done before the empty check so a commit whose only
         // writes are array writes still lands.
@@ -242,7 +242,7 @@ public final class BranchingView implements MemoryView {
     }
 
     /** Shallow compression from this thread's head (no-op if it has no head yet). */
-    void compress() {
+    private void compress() {
         if (head != null) {
             head.compressUpwards();
         }
@@ -365,6 +365,29 @@ public final class BranchingView implements MemoryView {
         VersioningStats.onMerge();
         setHead(mergeCommit);
         return Set.of();
+    }
+
+    // pull from another commit and report any conflicting locations
+    Set<VersionedLocation> pull(Commit from) {
+        commitStaging();
+        return merge(from);
+    }
+
+    // 'replace' the to commit with our head after committing and compressing
+    // the caller needs to put the commit in the correct place
+    Commit push(Commit to) {
+        if (to != null) {
+            to.decRef();
+        }
+
+        commitStaging();
+        compress();
+
+        if (head != null) {
+            head.incRef();
+        }
+
+        return head;
     }
 
     // --- MemoryView: deferred-conflict flag (raised at the bytecode safe point / thread end) ---

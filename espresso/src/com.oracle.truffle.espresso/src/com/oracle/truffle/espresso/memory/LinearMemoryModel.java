@@ -354,11 +354,6 @@ public final class LinearMemoryModel implements MemoryModel {
         // value is not versioned); Linear's single global g is the acquire for every volatile field, so
         // the pull imports/conflict-checks the reader's ordinary staged writes. The pull happens-before
         // the read, and every writer's field.set happens-before its push, so g's lock carries the value.
-        if (field == null) {   // class-init acquire (init-state volatile read): merge only, no heap value
-            LinearLocalView v = currentView();
-            handleConflict(pullG(v), v, "class init");
-            return StaticObject.NULL;
-        }
         LinearLocalView view = currentView();
         Object value;
         synchronized (volatileLock(new FieldLocation(holder.getObjectNumber(), field))) {
@@ -374,13 +369,6 @@ public final class LinearMemoryModel implements MemoryModel {
         // physical slot, then release (push the ordinary staged writes to g). The value never enters g,
         // so concurrent volatile writes to the same field are not a data race — last writer wins on the
         // slot; only the ordinary writes published alongside are conflict-checked, by the pull/push.
-        if (field == null) {   // class-init release (init-state volatile write): publish staged writes, no heap value
-            LinearLocalView v = currentView();
-            handleConflict(pullG(v), v, "class init");
-            handleConflict(pushG(v), v, "class init");
-            maybeCollapse();
-            return;
-        }
         LinearLocalView view = currentView();
         synchronized (volatileLock(new FieldLocation(holder.getObjectNumber(), field))) {
             handleConflict(pullG(view), view, "volatile write (acquire)");
@@ -388,6 +376,22 @@ public final class LinearMemoryModel implements MemoryModel {
             handleConflict(pushG(view), view, "volatile write (release)");
         }
         maybeCollapse();
+    }
+
+    @Override
+    public void onClassInitialized(StaticObject mirror) {
+        // Class-init release: publish the initializer's staged writes to g.
+        LinearLocalView view = currentView();
+        handleConflict(pullG(view), view, "class init");
+        handleConflict(pushG(view), view, "class init");
+        maybeCollapse();
+    }
+
+    @Override
+    public void onClassInitUse(StaticObject mirror) {
+        // Class-init acquire: pull g, no push. Linear's single g carries every class's init.
+        LinearLocalView view = currentView();
+        handleConflict(pullG(view), view, "class init");
     }
 
     private void handleConflict(VersionedLocation conflict, LinearLocalView view, String at) {

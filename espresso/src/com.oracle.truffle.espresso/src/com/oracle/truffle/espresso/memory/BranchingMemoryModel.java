@@ -45,9 +45,8 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * into a {@link Commit} on its own branch, then merges another branch in:
  * <ul>
  * <li><b>spawn</b> — the parent commits and the child adopts the parent's branch tip (fork);</li>
- * <li><b>monitor enter</b> — commit, then merge the lock's published branch ({@link LockState}), then
- *     republish the holder's tip to the lock;</li>
- * <li><b>monitor exit</b> — commit and republish the holder's tip to the lock;</li>
+ * <li><b>monitor enter</b> — pull from the lock's {@link SyncState};</li>
+ * <li><b>monitor exit</b> — push to the lock's {@link SyncState};</li>
  * <li><b>thread end</b> — commit, and record the final commit in ... for
  *     join.</li>
  * </ul>
@@ -72,19 +71,19 @@ public final class BranchingMemoryModel implements MemoryModel {
     // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
     private final Map<VersionedLocation, Object> genesis = new ConcurrentHashMap<>();
 
-    /** Per-monitor (and per-thread-object, for join) published branch tip. Keyed by object identity. */
-    private final Map<StaticObject, LockState> lockStates = new ConcurrentHashMap<>();
+    /** Per-monitor sync state. Keyed by object identity. */
+    private final Map<StaticObject, SyncState> lockSyncStates = new ConcurrentHashMap<>();
 
     /**
-     * Per-volatile-field published branch tip — the paper's map {@code V} of the latest commit of each
-     * volatile variable (§5.3 / Table 2). Keyed by {@link FieldLocation} (so a volatile instance field
-     * is a distinct sync object per receiver). Separate from {@link #lockStates}: a volatile field is
-     * its own synchronisation object, not a monitor.
+     * Per-volatile-field sync state — the paper's map {@code V} of the latest commit of each volatile
+     * variable (§5.3 / Table 2). Keyed by {@link FieldLocation} (so a volatile instance field is a
+     * distinct sync object per receiver). Separate from {@link #lockSyncStates}: a volatile field is its
+     * own synchronisation object, not a monitor.
      */
-    private final Map<FieldLocation, LockState> volatileTips = new ConcurrentHashMap<>();
+    private final Map<FieldLocation, SyncState> volatileSyncStates = new ConcurrentHashMap<>();
 
-    /** Fork points recorded at spawn, keyed by the child's guest {@code Thread}; consumed at its start. */
-    private final Map<StaticObject, ForkPoint> pendingForks = new ConcurrentHashMap<>();
+    /** The parent's push at spawn, keyed by the child's guest {@code Thread}; pulled at the child's start. */
+    private final Map<StaticObject, SyncState> pendingForks = new ConcurrentHashMap<>();
 
     private final AtomicLong deadObjectCount;
 
@@ -110,10 +109,6 @@ public final class BranchingMemoryModel implements MemoryModel {
             cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), deadObjectCount));
             VersioningStats.onCleanerRegistered();
         }
-    }
-
-    /** The parent's branch tip captured at spawn. */
-    private record ForkPoint(Commit head) {
     }
 
     public BranchingMemoryModel(EspressoContext context) {
@@ -153,21 +148,20 @@ public final class BranchingMemoryModel implements MemoryModel {
         return v == null ? 0 : ((BranchingView) v).stagingSize();
     }
 
-    private LockState lockState(StaticObject key) {
-        return lockStates.computeIfAbsent(key, k -> new LockState());
+    private SyncState lockSyncState(StaticObject key) {
+        return lockSyncStates.computeIfAbsent(key, k -> new SyncState());
     }
 
-    private LockState volatileTip(FieldLocation key) {
-        return volatileTips.computeIfAbsent(key, k -> new LockState());
+    private SyncState volatileSyncState(FieldLocation key) {
+        return volatileSyncStates.computeIfAbsent(key, k -> new SyncState());
     }
 
-    // Sync-as-Share: per-class init cell, keyed by the class mirror (the init-state's guest handle).
-    // The class-init edge (JLS §12.4.2) is a volatile on this cell: released at <clinit> completion,
-    // acquired (merge only) on first use.
-    private final Map<StaticObject, LockState> classInitTips = new ConcurrentHashMap<>();
+    // Sync-as-Share: per-class init sync state, keyed by the class mirror (the init-state's guest handle).
+    // The class-init edge (JLS §12.4.2): pushed at <clinit> completion, pulled on first use.
+    private final Map<StaticObject, SyncState> classInitSyncStates = new ConcurrentHashMap<>();
 
-    private LockState classInitTip(StaticObject mirror) {
-        return classInitTips.computeIfAbsent(mirror, k -> new LockState());
+    private SyncState classInitSyncState(StaticObject mirror) {
+        return classInitSyncStates.computeIfAbsent(mirror, k -> new SyncState());
     }
 
     // --- Ordinary field / array access: stage and read on the calling thread's view. ---
@@ -255,13 +249,13 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onThreadStart() {
-        // Adopt the parent's branch captured at spawn, if any. The main thread has no fork point.
+        // Pull what the parent pushed at spawn, if any. The main thread has no fork.
         StaticObject self = context.getCurrentPlatformThread();
-        ForkPoint fork = pendingForks.remove(self);
+        SyncState fork = pendingForks.remove(self);
         if (fork != null) {
-            currentView().adopt(fork.head());
-            if (fork.head() != null) {
-                fork.head().decRef();
+            currentView().pull(fork.commit);
+            if (fork.commit != null) {
+                fork.commit.decRef();
             }
         }
     }
@@ -271,17 +265,16 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Commit the final staging and record the final commit for join,
         // before the terminating notify that wakes joiners.
         BranchingView view = currentView();
-        view.commitStaging();
+        Commit terminalHead = view.push(null);
 
         // Set the hidden thread slot to store the final commit, this lets a joining thread
         // pick up the commit even once the thread has been deallocated
         StaticObject thread = context.getCurrentPlatformThread();
-        context.getMeta().java_lang_Thread_0finalCommit.setHiddenObject(thread, view.head());
+        context.getMeta().java_lang_Thread_0finalCommit.setHiddenObject(thread, terminalHead);
 
         // register that when the thread object is cleaned away, we also drop
         // the reference count of the terminalHead.
         // The Commit itself will be GC'd but we need to not lose transitive refCounts
-        Commit terminalHead = view.head();
         cleaner.register(thread, () -> { terminalHead.decRef(); });
     }
 
@@ -294,98 +287,48 @@ public final class BranchingMemoryModel implements MemoryModel {
             return;
         }
         BranchingView view = currentView();
-        view.commitStaging();
-        handleConflicts(view.merge(commit), view, "join");
-
-        // Don't worry about compressing now, the object representing the thread is still
-        // going to exist until it is GC'd so we may as well wait until then
+        handleConflicts(view.pull(commit), view, "join");
     }
 
     @Override
     public void onSpawn(StaticObject childThread) {
-        // Fork: commit the parent's staging, then capture its tip for the child, which adopts it at
-        // start. Runs on the parent, before the child begins.
+        // Fork: the parent pushes to the child, which pulls it at start. Runs on the parent, before the
+        // child begins.
         BranchingView view = currentView();
-        view.commitStaging();
-        pendingForks.put(childThread, new ForkPoint(view.head()));
-
-        // set an extra reference to the head for the child which is waiting to start
-        if (view.head() != null) {
-            view.head().incRef();
-        }
+        SyncState fork = new SyncState();
+        fork.commit = view.push(fork.commit);
+        pendingForks.put(childThread, fork);
     }
 
     @Override
     public void onMonitorEnter(StaticObject lock) {
-        // Acquire = commit, merge the lock's published branch, republish this holder's tip.
+        // pull from the lock
+        SyncState state = lockSyncState(lock);
         BranchingView view = currentView();
-        view.commitStaging();
-        LockState state = lockState(lock);
-        Set<VersionedLocation> conflicts = new HashSet<>(view.merge(state.commit));
-        handleConflicts(conflicts, view, MemoryModel.monitorSyncLabel(context, lock, true));
+        handleConflicts(view.pull(state.commit), view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
     @Override
     public void onMonitorExit(StaticObject lock) {
-        // Release = commit, republish this holder's tip to the lock (no lock-branch merge: ordinary lock
-        // conflicts are caught at the acquire).
+        // push to the lock
         BranchingView view = currentView();
-
-        LockState lockState = lockState(lock);
-        if (lockState.commit != null) {
-            lockState.commit.decRef();
-            lockState.commit = null;
-        }
-        view.commitStaging();
-        publish(lockState, view);
-
-        // the thread and lock now have the same head, so try to
-        // compress the merge (and history) that came before
-        view.compress();
-    }
-
-    /** Publish the view's current tip to a lock state. */
-    private static void publish(LockState state, BranchingView view) {
-        Commit newHeadForSyncObject = view.head();
-        if (newHeadForSyncObject != null) {
-            newHeadForSyncObject.incRef();
-        }
-        if (state.commit != null) {
-            state.commit.decRef();
-        }
-        state.commit = newHeadForSyncObject;
+        SyncState state = lockSyncState(lock);
+        state.commit = view.push(state.commit);
     }
 
     @Override
     public Object onVolatileRead(StaticObject holder, Field field) {
-        // Volatile read (paper VolatileRead): acquire by merging the field's published commit into this
-        // view, then read the un-versioned value straight from the physical slot. commitStaging first,
-        // so the merge sees empty staging and its conflict check covers the reader's ordinary writes;
-        // no publish — a read adds no history. Atomic per field (synchronised on the tip) so value and
-        // commit are read together, consistent against a concurrent volatile write to the same field.
-        if (field == null) {   // class-init acquire: merge the class's init tip only — no republish, no heap value
-            BranchingView v = currentView();
-            LockState t = classInitTip(holder);
-            Set<VersionedLocation> conflicts = Set.of();
-            synchronized (t) {
-                v.commitStaging();
-                if (t.commit != null) {
-                    conflicts = v.merge(t.commit);
-                }
-            }
-            handleConflicts(conflicts, v, "class init");
-            return StaticObject.NULL;
-        }
+        // Volatile read (paper VolatileRead): pull from the field's sync state, then read the
+        // un-versioned value straight from the physical slot. No push — a read adds no history. Atomic
+        // per field (synchronised on the sync state) so value and commit are read together, consistent
+        // against a concurrent volatile write to the same field.
         BranchingView view = currentView();
-        LockState tip = volatileTip(new FieldLocation(holder.getObjectNumber(), field));
+        SyncState state = volatileSyncState(new FieldLocation(holder.getObjectNumber(), field));
         registerForCleaning(holder);
-        Set<VersionedLocation> conflict = Set.of();
+        Set<VersionedLocation> conflict;
         Object value;
-        synchronized (tip) {
-            view.commitStaging();
-            if (tip.commit != null) {
-                conflict = view.merge(tip.commit);
-            }
+        synchronized (state) {
+            conflict = view.pull(state.commit);
             value = field.get(holder, true);   // forceVolatile; value is un-versioned, in the real heap
         }
         handleConflicts(conflict, view, "volatile read");
@@ -394,42 +337,50 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onVolatileWrite(StaticObject holder, Field field, Object value) {
-        // Volatile write (paper VolatileWrite): acquire (commit ordinary staging, merge the field's
-        // prior commit), then release — set the un-versioned value in the physical slot and publish this
-        // thread's head as the field's new commit. The value never enters a commit, so concurrent
-        // volatile writes to the same field are not a data race (last writer wins on the slot); only the
-        // ordinary writes carried on the commit are conflict-checked, at the merge. Atomic per field.
-        if (field == null) {   // class-init release: merge then publish this thread's tip — no heap value
-            BranchingView v = currentView();
-            LockState t = classInitTip(holder);
-            Set<VersionedLocation> conflicts = Set.of();
-            synchronized (t) {
-                v.commitStaging();
-                if (t.commit != null) {
-                    conflicts = v.merge(t.commit);
-                }
-                if (conflicts.isEmpty()) {
-                    publish(t, v);
-                }
-            }
-            handleConflicts(conflicts, v, "class init");
-            return;
-        }
+        // Volatile write (paper VolatileWrite): pull from the field's sync state, set the un-versioned
+        // value in the physical slot, then push to the sync state. The value never enters a commit, so
+        // concurrent volatile writes to the same field are not a data race (last writer wins on the
+        // slot); only the ordinary writes carried on the commit are conflict-checked, at the merge.
+        // Atomic per field.
         BranchingView view = currentView();
-        LockState tip = volatileTip(new FieldLocation(holder.getObjectNumber(), field));
+        SyncState state = volatileSyncState(new FieldLocation(holder.getObjectNumber(), field));
         registerForCleaning(holder);
-        Set<VersionedLocation> conflicts = Set.of();
-        synchronized (tip) {
-            view.commitStaging();
-            if (tip.commit != null) {
-                conflicts = view.merge(tip.commit);
-            }
+        Set<VersionedLocation> conflicts;
+        synchronized (state) {
+            conflicts = view.pull(state.commit);
             if (conflicts.isEmpty()) {
                 field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
-                publish(tip, view);
+                state.commit = view.push(state.commit);
             }
         }
         handleConflicts(conflicts, view, "volatile write");
+    }
+
+    @Override
+    public void onClassInitialized(StaticObject mirror) {
+        // Class-init release: pull from the class's init sync state, then push to it.
+        BranchingView view = currentView();
+        SyncState state = classInitSyncState(mirror);
+        Set<VersionedLocation> conflicts;
+        synchronized (state) {
+            conflicts = view.pull(state.commit);
+            if (conflicts.isEmpty()) {
+                state.commit = view.push(state.commit);
+            }
+        }
+        handleConflicts(conflicts, view, "class init");
+    }
+
+    @Override
+    public void onClassInitUse(StaticObject mirror) {
+        // Class-init acquire: pull from the class's init sync state, no push.
+        BranchingView view = currentView();
+        SyncState state = classInitSyncState(mirror);
+        Set<VersionedLocation> conflicts;
+        synchronized (state) {
+            conflicts = view.pull(state.commit);
+        }
+        handleConflicts(conflicts, view, "class init");
     }
 
     private void handleConflicts(Set<VersionedLocation> conflicts, BranchingView view, String at) {

@@ -178,6 +178,19 @@ public interface MemoryModel {
      */
     void onVolatileWrite(StaticObject holder, Field field, Object value);
 
+    /**
+     * Class-init release (JLS §12.4.2): {@code <clinit>} of the class whose mirror is {@code mirror} has
+     * completed, so publish the initializer's writes to that class's init state. Happens once per class.
+     */
+    void onClassInitialized(StaticObject mirror);
+
+    /**
+     * Class-init acquire: the current thread's first use of the class whose mirror is {@code mirror}, so
+     * pull what its initializer published. Publishes nothing: a use-to-use edge would invent ordering the
+     * JVM never creates and mask real races.
+     */
+    void onClassInitUse(StaticObject mirror);
+
     // --- Activation gate ---
 
     /**

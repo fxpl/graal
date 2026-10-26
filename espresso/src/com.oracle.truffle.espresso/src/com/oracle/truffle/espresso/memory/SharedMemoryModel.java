@@ -107,4 +107,14 @@ public final class SharedMemoryModel implements MemoryModel {
     public void onVolatileWrite(StaticObject holder, Field field, Object value) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onVolatileWrite: memory-model hooks must be folded under shared");
     }
+
+    @Override
+    public void onClassInitialized(StaticObject mirror) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onClassInitialized: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onClassInitUse(StaticObject mirror) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onClassInitUse: memory-model hooks must be folded under shared");
+    }
 }
