@@ -82,9 +82,6 @@ public final class BranchingMemoryModel implements MemoryModel {
      */
     private final Map<FieldLocation, SyncState> volatileSyncStates = new ConcurrentHashMap<>();
 
-    /** The parent's push at spawn, keyed by the child's guest {@code Thread}; pulled at the child's start. */
-    private final Map<StaticObject, SyncState> pendingForks = new ConcurrentHashMap<>();
-
     private final AtomicLong deadObjectCount;
 
     // This is a record so that we don't accidentally capture the StaticObject
@@ -122,9 +119,21 @@ public final class BranchingMemoryModel implements MemoryModel {
         return true;
     }
 
-    @Override
     public MemoryView newThreadView() {
-        return new BranchingView(deadObjectCount);
+        return new BranchingView(this::bindThreadSyncState, deadObjectCount);
+    }
+
+    private SyncState newThreadSyncState(StaticObject thread) {
+        SyncState state = new SyncState();
+
+        // store the state on the thread object itself
+        context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);
+
+        // register that when the thread object is cleaned away, we also drop
+        // the reference count of the terminalHead.
+        // The Commit itself will be GC'd but we need to not lose transitive refCounts
+        cleaner.register(thread, () -> { if (state.commit != null) state.commit.decRef(); });
+        return state;
     }
 
     @Override
@@ -140,6 +149,22 @@ public final class BranchingMemoryModel implements MemoryModel {
     private BranchingView currentView() {
         // Safe: under branching the thread-local view was created by this model's newThreadView().
         return (BranchingView) context.getLanguage().getThreadLocalState().getMemoryView();
+    }
+
+    /**
+     * Binds a view to its thread's sync state, the first time the view needs it (on the view's own
+     * thread, after activation). A spawned thread finds the state its parent pushed into at spawn; main,
+     * or a thread spawned before versioning was on, gets a fresh one attached to its Thread.
+     */
+    private SyncState bindThreadSyncState() {
+        StaticObject thread = context.getCurrentPlatformThread();
+        assert thread != null : "binding a view before its thread is registered";
+
+        Object existing = context.getMeta().java_lang_Thread_0syncState.getHiddenObject(thread);
+        if (existing instanceof SyncState s) {
+            return s;
+        }
+        return newThreadSyncState(thread);
     }
 
     @Override
@@ -249,48 +274,30 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onThreadStart() {
-        // Pull what the parent pushed at spawn, if any. The main thread has no fork.
-        StaticObject self = context.getCurrentPlatformThread();
-        SyncState fork = pendingForks.remove(self);
-        if (fork != null) {
-            currentView().pull(fork.commit);
-            if (fork.commit != null) {
-                fork.commit.decRef();
-            }
-        }
+        // start has nothing to do, the parent put the commit in the thread sync state slot
     }
 
     @Override
     public void onThreadEnd() {
         // Commit the final staging and record the final commit for join,
         // before the terminating notify that wakes joiners.
-        BranchingView view = currentView();
-
-        SyncState s = new SyncState();
-        view.push(s);
-        Commit terminalHead = s.commit;
-
-        // Set the hidden thread slot to store the final commit, this lets a joining thread
-        // pick up the commit even once the thread has been deallocated
-        StaticObject thread = context.getCurrentPlatformThread();
-        context.getMeta().java_lang_Thread_0finalCommit.setHiddenObject(thread, terminalHead);
-
-        // register that when the thread object is cleaned away, we also drop
-        // the reference count of the terminalHead.
-        // The Commit itself will be GC'd but we need to not lose transitive refCounts
-        cleaner.register(thread, () -> { terminalHead.decRef(); });
+        // We have nowhere to push, but the node needs to become visible to other
+        // threads via the thread sync state.
+        // The SyncState will be tidied away and the commit decrefed once the
+        // thread object is GC'd
+        currentView().commit();
     }
 
     @Override
     public void onJoin(StaticObject joined) {
-        // Join (paper Join rule): this thread detected that `joined` terminated, so pull the final
+        // This thread detected that `joined` terminated, so pull the final
         // commit the joined thread stored on its Thread object. Absent if it never committed anything.
-        Object finalCommit = context.getMeta().java_lang_Thread_0finalCommit.getHiddenObject(joined);
-        if (!(finalCommit instanceof Commit commit)) {
+        Object finalSyncState = context.getMeta().java_lang_Thread_0syncState.getHiddenObject(joined);
+        if (!(finalSyncState instanceof SyncState state)) {
             return;
         }
         BranchingView view = currentView();
-        handleConflicts(view.pull(commit), view, "join");
+        handleConflicts(view.pull(state), view, "join");
     }
 
     @Override
@@ -298,9 +305,8 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Fork: the parent pushes to the child, which pulls it at start. Runs on the parent, before the
         // child begins.
         BranchingView view = currentView();
-        SyncState fork = new SyncState();
-        view.push(fork);
-        pendingForks.put(childThread, fork);
+        SyncState childState = newThreadSyncState(childThread);
+        view.push(childState);
     }
 
     @Override
@@ -308,7 +314,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // pull from the lock
         SyncState state = lockSyncState(lock);
         BranchingView view = currentView();
-        handleConflicts(view.pull(state.commit), view, MemoryModel.monitorSyncLabel(context, lock, true));
+        handleConflicts(view.pull(state), view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
     @Override
@@ -331,7 +337,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         Set<VersionedLocation> conflict;
         Object value;
         synchronized (state) {
-            conflict = view.pull(state.commit);
+            conflict = view.pull(state);
             value = field.get(holder, true);   // forceVolatile; value is un-versioned, in the real heap
         }
         handleConflicts(conflict, view, "volatile read");
@@ -350,7 +356,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         registerForCleaning(holder);
         Set<VersionedLocation> conflicts;
         synchronized (state) {
-            conflicts = view.pull(state.commit);
+            conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
                 field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
                 view.push(state);
@@ -366,7 +372,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         SyncState state = classInitSyncState(mirror);
         Set<VersionedLocation> conflicts;
         synchronized (state) {
-            conflicts = view.pull(state.commit);
+            conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
                 view.push(state);
             }
@@ -381,7 +387,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         SyncState state = classInitSyncState(mirror);
         Set<VersionedLocation> conflicts;
         synchronized (state) {
-            conflicts = view.pull(state.commit);
+            conflicts = view.pull(state);
         }
         handleConflicts(conflicts, view, "class init");
     }

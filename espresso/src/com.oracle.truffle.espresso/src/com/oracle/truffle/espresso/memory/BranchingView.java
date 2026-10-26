@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -42,8 +43,12 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  */
 public final class BranchingView implements MemoryView {
 
-    private Commit head;                                 // tip of this thread's branch (null = none)
-    private Map<VersionedLocation, Object> staging = new HashMap<>();  // reassigned (moved) on commit
+    // This thread's branch, shared with its Thread object. Null until first use: the view can be created
+    // during VM bootstrap, before the Thread exists. Never read directly, always through state().
+    private SyncState unboundOrState;
+    private final Supplier<SyncState> bindState;
+    private Map<VersionedLocation, Object> staging = new HashMap<>(); // staged changes which are cleared when committed to history
+
     // Sync-as-Share (stage-on-access): per-app-owned-array working copy, materialised on first access and
     // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging and
     // cleared at each commit, so it rebuilds from post-commit committed state next epoch.
@@ -55,12 +60,20 @@ public final class BranchingView implements MemoryView {
     private final AtomicLong deadObjectCount;
     private long deadSetSizeAtLastPurge;
 
-    public BranchingView(AtomicLong deadObjectCount) {
+    public BranchingView(Supplier<SyncState> bindState, AtomicLong deadObjectCount) {
+        this.bindState = bindState;
         this.deadObjectCount = deadObjectCount;
     }
 
-    Commit head() {
-        return head;
+    /** This thread's sync state, bound on first use. */
+    private SyncState state() {
+        SyncState s = unboundOrState;
+        if (s == null) {
+            s = bindState.get();
+            assert s != null : "binding a view produced no sync state";
+            unboundOrState = s;
+        }
+        return s;
     }
 
     private void setHead(Commit c) {
@@ -70,10 +83,10 @@ public final class BranchingView implements MemoryView {
         if (c != null) {
             c.incRef();
         }
-        if (head != null) {
-            head.decRef();
+        if (state().commit != null) {
+            state().commit.decRef();
         }
-        head = c;
+        state().commit = c;
     }
 
     boolean stagingEmpty() {
@@ -129,7 +142,7 @@ public final class BranchingView implements MemoryView {
             return staged;
         }
 
-        if (head == null) {
+        if (state().commit == null) {
             return MemoryModel.ABSENT;
         }
 
@@ -146,7 +159,7 @@ public final class BranchingView implements MemoryView {
         Set<Commit> visited = new HashSet<>();
         Set<Commit> candidates = new HashSet<>();
         Set<Commit> heads = new HashSet<>();
-        heads.add(head);
+        heads.add(state().commit);
 
         while (!heads.isEmpty()) {
             Commit current = heads.iterator().next();
@@ -225,8 +238,8 @@ public final class BranchingView implements MemoryView {
         // before merging the changes into the head, first try to
         // purge any dead objects from the head commit (non-recursive)
         long deadCount = deadObjectCount.get();
-        if (head != null && deadCount > deadSetSizeAtLastPurge) {
-            head.purgeObjects();
+        if (state().commit != null && deadCount > deadSetSizeAtLastPurge) {
+            state().commit.purgeObjects();
             deadSetSizeAtLastPurge = deadCount;
         }
 
@@ -238,13 +251,13 @@ public final class BranchingView implements MemoryView {
         Map<VersionedLocation, Object> changes = staging;
         staging = new HashMap<>();
         VersioningStats.onCommit(changes.size());
-        setHead(head == null ? Commit.first(changes) : head.extend(changes));
+        setHead(state().commit == null ? Commit.first(changes) : state().commit.extend(changes));
     }
 
     /** Shallow compression from this thread's head (no-op if it has no head yet). */
     private void compress() {
-        if (head != null) {
-            head.compressUpwards();
+        if (state().commit != null) {
+            state().commit.compressUpwards();
         }
     }
 
@@ -264,7 +277,7 @@ public final class BranchingView implements MemoryView {
     Set<VersionedLocation> merge(Commit otherHead) {
         assert staging.isEmpty();
 
-        if (head == null) {
+        if (state().commit == null) {
             // either pickup the other commit as head (there is nothing to merge)
             // or the genuinely is no operation to do here
             if (otherHead != null) {
@@ -278,7 +291,7 @@ public final class BranchingView implements MemoryView {
             return Set.of();
         }
 
-        if (otherHead == head) {
+        if (otherHead == state().commit) {
             // no point in doing this
             return Set.of();
         }
@@ -287,7 +300,7 @@ public final class BranchingView implements MemoryView {
         Set<Commit> headsHistory = new HashSet<>();
         Set<Commit> visited = new HashSet<>();
         Set<Commit> heads = new HashSet<>();
-        heads.add(head);
+        heads.add(state().commit);
 
         while(!heads.isEmpty()) {
             Commit current = heads.iterator().next();
@@ -325,7 +338,7 @@ public final class BranchingView implements MemoryView {
             heads.addAll(current.parents());
         }
 
-        if (otherHeadsHistory.contains(head)) {
+        if (otherHeadsHistory.contains(state().commit)) {
             // if this head is already some ancestor of the other head, then
             // there is no point in merging (it would not be wrong it just creates
             // extra edges and makes reference counting compaction harder)
@@ -334,6 +347,7 @@ public final class BranchingView implements MemoryView {
             // but have committed nothing in the mean time but the lock has
             // moved on by some other thread
             setHead(otherHead);
+            compress();
             return Set.of();
         }
 
@@ -361,16 +375,21 @@ public final class BranchingView implements MemoryView {
         }
 
         // create the merge of the parents
-        Commit mergeCommit = Commit.merge(head, otherHead);
+        Commit mergeCommit = Commit.merge(state().commit, otherHead);
         VersioningStats.onMerge();
         setHead(mergeCommit);
         return Set.of();
     }
 
     // pull from another commit and report any conflicting locations
-    Set<VersionedLocation> pull(Commit from) {
+    Set<VersionedLocation> pull(SyncState from) {
         commitStaging();
-        return merge(from);
+        return merge(from.commit);
+    }
+
+    void commit() {
+        commitStaging();
+        compress();
     }
 
     // commit, compress and push the changes to the 'to' location
@@ -379,15 +398,15 @@ public final class BranchingView implements MemoryView {
             to.commit.decRef();
         }
 
-        commitStaging();
-        compress();
+        commit();
 
-        if (head != null) {
-            head.incRef();
+        if (state().commit != null) {
+            state().commit.incRef();
         }
 
-        to.commit = head;
+        to.commit = state().commit;
     }
+
 
     // --- MemoryView: deferred-conflict flag (raised at the bytecode safe point / thread end) ---
 

@@ -541,7 +541,7 @@ public final class Meta extends ContextAccessImpl
                         .field(higher(14), Names.interrupted, Types._boolean) //
                         .maybeHiddenfield(java_lang_Thread);
         java_lang_Thread_0hostThread = java_lang_Thread.requireHiddenField(Names.HIDDEN_hostThread);
-        java_lang_Thread_0finalCommit = java_lang_Thread.requireHiddenField(Names.HIDDEN_finalCommit);
+        java_lang_Thread_0syncState = java_lang_Thread.requireHiddenField(Names.HIDDEN_syncState);
         java_lang_Thread_0espressoManaged = java_lang_Thread.requireHiddenField(Names.HIDDEN_espressoManaged);
         java_lang_Thread_0toNativeLock = java_lang_Thread.requireHiddenField(Names.HIDDEN_toNativeLock);
         java_lang_Thread_0deprecationSupport = java_lang_Thread.requireHiddenField(Names.HIDDEN_deprecationSupport);
@@ -1723,7 +1723,7 @@ public final class Meta extends ContextAccessImpl
     public final Field java_lang_Thread_0waitedCount;
     public final Field java_lang_Thread_0depthFirstNumber;
     public final Field java_lang_Thread_0scopedValueCache;
-    public final Field java_lang_Thread_0finalCommit;
+    public final Field java_lang_Thread_0syncState;
 
     public final Field java_lang_Thread_name;
     public final Field java_lang_Thread_priority;
