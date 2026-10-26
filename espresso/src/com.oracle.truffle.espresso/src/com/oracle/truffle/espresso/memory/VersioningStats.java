@@ -43,12 +43,15 @@ final class VersioningStats {
     static final boolean ENABLED = System.getenv("SYNCSHARE_STATS") != null;
 
     // Branching.
-    static final AtomicLong commits = new AtomicLong();        // Commit nodes created (== resident DAG)
-    static final AtomicLong committedChanges = new AtomicLong(); // (location,value) pairs across all commits
-                                                                // = dag's retained value-slots (full history)
-    static final AtomicLong merges = new AtomicLong();          // merge() calls that were not no-ops
-    static final AtomicLong folds = new AtomicLong();           // commitStaging folded into an exclusive head
-                                                                // (replaced it) instead of adding a commit
+    static final AtomicLong commits = new AtomicLong();        // commitStaging calls that committed something
+                                                                // (folded or not)
+    static final AtomicLong committedChanges = new AtomicLong(); // staged writes committed, summed over commits
+    static final AtomicLong merges = new AtomicLong();          // merge commits created
+    static final AtomicLong folds = new AtomicLong();           // ...commits that folded into an exclusive head in
+                                                                // place (no new node). New nodes ~= commits - folds + merges
+    static final AtomicLong absorbed = new AtomicLong();        // commits absorbed into a descendant by compression
+                                                                // (resident nodes <= commits - folds + merges - absorbed)
+    static final AtomicLong purgedEntries = new AtomicLong();   // commit entries removed because their object died
     static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
     static final AtomicLong markedForPurging = new AtomicLong();     // ...of which the GC found dead (Cleaner ran)
 
@@ -87,10 +90,21 @@ final class VersioningStats {
         }
     }
 
-    static void onFold(int changes) {
+    static void onFold() {
         if (ENABLED) {
             folds.incrementAndGet();
-            committedChanges.addAndGet(changes);
+        }
+    }
+
+    static void onAbsorb(int commitsAbsorbed) {
+        if (ENABLED) {
+            absorbed.addAndGet(commitsAbsorbed);
+        }
+    }
+
+    static void onPurge(int entriesRemoved) {
+        if (ENABLED) {
+            purgedEntries.addAndGet(entriesRemoved);
         }
     }
 
@@ -141,8 +155,10 @@ final class VersioningStats {
                             .append(" committedChanges=").append(committedChanges)
                             .append(" merges=").append(merges)
                             .append(" folds=").append(folds)
+                            .append(" absorbed=").append(absorbed)
                             .append(" cleanerRegistrations=").append(cleanerRegistrations)
-                            .append(" markedForPurging=").append(markedForPurging);
+                            .append(" markedForPurging=").append(markedForPurging)
+                            .append(" purgedEntries=").append(purgedEntries);
         }
         if (gVersions.get() > 0) {
             sb.append(" linear: gVersions=").append(gVersions)

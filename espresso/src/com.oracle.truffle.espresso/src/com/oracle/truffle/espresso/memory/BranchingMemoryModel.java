@@ -27,6 +27,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import com.oracle.truffle.espresso.impl.Field;
@@ -85,16 +86,17 @@ public final class BranchingMemoryModel implements MemoryModel {
     /** Fork points recorded at spawn, keyed by the child's guest {@code Thread}; consumed at its start. */
     private final Map<StaticObject, ForkPoint> pendingForks = new ConcurrentHashMap<>();
 
-    private final Set<ObjectNumber> deadObjectNumbers = ConcurrentHashMap.newKeySet();
+    private final AtomicLong deadObjectCount;
 
     // This is a record so that we don't accidentally capture the StaticObject
     // if we did that, we could end up keeping a reference to the StaticObject in the cleaner
     // register set and then the object could never be GC'd
-    record MarkObjectForPurging(ObjectNumber objectNumber, Set<ObjectNumber> objectsToPurge) implements Runnable {
+    record MarkObjectForPurging(ObjectNumber objectNumber, AtomicLong deadObjectCount) implements Runnable {
 
         @Override
         public void run() {
-            objectsToPurge.add(objectNumber);
+            objectNumber.setDead();
+            deadObjectCount.incrementAndGet();
             VersioningStats.onMarkedForPurging();
         }
     }
@@ -105,7 +107,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     private void registerForCleaning(StaticObject object) {
         if (!object.isCleanerRegistered()) {
             object.markCleanerRegistered();
-            cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), deadObjectNumbers));
+            cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), deadObjectCount));
             VersioningStats.onCleanerRegistered();
         }
     }
@@ -116,6 +118,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     public BranchingMemoryModel(EspressoContext context) {
         this.context = context;
+        this.deadObjectCount = new AtomicLong(0);
         VersioningStats.arm();
     }
 
@@ -126,7 +129,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        return new BranchingView(deadObjectNumbers);
+        return new BranchingView(deadObjectCount);
     }
 
     @Override
@@ -293,6 +296,9 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         view.commitStaging();
         handleConflicts(view.merge(commit), view, "join");
+
+        // Don't worry about compressing now, the object representing the thread is still
+        // going to exist until it is GC'd so we may as well wait until then
     }
 
     @Override
@@ -332,6 +338,10 @@ public final class BranchingMemoryModel implements MemoryModel {
         }
         view.commitStaging();
         publish(lockState, view);
+
+        // the thread and lock now have the same head, so try to
+        // compress the merge (and history) that came before
+        view.compress();
     }
 
     /** Publish the view's current tip to a lock state. */

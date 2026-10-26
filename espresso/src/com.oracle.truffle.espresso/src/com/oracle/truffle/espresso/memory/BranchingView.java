@@ -23,13 +23,12 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.util.ArrayDeque;
-import java.util.List;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
@@ -53,11 +52,11 @@ public final class BranchingView implements MemoryView {
 
     // A set shared between views for objects who are no longer referenceable and
     // should be removed when found
-    private final Set<ObjectNumber> deadObjectNumbers;
-    private int deadSetSizeAtLastPurge;
+    private final AtomicLong deadObjectCount;
+    private long deadSetSizeAtLastPurge;
 
-    public BranchingView(Set<ObjectNumber> deadObjectNumbers) {
-        this.deadObjectNumbers = deadObjectNumbers;
+    public BranchingView(AtomicLong deadObjectCount) {
+        this.deadObjectCount = deadObjectCount;
     }
 
     Commit head() {
@@ -225,9 +224,10 @@ public final class BranchingView implements MemoryView {
 
         // before merging the changes into the head, first try to
         // purge any dead objects from the head commit (non-recursive)
-        if (head != null && deadObjectNumbers.size() > deadSetSizeAtLastPurge) {
-            head.purgeObjects(deadObjectNumbers);
-            deadSetSizeAtLastPurge = deadObjectNumbers.size();
+        long deadCount = deadObjectCount.get();
+        if (head != null && deadCount > deadSetSizeAtLastPurge) {
+            head.purgeObjects();
+            deadSetSizeAtLastPurge = deadCount;
         }
 
         if (staging.isEmpty()) {
@@ -237,17 +237,14 @@ public final class BranchingView implements MemoryView {
         // Grab the staging and clear it
         Map<VersionedLocation, Object> changes = staging;
         staging = new HashMap<>();
+        VersioningStats.onCommit(changes.size());
+        setHead(head == null ? Commit.first(changes) : head.extend(changes));
+    }
 
-        if (head != null && head.getRefCount() == 1) {
-            // If the head has only one reference, we can update the commit
-            // in place rather than creating a new commit
-            VersioningStats.onFold(changes.size());
-            head.adoptAll(changes);
-
-        } else {
-            Commit c = new Commit(changes, head == null ? List.of() : List.of(head));
-            VersioningStats.onCommit(changes.size());
-            setHead(c);
+    /** Shallow compression from this thread's head (no-op if it has no head yet). */
+    void compress() {
+        if (head != null) {
+            head.compressUpwards();
         }
     }
 
@@ -305,6 +302,11 @@ public final class BranchingView implements MemoryView {
             heads.addAll(current.parents());
         }
 
+        if (headsHistory.contains(otherHead)) {
+            // their head is already in our history, so nothing to merge
+            return Set.of();
+        }
+
         Set<Commit> otherHeadsHistory = new HashSet<>();
         visited.clear();
         heads.clear();
@@ -321,6 +323,18 @@ public final class BranchingView implements MemoryView {
 
             otherHeadsHistory.add(current);
             heads.addAll(current.parents());
+        }
+
+        if (otherHeadsHistory.contains(head)) {
+            // if this head is already some ancestor of the other head, then
+            // there is no point in merging (it would not be wrong it just creates
+            // extra edges and makes reference counting compaction harder)
+            // so instead just fast-forward the head to the other head.
+            // This can happen when we take a lock we just released
+            // but have committed nothing in the mean time but the lock has
+            // moved on by some other thread
+            setHead(otherHead);
+            return Set.of();
         }
 
         Set<Commit> mineOnly = new HashSet<>(headsHistory);
@@ -347,7 +361,8 @@ public final class BranchingView implements MemoryView {
         }
 
         // create the merge of the parents
-        Commit mergeCommit = new Commit(Map.of(), List.of(head, otherHead));
+        Commit mergeCommit = Commit.merge(head, otherHead);
+        VersioningStats.onMerge();
         setHead(mergeCommit);
         return Set.of();
     }
