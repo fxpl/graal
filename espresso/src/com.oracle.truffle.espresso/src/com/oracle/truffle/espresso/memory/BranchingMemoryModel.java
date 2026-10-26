@@ -265,7 +265,10 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Commit the final staging and record the final commit for join,
         // before the terminating notify that wakes joiners.
         BranchingView view = currentView();
-        Commit terminalHead = view.push(null);
+
+        SyncState s = new SyncState();
+        view.push(s);
+        Commit terminalHead = s.commit;
 
         // Set the hidden thread slot to store the final commit, this lets a joining thread
         // pick up the commit even once the thread has been deallocated
@@ -296,7 +299,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // child begins.
         BranchingView view = currentView();
         SyncState fork = new SyncState();
-        fork.commit = view.push(fork.commit);
+        view.push(fork);
         pendingForks.put(childThread, fork);
     }
 
@@ -313,7 +316,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // push to the lock
         BranchingView view = currentView();
         SyncState state = lockSyncState(lock);
-        state.commit = view.push(state.commit);
+        view.push(state);
     }
 
     @Override
@@ -350,7 +353,7 @@ public final class BranchingMemoryModel implements MemoryModel {
             conflicts = view.pull(state.commit);
             if (conflicts.isEmpty()) {
                 field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
-                state.commit = view.push(state.commit);
+                view.push(state);
             }
         }
         handleConflicts(conflicts, view, "volatile write");
@@ -365,7 +368,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         synchronized (state) {
             conflicts = view.pull(state.commit);
             if (conflicts.isEmpty()) {
-                state.commit = view.push(state.commit);
+                view.push(state);
             }
         }
         handleConflicts(conflicts, view, "class init");

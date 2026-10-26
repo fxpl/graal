@@ -373,11 +373,10 @@ public final class BranchingView implements MemoryView {
         return merge(from);
     }
 
-    // 'replace' the to commit with our head after committing and compressing
-    // the caller needs to put the commit in the correct place
-    Commit push(Commit to) {
-        if (to != null) {
-            to.decRef();
+    // commit, compress and push the changes to the 'to' location
+    void push(SyncState to) {
+        if (to.commit != null) {
+            to.commit.decRef();
         }
 
         commitStaging();
@@ -387,7 +386,7 @@ public final class BranchingView implements MemoryView {
             head.incRef();
         }
 
-        return head;
+        to.commit = head;
     }
 
     // --- MemoryView: deferred-conflict flag (raised at the bytecode safe point / thread end) ---
