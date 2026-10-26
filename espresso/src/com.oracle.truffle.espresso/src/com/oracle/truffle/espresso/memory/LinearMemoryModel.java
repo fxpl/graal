@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.truffle.espresso.EspressoOptions;
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 // FieldLocation / ArrayLocation / VersionedLocation are in this package.
@@ -379,8 +380,8 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onClassInitialized(StaticObject mirror) {
-        // Class-init release: publish the initializer's staged writes to g.
+    public void onClassInitialized(ObjectKlass klass) {
+        // Class-init release: push the initializer's staged writes to g.
         LinearLocalView view = currentView();
         handleConflict(pullG(view), view, "class init");
         handleConflict(pushG(view), view, "class init");
@@ -388,7 +389,7 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onClassInitUse(StaticObject mirror) {
+    public void onClassInitUse(ObjectKlass klass) {
         // Class-init acquire: pull g, no push. Linear's single g carries every class's init.
         LinearLocalView view = currentView();
         handleConflict(pullG(view), view, "class init");

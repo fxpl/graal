@@ -23,6 +23,7 @@
 package com.oracle.truffle.espresso.memory;
 
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -179,17 +180,17 @@ public interface MemoryModel {
     void onVolatileWrite(StaticObject holder, Field field, Object value);
 
     /**
-     * Class-init release (JLS §12.4.2): {@code <clinit>} of the class whose mirror is {@code mirror} has
-     * completed, so publish the initializer's writes to that class's init state. Happens once per class.
+     * Class-init release (JLS §12.4.2): {@code <clinit>} of {@code klass} has completed, so push the
+     * initializer's writes to the class's init state. Happens once per class.
      */
-    void onClassInitialized(StaticObject mirror);
+    void onClassInitialized(ObjectKlass klass);
 
     /**
-     * Class-init acquire: the current thread's first use of the class whose mirror is {@code mirror}, so
-     * pull what its initializer published. Publishes nothing: a use-to-use edge would invent ordering the
-     * JVM never creates and mask real races.
+     * Class-init acquire: the current thread's first use of {@code klass}, so pull what its initializer
+     * pushed. Pushes nothing: a use-to-use edge would invent ordering the JVM never creates and mask
+     * real races.
      */
-    void onClassInitUse(StaticObject mirror);
+    void onClassInitUse(ObjectKlass klass);
 
     // --- Activation gate ---
 

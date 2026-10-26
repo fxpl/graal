@@ -23,6 +23,7 @@
 package com.oracle.truffle.espresso.memory;
 
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -109,12 +110,12 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onClassInitialized(StaticObject mirror) {
+    public void onClassInitialized(ObjectKlass klass) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onClassInitialized: memory-model hooks must be folded under shared");
     }
 
     @Override
-    public void onClassInitUse(StaticObject mirror) {
+    public void onClassInitUse(ObjectKlass klass) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onClassInitUse: memory-model hooks must be folded under shared");
     }
 }

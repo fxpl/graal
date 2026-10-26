@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -71,14 +72,10 @@ public final class BranchingMemoryModel implements MemoryModel {
     // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
     private final Map<VersionedLocation, Object> genesis = new ConcurrentHashMap<>();
 
-    /** Per-monitor sync state. Keyed by object identity. */
-    private final Map<StaticObject, SyncState> lockSyncStates = new ConcurrentHashMap<>();
-
     /**
      * Per-volatile-field sync state — the paper's map {@code V} of the latest commit of each volatile
      * variable (§5.3 / Table 2). Keyed by {@link FieldLocation} (so a volatile instance field is a
-     * distinct sync object per receiver). Separate from {@link #lockSyncStates}: a volatile field is its
-     * own synchronisation object, not a monitor.
+     * distinct sync object per receiver).
      */
     private final Map<FieldLocation, SyncState> volatileSyncStates = new ConcurrentHashMap<>();
 
@@ -173,20 +170,20 @@ public final class BranchingMemoryModel implements MemoryModel {
         return v == null ? 0 : ((BranchingView) v).stagingSize();
     }
 
-    private SyncState lockSyncState(StaticObject key) {
-        return lockSyncStates.computeIfAbsent(key, k -> new SyncState());
+    private SyncState lockSyncState(StaticObject lock) {
+        return lock.lockSyncState(() -> {
+            SyncState s = new SyncState();
+            cleaner.register(lock, () -> {
+                if (s.commit != null) {
+                    s.commit.decRef();
+                }
+            });
+            return s;
+        });
     }
 
     private SyncState volatileSyncState(FieldLocation key) {
         return volatileSyncStates.computeIfAbsent(key, k -> new SyncState());
-    }
-
-    // Sync-as-Share: per-class init sync state, keyed by the class mirror (the init-state's guest handle).
-    // The class-init edge (JLS §12.4.2): pushed at <clinit> completion, pulled on first use.
-    private final Map<StaticObject, SyncState> classInitSyncStates = new ConcurrentHashMap<>();
-
-    private SyncState classInitSyncState(StaticObject mirror) {
-        return classInitSyncStates.computeIfAbsent(mirror, k -> new SyncState());
     }
 
     // --- Ordinary field / array access: stage and read on the calling thread's view. ---
@@ -366,10 +363,10 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onClassInitialized(StaticObject mirror) {
+    public void onClassInitialized(ObjectKlass klass) {
         // Class-init release: pull from the class's init sync state, then push to it.
         BranchingView view = currentView();
-        SyncState state = classInitSyncState(mirror);
+        SyncState state = klass.getClassInitSyncState();
         Set<VersionedLocation> conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
@@ -381,10 +378,10 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onClassInitUse(StaticObject mirror) {
+    public void onClassInitUse(ObjectKlass klass) {
         // Class-init acquire: pull from the class's init sync state, no push.
         BranchingView view = currentView();
-        SyncState state = classInitSyncState(mirror);
+        SyncState state = klass.getClassInitSyncState();
         Set<VersionedLocation> conflicts;
         synchronized (state) {
             conflicts = view.pull(state);

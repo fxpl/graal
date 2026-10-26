@@ -85,6 +85,7 @@ import com.oracle.truffle.espresso.constantpool.RuntimeConstantPool;
 import com.oracle.truffle.espresso.descriptors.EspressoSymbols.Names;
 import com.oracle.truffle.espresso.impl.ModuleTable.ModuleEntry;
 import com.oracle.truffle.espresso.impl.PackageTable.PackageEntry;
+import com.oracle.truffle.espresso.memory.SyncState;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.redefinition.ChangePacket;
@@ -92,6 +93,7 @@ import com.oracle.truffle.espresso.redefinition.ClassRedefinition;
 import com.oracle.truffle.espresso.redefinition.DetectedChange;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
+import com.oracle.truffle.espresso.runtime.EspressoThreadLocalState;
 import com.oracle.truffle.espresso.runtime.EspressoVerifier;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
@@ -176,6 +178,9 @@ public final class ObjectKlass extends Klass implements AttributedElement {
     private final ClassHierarchyAssumption noConcreteSubclassesAssumption;
     // endregion
 
+    // Add sync state to track the class init history
+    private final SyncState syncState;
+
     @Override
     public Attribute[] getAttributes() {
         return getKlassVersion().getAttributes();
@@ -239,6 +244,9 @@ public final class ObjectKlass extends Klass implements AttributedElement {
         if (getMeta().java_lang_Class != null) {
             initializeGuestClassMirror();
         }
+
+        this.syncState = getLanguage().isVersionedMemorySelected() && !StaticObject.isNull(classLoader)
+                        ? new SyncState() : null;
     }
 
     private static boolean isEnumValuesField(LinkedField lkStaticFields) {
@@ -448,17 +456,17 @@ public final class ObjectKlass extends Klass implements AttributedElement {
             checkErroneousInitialization();
             initState = INITIALIZED;
             assert isInitialized();
-            publishClassInit();
+            pushClassInit();
         } finally {
             getInitLock().unlock();
         }
     }
 
     // Sync-as-Share: the class-init happens-before (JLS §12.4.2) is init-completion -> first-use. Its
-    // *effect* is a one-way acquire, NOT a monitor (a monitor enter/exit also republishes, which would
-    // invent a use<->use edge the JVM never creates and mask real races). So: a release
-    // (onClassInitialized) at <clinit> completion, and an acquire with no republish (onClassInitUse) on
-    // first use, keyed by the class mirror. Application classes only:
+    // *effect* is one-way, NOT a monitor (a monitor enter/exit also pushes, which would invent a
+    // use<->use edge the JVM never creates and mask real races). So: a push to the class's init state
+    // (onClassInitialized) at <clinit> completion, and a pull with no push (onClassInitUse) on each
+    // thread's first use. Application classes only:
     // JDK class-init HB rides unversioned boot fields, so versioning it is neither needed nor wanted
     // (it would also route the whole JDK enum-<clinit> storm through here).
     private boolean classInitVersioned() {
@@ -466,26 +474,32 @@ public final class ObjectKlass extends Klass implements AttributedElement {
                         && !StaticObject.isNull(getDefiningClassLoader());
     }
 
-    /** Release: at {@code <clinit>} completion (holding LC) publish the initializer's static writes to
-     *  the class's init state. */
-    private void publishClassInit() {
+    /** At {@code <clinit>} completion (holding LC), push the initializer's static writes to the class's
+     *  init state. */
+    private void pushClassInit() {
         if (classInitVersioned()) {
-            getContext().getMemoryModel().onClassInitialized(mirror());
+            getContext().getMemoryModel().onClassInitialized(this);
         }
     }
 
-    /** Acquire: the first use of this class by a thread merges whatever the initializer published
-     *  (merge only, no republish). Memoised per (thread, class):
-     *  the edge is init->first-use, so it fires once, not on every subsequent access. Called from the
-     *  interpreter's class-first-use bytecodes. */
-    public void classInitAcquire() {
+    /** On a thread's first use of this class, pull what the initializer pushed (no push back).
+     *  Memoised per (thread, class): the edge is init->first-use, so it fires once, not on every
+     *  subsequent access. Called from the interpreter's class-first-use bytecodes. */
+    public void pullClassInit() {
         if (!classInitVersioned()) {
             return;
         }
-        if (!getContext().getLanguage().getThreadLocalState().markClassInitAcquired(mirror())) {
-            return;   // already acquired this class's init on this thread
+        EspressoThreadLocalState threadState = getContext().getLanguage().getThreadLocalState();
+        if (threadState.hasPulledClassInitialiser(this)) {
+            return;
         }
-        getContext().getMemoryModel().onClassInitUse(mirror());
+        getContext().getMemoryModel().onClassInitUse(this);
+        threadState.markClassInitialiserAsPulledFrom(this);
+    }
+
+    public SyncState getClassInitSyncState() {
+        assert syncState != null : "class init sync state is null";
+        return syncState;
     }
 
     /*

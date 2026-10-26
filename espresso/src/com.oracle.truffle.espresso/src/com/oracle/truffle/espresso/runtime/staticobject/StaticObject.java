@@ -23,6 +23,7 @@
 package com.oracle.truffle.espresso.runtime.staticobject;
 
 import java.lang.reflect.Array;
+import java.util.function.Supplier;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -44,6 +45,7 @@ import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.ObjectNumber;
+import com.oracle.truffle.espresso.memory.SyncState;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
@@ -70,6 +72,7 @@ public class StaticObject implements TruffleObject, Cloneable {
     private final Klass klass; // != PrimitiveKlass
 
     private EspressoLock lockOrForeignMarker;
+    private SyncState nothingOrLockState;
 
     // Sync-as-Share provenance (design/versioning-provenance.md): true iff this object/array is
     // application data — created by application code, or reachable via a store into an already-owned
@@ -206,6 +209,15 @@ public class StaticObject implements TruffleObject, Cloneable {
     /** Mark this object/array as application data (monotonic: set once at allocation or on propagation). */
     public final void markAppOwned() {
         appOwned = true;
+    }
+
+    public final SyncState lockSyncState(Supplier<SyncState> create) {
+        SyncState s = nothingOrLockState;
+        if (s == null) {
+            s = create.get();
+            nothingOrLockState = s;
+        }
+        return s;
     }
 
     public final Object rawForeignObject(EspressoLanguage language) {

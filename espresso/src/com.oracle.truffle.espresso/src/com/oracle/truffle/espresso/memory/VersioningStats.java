@@ -52,6 +52,8 @@ final class VersioningStats {
     static final AtomicLong absorbed = new AtomicLong();        // commits absorbed into a descendant by compression
                                                                 // (resident nodes <= commits - folds + merges - absorbed)
     static final AtomicLong purgedEntries = new AtomicLong();   // commit entries removed because their object died
+    static final AtomicLong released = new AtomicLong();        // commits whose ref count reached 0 (the decRef cascade)
+                                                                // nodes live ~= commits - folds + merges - absorbed - released
     static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
     static final AtomicLong markedForPurging = new AtomicLong();     // ...of which the GC found dead (Cleaner ran)
 
@@ -108,6 +110,12 @@ final class VersioningStats {
         }
     }
 
+    static void onRelease() {
+        if (ENABLED) {
+            released.incrementAndGet();
+        }
+    }
+
     static void onCleanerRegistered() {
         if (ENABLED) {
             cleanerRegistrations.incrementAndGet();
@@ -148,6 +156,11 @@ final class VersioningStats {
         }
     }
 
+    /** Commit nodes ever created: every commit that did not fold, plus every merge commit. */
+    private static long nodesCreated() {
+        return commits.get() - folds.get() + merges.get();
+    }
+
     private static void dump() {
         StringBuilder sb = new StringBuilder("[versioning-stats]");
         if (commits.get() > 0 || merges.get() > 0 || folds.get() > 0 || cleanerRegistrations.get() > 0) {
@@ -156,6 +169,9 @@ final class VersioningStats {
                             .append(" merges=").append(merges)
                             .append(" folds=").append(folds)
                             .append(" absorbed=").append(absorbed)
+                            .append(" released=").append(released)
+                            .append(" nodesCreated=").append(nodesCreated())
+                            .append(" nodesLive=").append(nodesCreated() - absorbed.get() - released.get())
                             .append(" cleanerRegistrations=").append(cleanerRegistrations)
                             .append(" markedForPurging=").append(markedForPurging)
                             .append(" purgedEntries=").append(purgedEntries);

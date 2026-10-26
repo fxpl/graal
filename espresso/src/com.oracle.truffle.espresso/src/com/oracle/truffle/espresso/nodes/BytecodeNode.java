@@ -3279,10 +3279,10 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                 declaringKlass.safeInitialize();
             }
         }
-        // Sync-as-Share: acquire the class-init edge (JLS §12.4.2) even on the already-initialized fast
+        // Sync-as-Share: pull the class-init edge (JLS §12.4.2) even on the already-initialized fast
         // path — this is where a late-arriving thread reads the init state and must see the <clinit>
         // writes. Folds away when the model is off.
-        declaringKlass.classInitAcquire();
+        declaringKlass.pullClassInit();
         return declaringKlass.getStatics();
     }
 

@@ -123,6 +123,7 @@ public class Commit {
 
                 boolean marked = REF_COUNT.compareAndSet(c, 0, -1);
                 assert marked : "a reference was taken to a commit whose count had reached 0";
+                VersioningStats.onRelease();
 
                 for (Commit p : c.parents()) {
                     if (REF_COUNT.decrementAndGet(p) == 0) {

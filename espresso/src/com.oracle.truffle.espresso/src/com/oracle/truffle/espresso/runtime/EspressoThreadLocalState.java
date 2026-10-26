@@ -32,6 +32,7 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.memory.MemoryView;
 import com.oracle.truffle.espresso.memory.ObjectNumber;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
@@ -68,10 +69,9 @@ public class EspressoThreadLocalState {
 
     private ObjectNumber currentObjectNumber;
 
-    // Sync-as-Share: application classes whose init this thread has already acquired (JLS §12.4.2 is
-    // init-completion -> FIRST use, so the acquire fires once per class, not on every static access).
-    // Owned by this guest thread, so a plain set is safe. Lazily created (null under shared/off).
-    private java.util.Set<StaticObject> classInitAcquired;
+    // Sync-as-Share: the classes whose initialiser's state this thread has already pulled, so the pull
+    // happens on the thread's first use of a class rather than on every static access.
+    private java.util.Set<ObjectKlass> classInitialisersAlreadyPulled;
 
     @SuppressWarnings("unused")
     public EspressoThreadLocalState(EspressoContext context, Thread t) {
@@ -81,13 +81,17 @@ public class EspressoThreadLocalState {
         assert ((hostThread = new WeakReference<>(t)) != null);
     }
 
-    /** Sync-as-Share: record that this thread is using class {@code mirror} for the first time; returns
-     *  {@code true} exactly once per class (so the class-init acquire fires only on the first use). */
-    public boolean markClassInitAcquired(StaticObject mirror) {
-        if (classInitAcquired == null) {
-            classInitAcquired = new java.util.HashSet<>();
+    /** Sync-as-Share: whether this thread has already pulled {@code klass}'s initialiser state. */
+    public boolean hasPulledClassInitialiser(ObjectKlass klass) {
+        return classInitialisersAlreadyPulled != null && classInitialisersAlreadyPulled.contains(klass);
+    }
+
+    /** Sync-as-Share: record that this thread has pulled {@code klass}'s initialiser state. */
+    public void markClassInitialiserAsPulledFrom(ObjectKlass klass) {
+        if (classInitialisersAlreadyPulled == null) {
+            classInitialisersAlreadyPulled = new java.util.HashSet<>();
         }
-        return classInitAcquired.add(mirror);
+        classInitialisersAlreadyPulled.add(klass);
     }
 
     /** This guest thread's Sync-as-Share memory view, created on first use by the active model. */
