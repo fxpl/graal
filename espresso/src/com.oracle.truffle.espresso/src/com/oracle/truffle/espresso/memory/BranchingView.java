@@ -347,6 +347,10 @@ public final class BranchingView implements MemoryView {
             // but have committed nothing in the mean time but the lock has
             // moved on by some other thread
             setHead(otherHead);
+
+            // At this point, we have also moved our head, so try to compress
+            // the history as we dropped a ref to part way through the
+            // history
             compress();
             return Set.of();
         }
