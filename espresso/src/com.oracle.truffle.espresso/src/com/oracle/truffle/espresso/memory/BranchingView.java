@@ -32,7 +32,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
-import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * A guest thread's view in the branching model (the prototype's {@code branching::LocalVersionStore}):
@@ -51,8 +50,9 @@ public final class BranchingView implements MemoryView {
 
     // Sync-as-Share (stage-on-access): per-app-owned-array working copy, materialised on first access and
     // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging and
-    // cleared at each commit, so it rebuilds from post-commit committed state next epoch.
-    private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
+    // cleared at each commit, so it rebuilds from post-commit committed state next epoch. Keyed by the
+    // array's number, so aliases of one array share one copy and the view never holds the array itself.
+    private final Map<ObjectNumber, ArrayVersion> arrays = new HashMap<>();
     private String pendingConflict;
 
     // A set shared between views for objects who are no longer referenceable and
@@ -104,13 +104,13 @@ public final class BranchingView implements MemoryView {
 
     // --- Sync-as-Share array working copies (stage-on-access) ---
 
-    /** The acting thread's cached working copy of {@code array}, or {@code null} if not yet materialised. */
-    ArrayVersion arrayVersion(StaticObject array) {
+    /** The acting thread's cached working copy of the array {@code array}, or {@code null} if not yet materialised. */
+    ArrayVersion arrayVersion(ObjectNumber array) {
         return arrays.get(array);
     }
 
-    /** Cache a freshly materialised working copy of {@code array}. */
-    void putArrayVersion(StaticObject array, ArrayVersion av) {
+    /** Cache a freshly materialised working copy of the array {@code array}. */
+    void putArrayVersion(ObjectNumber array, ArrayVersion av) {
         arrays.put(array, av);
     }
 
@@ -120,8 +120,8 @@ public final class BranchingView implements MemoryView {
      * nothing. Called just before a commit.
      */
     void flushArrays() {
-        for (Map.Entry<StaticObject, ArrayVersion> e : arrays.entrySet()) {
-            StaticObject array = e.getKey();
+        for (Map.Entry<ObjectNumber, ArrayVersion> e : arrays.entrySet()) {
+            ObjectNumber array = e.getKey();
             ArrayVersion av = e.getValue();
             for (int i = av.touched.nextSetBit(0); i >= 0; i = av.touched.nextSetBit(i + 1)) {
                 stage(new ArrayLocation(array, i), java.lang.reflect.Array.get(av.host, i));

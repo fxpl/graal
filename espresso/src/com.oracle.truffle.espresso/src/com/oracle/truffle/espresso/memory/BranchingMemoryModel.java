@@ -249,20 +249,23 @@ public final class BranchingMemoryModel implements MemoryModel {
      */
     private ArrayVersion arrayVersionFor(StaticObject array) {
         BranchingView view = currentView();
-        ArrayVersion av = view.arrayVersion(array);
+        ObjectNumber number = array.getObjectNumber();
+        ArrayVersion av = view.arrayVersion(number);
         if (av == null) {
+            // the array may now reach a commit, so it must be reported when the GC collects it
+            registerForCleaning(array);
             Object physical = context.getLanguage().getArrayProperty().getObject(array);
             int n = java.lang.reflect.Array.getLength(physical);
             Object host = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), n);
             System.arraycopy(physical, 0, host, 0, n);
             for (int i = 0; i < n; i++) {
-                Object v = view.read(new ArrayLocation(array, i));
+                Object v = view.read(new ArrayLocation(number, i));
                 if (v != MemoryModel.ABSENT) {
                     java.lang.reflect.Array.set(host, i, v);
                 }
             }
             av = new ArrayVersion(host);
-            view.putArrayVersion(array, av);
+            view.putArrayVersion(number, av);
         }
         return av;
     }
@@ -408,7 +411,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         if (loc instanceof FieldLocation f) {
             return f.field().getDeclaringKlass().getName() + "." + f.field().getName();
         } else if (loc instanceof ArrayLocation a) {
-            return a.array().getKlass().getName() + "[" + a.index() + "]";
+            return "array element [" + a.index() + "]";
         }
         return String.valueOf(loc);
     }

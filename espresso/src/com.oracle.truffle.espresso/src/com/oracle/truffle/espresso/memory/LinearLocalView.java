@@ -97,7 +97,7 @@ public final class LinearLocalView implements MemoryView {
             StaticObject array = e.getKey();
             ArrayVersion av = e.getValue();
             for (int i = av.touched.nextSetBit(0); i >= 0; i = av.touched.nextSetBit(i + 1)) {
-                stage(new ArrayLocation(array, i), java.lang.reflect.Array.get(av.host, i));
+                stage(new ArrayLocation(array.getObjectNumber(), i), java.lang.reflect.Array.get(av.host, i));
             }
         }
     }

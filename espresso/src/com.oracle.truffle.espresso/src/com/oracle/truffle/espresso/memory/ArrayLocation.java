@@ -22,12 +22,14 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-
 /**
- * An element of an array: the array object plus the element index. Per-index versioning — each element
- * is an independent versioned location (the "cells" granularity; see array-design.md). Equality is by
- * array {@link StaticObject} identity plus index, so aliases of the same array share versioned state.
+ * An element of an array: the array's {@link ObjectNumber} plus the element index. Per-index versioning
+ * — each element is an independent versioned location (the "cells" granularity; see array-design.md).
+ * Equality is by the array's number plus index, so aliases of the same array share versioned state, and
+ * a location never keeps the array itself alive.
  */
-public record ArrayLocation(StaticObject array, int index) implements VersionedLocation {
+public record ArrayLocation(ObjectNumber holder, int index) implements VersionedLocation {
+    public ArrayLocation {
+        assert holder != null : "an unnumbered array reached the memory model";
+    }
 }

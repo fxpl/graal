@@ -165,7 +165,7 @@ public class Commit {
         Map<VersionedLocation, Object> filter = new HashMap<>();
         for (Map.Entry<VersionedLocation, Object> e : changes.entrySet()) {
             VersionedLocation loc = e.getKey();
-            if (! (loc instanceof FieldLocation f && f.holder().isDead()) ) {
+            if (!loc.holder().isDead()) {
                 filter.put(e.getKey(), e.getValue());
             }
         }

@@ -286,7 +286,7 @@ public final class LinearMemoryModel implements MemoryModel {
             Object host = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), n);
             System.arraycopy(physical, 0, host, 0, n);
             for (int i = 0; i < n; i++) {
-                Object v = read(new ArrayLocation(array, i));
+                Object v = read(new ArrayLocation(array.getObjectNumber(), i));
                 if (v != MemoryModel.ABSENT) {
                     java.lang.reflect.Array.set(host, i, v);
                 }
@@ -415,7 +415,7 @@ public final class LinearMemoryModel implements MemoryModel {
         if (loc instanceof FieldLocation f) {
             return f.field().getDeclaringKlass().getName() + "." + f.field().getName();
         } else if (loc instanceof ArrayLocation a) {
-            return a.array().getKlass().getName() + "[" + a.index() + "]";
+            return "array element [" + a.index() + "]";
         }
         return String.valueOf(loc);
     }
