@@ -45,6 +45,7 @@ import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.ObjectNumber;
+import com.oracle.truffle.espresso.memory.ObjectSyncState;
 import com.oracle.truffle.espresso.memory.SyncState;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
@@ -72,7 +73,10 @@ public class StaticObject implements TruffleObject, Cloneable {
     private final Klass klass; // != PrimitiveKlass
 
     private EspressoLock lockOrForeignMarker;
-    private SyncState nothingOrLockState;
+
+    // The sync states of the object monitor and all the volatile fields
+    // Initialised lazily toa void creating one for shared a objects not used for sync actions
+    private volatile ObjectSyncState objectSyncState;
 
     // Sync-as-Share provenance (design/versioning-provenance.md): true iff this object/array is
     // application data — created by application code, or reachable via a store into an already-owned
@@ -211,13 +215,31 @@ public class StaticObject implements TruffleObject, Cloneable {
         appOwned = true;
     }
 
-    public final SyncState lockSyncState(Supplier<SyncState> create) {
-        SyncState s = nothingOrLockState;
+    public final ObjectSyncState getObjectSyncState() {
+        // fast path
+        ObjectSyncState s = objectSyncState;
         if (s == null) {
-            s = create.get();
-            nothingOrLockState = s;
+            s = createObjectSyncState();
         }
         return s;
+    }
+
+    // outlined with truffle boundary to avoid the host monitor
+    // ending up in compiled code
+    @TruffleBoundary
+    private synchronized ObjectSyncState createObjectSyncState() {
+        if (objectSyncState == null) {
+            objectSyncState = ObjectSyncState.createFor(this, getKlass().getContext().getMemoryModel().getCleaner());
+        }
+        return objectSyncState;
+    }
+
+    public final SyncState lockSyncState() {
+        return getObjectSyncState().getLockSyncState();
+    }
+
+    public final SyncState volatileSyncState(Field field) {
+        return getObjectSyncState().getVolatileSyncState(field);
     }
 
     public final Object rawForeignObject(EspressoLanguage language) {

@@ -205,6 +205,15 @@ public interface MemoryModel {
         return false;
     }
 
+    /**
+     * The model's one host {@link java.lang.ref.Cleaner}: runs an action once a guest object is collected,
+     * so the model can release what it held for that object. Only models that track object death
+     * provide one.
+     */
+    default java.lang.ref.Cleaner getCleaner() {
+        throw new UnsupportedOperationException("this memory model does not track object death");
+    }
+
     /** Turn versioning on. Called once, after context bootstrap completes and before user code runs. */
     default void activate() {
     }

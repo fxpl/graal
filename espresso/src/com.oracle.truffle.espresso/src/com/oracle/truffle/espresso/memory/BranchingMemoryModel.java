@@ -72,13 +72,6 @@ public final class BranchingMemoryModel implements MemoryModel {
     // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
     private final Map<VersionedLocation, Object> genesis = new ConcurrentHashMap<>();
 
-    /**
-     * Per-volatile-field sync state — the paper's map {@code V} of the latest commit of each volatile
-     * variable (§5.3 / Table 2). Keyed by {@link FieldLocation} (so a volatile instance field is a
-     * distinct sync object per receiver).
-     */
-    private final Map<FieldLocation, SyncState> volatileSyncStates = new ConcurrentHashMap<>();
-
     private final AtomicLong deadObjectCount;
 
     // This is a record so that we don't accidentally capture the StaticObject
@@ -95,7 +88,12 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     /* A cleaner to purge out object numbers that represent objects GC'd */
-    private static final Cleaner cleaner = Cleaner.create();
+    private final Cleaner cleaner = Cleaner.create();
+
+    @Override
+    public Cleaner getCleaner() {
+        return cleaner;
+    }
 
     private void registerForCleaning(StaticObject object) {
         if (!object.isCleanerRegistered()) {
@@ -168,22 +166,6 @@ public final class BranchingMemoryModel implements MemoryModel {
     public int pendingWriteCount() {
         MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
         return v == null ? 0 : ((BranchingView) v).stagingSize();
-    }
-
-    private SyncState lockSyncState(StaticObject lock) {
-        return lock.lockSyncState(() -> {
-            SyncState s = new SyncState();
-            cleaner.register(lock, () -> {
-                if (s.commit != null) {
-                    s.commit.decRef();
-                }
-            });
-            return s;
-        });
-    }
-
-    private SyncState volatileSyncState(FieldLocation key) {
-        return volatileSyncStates.computeIfAbsent(key, k -> new SyncState());
     }
 
     // --- Ordinary field / array access: stage and read on the calling thread's view. ---
@@ -312,7 +294,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public void onMonitorEnter(StaticObject lock) {
         // pull from the lock
-        SyncState state = lockSyncState(lock);
+        SyncState state = lock.lockSyncState();
         BranchingView view = currentView();
         handleConflicts(view.pull(state), view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
@@ -321,7 +303,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     public void onMonitorExit(StaticObject lock) {
         // push to the lock
         BranchingView view = currentView();
-        SyncState state = lockSyncState(lock);
+        SyncState state = lock.lockSyncState();
         view.push(state);
     }
 
@@ -332,8 +314,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // per field (synchronised on the sync state) so value and commit are read together, consistent
         // against a concurrent volatile write to the same field.
         BranchingView view = currentView();
-        SyncState state = volatileSyncState(new FieldLocation(holder.getObjectNumber(), field));
-        registerForCleaning(holder);
+        SyncState state = holder.volatileSyncState(field);
         Set<VersionedLocation> conflict;
         Object value;
         synchronized (state) {
@@ -352,8 +333,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // slot); only the ordinary writes carried on the commit are conflict-checked, at the merge.
         // Atomic per field.
         BranchingView view = currentView();
-        SyncState state = volatileSyncState(new FieldLocation(holder.getObjectNumber(), field));
-        registerForCleaning(holder);
+        SyncState state = holder.volatileSyncState(field);
         Set<VersionedLocation> conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
