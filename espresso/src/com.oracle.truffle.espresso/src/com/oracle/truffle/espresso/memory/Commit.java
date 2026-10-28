@@ -209,7 +209,7 @@ public class Commit {
 
         absorbed.putAll(changes); // overwrite any ancestor changes
         changes = absorbed;
-        parents = newParents;
+        parents = Set.copyOf(newParents); // immutable and compact sets
         VersioningStats.onAbsorb(adoptedCount);
 
         return true;

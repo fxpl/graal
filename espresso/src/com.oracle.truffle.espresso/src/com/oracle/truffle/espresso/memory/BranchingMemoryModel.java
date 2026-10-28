@@ -36,30 +36,27 @@ import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
- * The Branching version-controlled memory model (paper: Sync-as-Share, the branching model), ported
- * from the {@code gitmem} prototype's {@code branching::eager} version store. This is the <b>eager</b>
- * policy — the paper's model — so a conflict is detected <em>at the merge</em> (the synchronisation
- * point), and ordinary reads never conflict.
+ * The Branching version-controlled memory model (paper: Sync-as-Share, the branching model). This is
+ * the <b>eager</b> policy, so a conflict is detected <em>at the merge</em> (the synchronisation point),
+ * and ordinary reads never conflict.
  *
- * <p>Unlike {@link LinearMemoryModel}, there is no single global history {@code g}: communication is
- * pairwise, through the commit DAG. A synchronisation action commits the acting thread's staged writes
- * into a {@link Commit} on its own branch, then merges another branch in:
+ * <p>Unlike {@link LinearMemoryModel}, there is no single global history: communication is pairwise,
+ * through a DAG of reference-counted {@link Commit}s. Each thread works on a {@link BranchingView}
+ * whose head is held in the thread's {@link SyncState}. Every synchronisation action is a
+ * <b>pull</b> (commit staged writes, then merge another sync state's commit in) and/or a <b>push</b>
+ * (commit, then point another sync state at our head):
  * <ul>
- * <li><b>spawn</b> — the parent commits and the child adopts the parent's branch tip (fork);</li>
- * <li><b>monitor enter</b> — pull from the lock's {@link SyncState};</li>
- * <li><b>monitor exit</b> — push to the lock's {@link SyncState};</li>
- * <li><b>thread end</b> — commit, and record the final commit in ... for
- *     join.</li>
+ * <li><b>spawn</b>: push to the child thread's sync state;</li>
+ * <li><b>join</b>: pull from the joined thread's sync state;</li>
+ * <li><b>monitor enter / exit</b>: pull from / push to the lock's sync state;</li>
+ * <li><b>volatile read / write</b>: pull / pull then push, on the field's sync state;</li>
+ * <li><b>class init</b>: pull then push on initialisation, pull on first use;</li>
+ * <li><b>thread end</b>: commit.</li>
  * </ul>
  *
- * <p><b>Join (stop-gap).</b> There is no join hook: guest {@code Thread.join} locks the {@code Thread}
- * object and waits, and Espresso wakes joiners from host code the model never sees. So a finished
- * thread's final commit is kept in {@code finishedThreadCommits}, and monitor enter/exit on a lock that
- * is actually a finished thread merges it explicitly. To be replaced by modelling join properly (see
- * the worklist's "replace {@code terminalHeads}" row).
- *
- * <p>Scope (B1): instance + static fields, monitor lock/unlock, thread start/end, spawn, join. Arrays,
- * volatiles, and the lazy / lazy-suppress conflict policies are later milestones.
+ * <p>Sync states live on their owners: a thread's in a hidden field on the {@code Thread}, lock and
+ * volatile states in the object's {@link ObjectSyncState}, class-init state on the {@link ObjectKlass}.
+ * A {@link java.lang.ref.Cleaner} releases an owner's commits when the owner dies.
  */
 public final class BranchingMemoryModel implements MemoryModel {
 
@@ -175,7 +172,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
 
         if (holder.hasBeenVersioned()) {
-            Object v = currentView().read(loc);
+            Object v = currentView().readField(holder, field);
             if (v != MemoryModel.ABSENT) {
                 return v;
             }
@@ -189,7 +186,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
-        currentView().stage(new FieldLocation(holder.getObjectNumber(), field), value);
+        currentView().stageField(holder, field, value);
         holder.markHasBeenVersioned();
         registerForCleaning(holder);
     }
@@ -226,7 +223,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     /**
      * The acting thread's working copy of {@code array}, materialising it on first access: a real host
      * array of the array's component type, seeded from the physical (version-0) array and overlaid with
-     * this thread's staged-or-committed elements ({@link BranchingView#read}). Cached on the view and
+     * this thread's staged-or-committed elements ({@link BranchingView#readArray}). Cached on the view and
      * reused until the next commit clears it. See {@link ArrayVersion}.
      */
     private ArrayVersion arrayVersionFor(StaticObject array) {
@@ -241,7 +238,7 @@ public final class BranchingMemoryModel implements MemoryModel {
             Object host = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), n);
             System.arraycopy(physical, 0, host, 0, n);
             for (int i = 0; i < n; i++) {
-                Object v = view.read(new ArrayLocation(number, i));
+                Object v = view.readArray(number, i);
                 if (v != MemoryModel.ABSENT) {
                     java.lang.reflect.Array.set(host, i, v);
                 }
@@ -384,7 +381,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         String where = conflicts.stream().map(BranchingMemoryModel::describe).sorted()
                             .collect(Collectors.joining(", "));
         view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + where
-                        + ", caught at " + at + " in " + context.getVM().topGuestSite());
+                        + ", caught at " + at + " in " + UserCodeLocation.current(context));
     }
 
     private static String describe(VersionedLocation loc) {

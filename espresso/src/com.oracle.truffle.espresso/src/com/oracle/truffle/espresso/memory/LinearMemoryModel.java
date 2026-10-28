@@ -405,7 +405,7 @@ public final class LinearMemoryModel implements MemoryModel {
         // the synchronized block's exit machinery (the implicit exception-path monitorexit re-runs).
         // `at` names the synchronization point that caught it, plus the guest site, for diagnosis.
         view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict)
-                        + ", caught at " + at + " in " + context.getVM().topGuestSite());
+                        + ", caught at " + at + " in " + UserCodeLocation.current(context));
         // Recover the view so it stays consistent if the conflict is caught and execution continues.
         view.clearStaging();
         view.advanceBase(global.currentCounter());

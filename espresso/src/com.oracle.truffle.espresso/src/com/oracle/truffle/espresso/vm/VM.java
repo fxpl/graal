@@ -127,7 +127,6 @@ import com.oracle.truffle.espresso.impl.EspressoClassLoadingException;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
-import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.impl.ModuleTable;
 import com.oracle.truffle.espresso.impl.ModuleTable.ModuleEntry;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
@@ -3010,60 +3009,6 @@ public final class VM extends NativeEnv {
             return null;
         }
         return method;
-    }
-
-    /**
-     * A provenance string for the current guest stack, for diagnostics (the schedule trace and
-     * Sync-as-Share conflict messages). Returns the topmost guest frame as {@code Class.method:line} —
-     * the immediate mechanism — and, when that frame is JDK code, also the nearest <em>application</em>
-     * frame (defined by a non-boot class loader, the same predicate the model versions by) as the
-     * actionable location, e.g. {@code java/lang/Thread.join:1875 (from CatchConflict.main:52)}. When
-     * the top frame is already application code the two coincide and only one is shown. {@code "?"} if
-     * there is no guest frame. Walks the Truffle stack on the current thread; call synchronously while
-     * the frames of interest are live.
-     */
-    @TruffleBoundary
-    public String topGuestSite() {
-        String[] top = {null};
-        String app = Truffle.getRuntime().iterateFrames(new FrameInstanceVisitor<String>() {
-            @Override
-            public String visitFrame(FrameInstance frame) {
-                EspressoRootNode root = getEspressoRootFromFrame(frame);
-                if (root == null) {
-                    return null;
-                }
-                String where = formatFrame(root, frame);
-                if (top[0] == null) {
-                    top[0] = where;
-                }
-                // Application frame = declared by a non-boot class loader (Versioning's class atom).
-                if (Versioning.isApplicationClass(root.getMethod().getDeclaringKlass())) {
-                    return where;   // nearest application frame — stop walking
-                }
-                return null;
-            }
-        });
-        if (top[0] == null) {
-            return "?";
-        }
-        if (app == null || app.equals(top[0])) {
-            return top[0];
-        }
-        return top[0] + " (from " + app + ")";
-    }
-
-    private static String formatFrame(EspressoRootNode root, FrameInstance frame) {
-        Method m = root.getMethod();
-        String where = m.getDeclaringKlass().getNameAsString() + "." + m.getNameAsString();
-        try {
-            int line = m.bciToLineNumber(root.readBCI(frame.getFrame(FrameInstance.FrameAccess.READ_ONLY)));
-            if (line > 0) {
-                where += ":" + line;
-            }
-        } catch (RuntimeException ignored) {
-            // no line table / no bytecode frame — method name is enough
-        }
-        return where;
     }
 
     @VmImpl(isJni = true)

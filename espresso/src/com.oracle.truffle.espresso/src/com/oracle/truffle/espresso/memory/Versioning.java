@@ -24,6 +24,7 @@ package com.oracle.truffle.espresso.memory;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
+import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
@@ -37,11 +38,6 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * data — {@link StaticObject#isAppOwned()}, set at allocation and propagated on stores — not by the
  * declaring class. Statics have no instance, so they key on the class's loader (its owner). See
  * {@code design/versioning-provenance.md}.
- *
- * <p>{@link #readInstance} additionally encapsulates the <em>read</em> of a versioned instance field
- * through the acting thread's view, so every accessor (bytecode and VM) routes through one place rather
- * than re-inlining the model dance. {@code isAppOwned()} is checked first and is always false under
- * {@code --java.MemoryModel=shared}, so the whole thing folds away there.
  */
 public final class Versioning {
 
@@ -49,8 +45,13 @@ public final class Versioning {
     }
 
     /** The atom: is {@code klass} defined by a non-boot (application) class loader? */
-    public static boolean isApplicationClass(Klass klass) {
+    private static boolean isApplicationClass(Klass klass) {
         return !StaticObject.isNull(klass.getDefiningClassLoader());
+    }
+
+    /** Is an object allocated by {@code allocator} application data, i.e. should it be marked app-owned? */
+    public static boolean allocatesAppOwned(Method allocator) {
+        return isApplicationClass(allocator.getDeclaringKlass());
     }
 
     /**
@@ -78,14 +79,7 @@ public final class Versioning {
         return isApplicationClass(field.getDeclaringKlass());
     }
 
-    /**
-     * Eligibility: is an instance {@code field} of {@code obj} a versioned <em>location</em> — decided
-     * purely by the location (an app-owned receiver, a non-volatile field, a live model), independent of
-     * whether any value has been staged or committed for it yet. This is the single gate both
-     * {@link #readInstance} and {@link #writeInstance} consult, so read and write agree on exactly which
-     * locations the model owns. Whether a value <em>exists</em> at the location is a separate question
-     * that belongs only to the read (its {@code ABSENT} result); it is never a reason to route a write.
-     */
+    /** Is instance {@code field} of {@code obj} a versioned location (used by {@code Field}'s accessors)? */
     public static boolean versionsInstanceField(StaticObject obj, Field field) {
         // Hidden fields are VM-injected storage (not guest-declared) holding host-side objects — the
         // EspressoLock in Thread.0toNativeLock, the host Thread in 0hostThread — which are never guest
@@ -96,57 +90,5 @@ public final class Versioning {
         }
         var ctx = field.getDeclaringKlass().getContext();
         return ctx.isVersionedMemoryEnabled();
-    }
-
-
-    /**
-     * The value of instance {@code field} on {@code obj} as seen through the acting thread's view, or
-     * {@link MemoryModel#ABSENT} when the read is <em>not</em> view-routed — a non-app-owned receiver, a
-     * volatile field (whose value lives in the physical slot), or a shared/inactive model. On ABSENT the
-     * caller reads the physical slot as before; otherwise it uses the returned value. This is the one
-     * place the "should this read go through the view, and if so what" decision lives, so every
-     * accessor — bytecode and VM/boot code alike — is a one-liner over it. Boxed for primitive kinds.
-     */
-    public static Object readInstance(StaticObject obj, Field field) {
-        if (!versionsInstanceField(obj, field)) {
-            return MemoryModel.ABSENT;
-        }
-        return field.getDeclaringKlass().getContext().getMemoryModel().readField(obj, field);
-    }
-
-    /**
-     * The write counterpart of {@link #readInstance}, gated on the <em>same</em> {@link
-     * #versionsInstanceField} eligibility: a write to a versioned location is always staged in the acting
-     * thread's view — never written to the physical slot — regardless of whether a value has been staged
-     * or committed there yet. So the first write to a field (e.g. the VM writing {@code Thread.eetop} while
-     * building a thread) creates the versioned cell in the builder's view rather than escaping to the raw
-     * heap; the heap slot stays at version 0 (its allocation default). A raw write to a versioned field
-     * would be a leak, structurally the same as an unversioned field bypassing the model. Returns {@code
-     * true} when it staged the write (the caller does nothing more); {@code false} for a non-versioned
-     * location (non-app-owned receiver, volatile field, or shared/inactive model), where the caller then
-     * performs the raw physical write.
-     */
-    public static boolean writeInstance(StaticObject obj, Field field, Object value) {
-        if (!versionsInstanceField(obj, field)) {
-            return false;
-        }
-        field.getDeclaringKlass().getContext().getMemoryModel().writeField(obj, field, value);
-        return true;
-    }
-
-    /**
-     * Sync-as-Share (stage-on-access): lazily capture the genesis (version-0) {@code value} of a versioned
-     * instance {@code field} of {@code obj} — the value just read from the physical slot because {@link
-     * #readInstance} returned {@link MemoryModel#ABSENT}. Gated on the <em>same</em> {@link
-     * #versionsInstanceField} eligibility as read/write, so an ABSENT that meant "not a versioned location"
-     * (non-app-owned receiver, volatile/hidden field, shared/inactive model) captures nothing and the field
-     * stays raw. For a versioned location it captures the value into the acting thread's view, so the next
-     * read resolves there instead of reading the live slot again — closing the uncontrolled read-through.
-     */
-    public static void captureGenesisRead(StaticObject obj, Field field, Object value) {
-        if (!versionsInstanceField(obj, field)) {
-            return;
-        }
-        field.getDeclaringKlass().getContext().getMemoryModel().captureRead(obj, field, value);
     }
 }

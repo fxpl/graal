@@ -22,6 +22,8 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
@@ -32,6 +34,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
+import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * A guest thread's view in the branching model (the prototype's {@code branching::LocalVersionStore}):
@@ -47,6 +51,7 @@ public final class BranchingView implements MemoryView {
     private SyncState unboundOrState;
     private final Supplier<SyncState> bindState;
     private Map<VersionedLocation, Object> staging = new HashMap<>(); // staged changes which are cleared when committed to history
+    private final ReadCache readCache = new ReadCache();
 
     // Sync-as-Share (stage-on-access): per-app-owned-array working copy, materialised on first access and
     // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging and
@@ -55,10 +60,20 @@ public final class BranchingView implements MemoryView {
     private final Map<ObjectNumber, ArrayVersion> arrays = new HashMap<>();
     private String pendingConflict;
 
-    // A set shared between views for objects who are no longer referenceable and
-    // should be removed when found
+    // A count shared between views for the number of objects purged,
+    // and the number we saw at the last purge
     private final AtomicLong deadObjectCount;
     private long deadSetSizeAtLastPurge;
+
+    // objects with locations in staging or the read cache, so their entries can be dropped when they die
+    private final Map<ObjectNumber, StagedReference> trackedObjects = new HashMap<>();
+    private final ReferenceQueue<StaticObject> deadQueue = new ReferenceQueue<>();
+
+    // commits visited by the last read walk, to pre-size the next walk's visited set
+    private int lastWalkSize = 16;
+
+    // commits in the last history collected by merge, to pre-size the next merge's history sets
+    private int lastHistorySize = 16;
 
     public BranchingView(Supplier<SyncState> bindState, AtomicLong deadObjectCount) {
         this.bindState = bindState;
@@ -97,12 +112,46 @@ public final class BranchingView implements MemoryView {
         return staging.size();
     }
 
-    void stage(VersionedLocation loc, Object value) {
-        staging.put(loc, value);
+    // We reduce the staging size by removing references to static
+    // objects that have been GC'd.
+    // The memory model cleaner will manage setting that the object is dead
+    // and incrementing the dead count, as that is view independent
+    // and affects all threads and the entire DAG
+    private void emptyDeadQueue() {
+        Reference<?> deadReference;
+        while ((deadReference = deadQueue.poll()) != null) {
+            StagedReference deadObject = (StagedReference) deadReference;
+            trackedObjects.remove(deadObject.number);
+            deadObject.locations.forEach(k -> staging.remove(k));
+            readCache.evictAll(deadObject.locations);
+        }
+    }
+
+    // Record that loc, a location of holder, is in staging or the read cache, so it is
+    // dropped from both when holder dies
+    private void track(StaticObject holder, VersionedLocation loc) {
+        trackedObjects.computeIfAbsent(holder.getObjectNumber(), n ->
+            new StagedReference(holder, n, deadQueue)
+        ).locations.add(loc);
+    }
+
+    void stageField(StaticObject holder, Field field, Object value) {
+        FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
+
+        if (staging.put(loc, value) == null) {
+            // This is the first time we have staged a write to this
+            // object's field this commit window
+            track(holder, loc);
+        }
+
+        emptyDeadQueue();
         VersioningStats.observeStaging(staging.size());
     }
 
-    // --- Sync-as-Share array working copies (stage-on-access) ---
+    void stageArray(VersionedLocation loc, Object value) {
+        staging.put(loc, value);
+        VersioningStats.observeStaging(staging.size());
+    }
 
     /** The acting thread's cached working copy of the array {@code array}, or {@code null} if not yet materialised. */
     ArrayVersion arrayVersion(ObjectNumber array) {
@@ -120,13 +169,16 @@ public final class BranchingView implements MemoryView {
      * nothing. Called just before a commit.
      */
     void flushArrays() {
+        int flushed = 0;
         for (Map.Entry<ObjectNumber, ArrayVersion> e : arrays.entrySet()) {
             ObjectNumber array = e.getKey();
             ArrayVersion av = e.getValue();
             for (int i = av.touched.nextSetBit(0); i >= 0; i = av.touched.nextSetBit(i + 1)) {
-                stage(new ArrayLocation(array, i), java.lang.reflect.Array.get(av.host, i));
+                stageArray(new ArrayLocation(array, i), java.lang.reflect.Array.get(av.host, i));
+                flushed++;
             }
         }
+        VersioningStats.onFlushArrays(flushed);
     }
 
     /** Drop all working copies; they rebuild from committed state on next access. */
@@ -136,16 +188,51 @@ public final class BranchingView implements MemoryView {
 
     /** Staged value, else the committed value, else ABSENT. The shared genesis (version-0) cache is
      *  consulted by the model after this, not here. */
-    Object read(VersionedLocation loc) {
-        Object staged = staging.get(loc);
-        if (staged != null) {
-            return staged;
+    Object readField(StaticObject holder, Field field) {
+        FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
+        Object known = stagedOrCached(loc);
+        if (known != null) {
+            return known;
         }
 
         if (state().commit == null) {
             return MemoryModel.ABSENT;
         }
 
+        Object value = walk(loc);
+        readCache.put(loc, value);
+        track(holder, loc);
+        return value;
+    }
+
+    // Arrays are not tracked (as in stageArray), so a dead array's cached elements stay until evicted
+    Object readArray(ObjectNumber array, int index) {
+        ArrayLocation loc = new ArrayLocation(array, index);
+        Object known = stagedOrCached(loc);
+        if (known != null) {
+            return known;
+        }
+
+        if (state().commit == null) {
+            return MemoryModel.ABSENT;
+        }
+
+        Object value = walk(loc);
+        readCache.put(loc, value);
+        return value;
+    }
+
+    // The staged value, else the cached one (possibly ABSENT), else null
+    private Object stagedOrCached(VersionedLocation loc) {
+        Object staged = staging.get(loc);
+        if (staged != null) {
+            return staged;
+        }
+        return readCache.get(loc);
+    }
+
+    /** The newest committed value of {@code loc} under the head, else ABSENT. The head must be set. */
+    private Object walk(VersionedLocation loc) {
         // The pathological cases are:
         // 1) the value is all the way back at version 0
         // 2) we have multiple candidates
@@ -156,29 +243,32 @@ public final class BranchingView implements MemoryView {
         // commit history as the merges are conflict free.
         // We have to make sure to find the latest committed value for this location.
 
-        Set<Commit> visited = new HashSet<>();
+        final Set<Commit> visited = HashSet.newHashSet(lastWalkSize);
         Set<Commit> candidates = new HashSet<>();
-        Set<Commit> heads = new HashSet<>();
+        Deque<Commit> heads = new ArrayDeque<>();
+
+        visited.add(state().commit);
         heads.add(state().commit);
 
         while (!heads.isEmpty()) {
-            Commit current = heads.iterator().next();
-            heads.remove(current);
-
-            if (visited.contains(current)) {
-                continue;
-            }
-
-            visited.add(current);
+            Commit current = heads.pop();
 
             // once we find a candidate stop
             if (current.changes().containsKey(loc)) {
                 candidates.add(current);
             } else {
-                // add the two parents to explore
-                heads.addAll(current.parents());
+                // add the parents to explore if we haven't already
+                // seen them
+                for (Commit p : current.parents()) {
+                    if (visited.add(p)) {
+                        heads.add(p);
+                    }
+                }
             }
         }
+
+        lastWalkSize = visited.size();
+        VersioningStats.onReadWalk(visited.size(), !candidates.isEmpty());
 
         // If no candidates were found, the location is absent.
         if (candidates.isEmpty()) {
@@ -193,7 +283,7 @@ public final class BranchingView implements MemoryView {
         // We had multiple candidates, so now we need to work out which is the only
         // one which isn't shadowed
         Set<Commit> alive = new HashSet<>(candidates);
-        visited = new HashSet<>();
+        visited.clear();
 
         for (Commit c : candidates) {
 
@@ -243,9 +333,16 @@ public final class BranchingView implements MemoryView {
             deadSetSizeAtLastPurge = deadCount;
         }
 
+        // before commit, try to clear out anything that is dead from staging
+        emptyDeadQueue();
+
         if (staging.isEmpty()) {
             return;
         }
+
+        // Whatever we wrote is going to be the most up-to-date value
+        // So avoid any walks looking for it
+        readCache.putAll(staging);
 
         // Grab the staging and clear it
         Map<VersionedLocation, Object> changes = staging;
@@ -297,22 +394,19 @@ public final class BranchingView implements MemoryView {
         }
 
         // walk back from head and otherHead and collect their history
-        Set<Commit> headsHistory = new HashSet<>();
-        Set<Commit> visited = new HashSet<>();
-        Set<Commit> heads = new HashSet<>();
+        Set<Commit> headsHistory = HashSet.newHashSet(lastHistorySize);
+        Deque<Commit> heads = new ArrayDeque<>();
+
+        headsHistory.add(state().commit);
         heads.add(state().commit);
 
         while(!heads.isEmpty()) {
-            Commit current = heads.iterator().next();
-            heads.remove(current);
-
-            if(visited.contains(current)) {
-                continue;
+            Commit current = heads.pop();
+            for (Commit p : current.parents()) {
+                if (headsHistory.add(p)) {
+                    heads.add(p);
+                }
             }
-            visited.add(current);
-
-            headsHistory.add(current);
-            heads.addAll(current.parents());
         }
 
         if (headsHistory.contains(otherHead)) {
@@ -320,22 +414,42 @@ public final class BranchingView implements MemoryView {
             return Set.of();
         }
 
-        Set<Commit> otherHeadsHistory = new HashSet<>();
-        visited.clear();
-        heads.clear();
+        Set<Commit> otherHeadsHistory = HashSet.newHashSet(lastHistorySize);
+
+        otherHeadsHistory.add(otherHead);
         heads.add(otherHead);
 
         while(!heads.isEmpty()) {
-            Commit current = heads.iterator().next();
-            heads.remove(current);
-
-            if(visited.contains(current)) {
-                continue;
+            Commit current = heads.pop();
+            for (Commit p : current.parents()) {
+                if (otherHeadsHistory.add(p)) {
+                    heads.add(p);
+                }
             }
-            visited.add(current);
+        }
 
-            otherHeadsHistory.add(current);
-            heads.addAll(current.parents());
+        lastHistorySize = Math.max(headsHistory.size(), otherHeadsHistory.size());
+
+        Set<Commit> mineOnly = new HashSet<>(headsHistory);
+        mineOnly.removeAll(otherHeadsHistory);
+
+        Set<VersionedLocation> changedLocations = new HashSet<>();
+        for (Commit c : mineOnly) {
+            changedLocations.addAll(c.changes().keySet());
+        }
+
+        Set<Commit> theirsOnly = new HashSet<>(otherHeadsHistory);
+        theirsOnly.removeAll(headsHistory);
+        Set<VersionedLocation> conflicts = new HashSet<>();
+        for (Commit c : theirsOnly) {
+            for (VersionedLocation loc : c.changes().keySet()) {
+                // the merge brought in an updated value of a location
+                // so drop the cached value
+                readCache.evict(loc);
+                if (changedLocations.contains(loc)) {
+                    conflicts.add(loc);
+                }
+            }
         }
 
         if (otherHeadsHistory.contains(state().commit)) {
@@ -353,25 +467,6 @@ public final class BranchingView implements MemoryView {
             // history
             compress();
             return Set.of();
-        }
-
-        Set<Commit> mineOnly = new HashSet<>(headsHistory);
-        mineOnly.removeAll(otherHeadsHistory);
-        Set<Commit> theirsOnly = new HashSet<>(otherHeadsHistory);
-        theirsOnly.removeAll(headsHistory);
-
-        Set<VersionedLocation> changedLocations = new HashSet<>();
-        for (Commit c : mineOnly) {
-            changedLocations.addAll(c.changes().keySet());
-        }
-
-        Set<VersionedLocation> conflicts = new HashSet<>();
-        for (Commit c : theirsOnly) {
-            for (VersionedLocation loc : c.changes().keySet()) {
-                if (changedLocations.contains(loc)) {
-                    conflicts.add(loc);
-                }
-            }
         }
 
         if (!conflicts.isEmpty()) {
@@ -393,6 +488,8 @@ public final class BranchingView implements MemoryView {
 
     void commit() {
         commitStaging();
+
+        // after commit, try to compress the DAG
         compress();
     }
 

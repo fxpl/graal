@@ -56,6 +56,14 @@ final class VersioningStats {
                                                                 // nodes live ~= commits - folds + merges - absorbed - released
     static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
     static final AtomicLong markedForPurging = new AtomicLong();     // ...of which the GC found dead (Cleaner ran)
+    static final AtomicLong arrayChanges = new AtomicLong();    // array entries flushed into staging (part of committedChanges)
+    static final AtomicLong peakArrayStaging = new AtomicLong(); // largest single array flush (part of peakStaging)
+    static final AtomicLong readWalks = new AtomicLong();       // reads not in staging that walked the commit history
+    static final AtomicLong readWalkMisses = new AtomicLong();  // ...of which found no committed value (ABSENT)
+    static final AtomicLong readWalkVisited = new AtomicLong(); // commits visited by all walks
+    static final AtomicLong readWalkMissVisited = new AtomicLong(); // ...of which by walks that found nothing
+    static final AtomicLong readCacheHits = new AtomicLong();   // reads answered by a view's read cache (no walk)
+    static final AtomicLong readCacheClears = new AtomicLong(); // times a read cache hit its cap and was cleared
 
     // Linear.
     static final AtomicLong gVersions = new AtomicLong();       // Version nodes ever appended to g
@@ -129,6 +137,36 @@ final class VersioningStats {
         }
     }
 
+    static void onFlushArrays(int entries) {
+        if (ENABLED) {
+            arrayChanges.addAndGet(entries);
+            observe(peakArrayStaging, entries);
+        }
+    }
+
+    static void onReadWalk(int visited, boolean found) {
+        if (ENABLED) {
+            readWalks.incrementAndGet();
+            readWalkVisited.addAndGet(visited);
+            if (!found) {
+                readWalkMisses.incrementAndGet();
+                readWalkMissVisited.addAndGet(visited);
+            }
+        }
+    }
+
+    static void onReadCacheHit() {
+        if (ENABLED) {
+            readCacheHits.incrementAndGet();
+        }
+    }
+
+    static void onReadCacheClear() {
+        if (ENABLED) {
+            readCacheClears.incrementAndGet();
+        }
+    }
+
     static void onGVersion(int distinctLocations) {
         if (ENABLED) {
             gVersions.incrementAndGet();
@@ -164,28 +202,41 @@ final class VersioningStats {
     private static void dump() {
         StringBuilder sb = new StringBuilder("[versioning-stats]");
         if (commits.get() > 0 || merges.get() > 0 || folds.get() > 0 || cleanerRegistrations.get() > 0) {
-            sb.append(" branching: commits=").append(commits)
+            long hitWalks = readWalks.get() - readWalkMisses.get();
+            sb.append(" branching")
+                            .append("\n  commits:  commits=").append(commits)
                             .append(" committedChanges=").append(committedChanges)
+                            .append(" arrayChanges=").append(arrayChanges)
                             .append(" merges=").append(merges)
                             .append(" folds=").append(folds)
+                            .append("\n  nodes:    created=").append(nodesCreated())
                             .append(" absorbed=").append(absorbed)
                             .append(" released=").append(released)
-                            .append(" nodesCreated=").append(nodesCreated())
-                            .append(" nodesLive=").append(nodesCreated() - absorbed.get() - released.get())
-                            .append(" cleanerRegistrations=").append(cleanerRegistrations)
+                            .append(" live=").append(nodesCreated() - absorbed.get() - released.get())
+                            .append("\n  dead:     cleanerRegistrations=").append(cleanerRegistrations)
                             .append(" markedForPurging=").append(markedForPurging)
-                            .append(" purgedEntries=").append(purgedEntries);
+                            .append(" purgedEntries=").append(purgedEntries)
+                            .append("\n  reads:    walks=").append(readWalks)
+                            .append(" misses=").append(readWalkMisses)
+                            .append(" visited=").append(readWalkVisited)
+                            .append(" missVisited=").append(readWalkMissVisited)
+                            .append(" avgHitWalk=").append(hitWalks == 0 ? 0 : (readWalkVisited.get() - readWalkMissVisited.get()) / hitWalks)
+                            .append(" avgMissWalk=").append(readWalkMisses.get() == 0 ? 0 : readWalkMissVisited.get() / readWalkMisses.get())
+                            .append("\n  cache:    hits=").append(readCacheHits)
+                            .append(" clears=").append(readCacheClears);
         }
         if (gVersions.get() > 0) {
-            sb.append(" linear: gVersions=").append(gVersions)
-                            .append(" gLocations=").append(gLocations);
+            sb.append(" linear")
+                            .append("\n  g:        versions=").append(gVersions)
+                            .append(" locations=").append(gLocations);
             if (collapses.get() > 0) {
-                sb.append(" collapses=").append(collapses)
+                sb.append("\n  collapse: collapses=").append(collapses)
                                 .append(" versionsDropped=").append(versionsDropped)
-                                .append(" gResident~=").append(gVersions.get() - versionsDropped.get());
+                                .append(" resident~=").append(gVersions.get() - versionsDropped.get());
             }
         }
-        sb.append(" peakStaging=").append(peakStaging);
+        sb.append("\n  staging:  peak=").append(peakStaging)
+                        .append(" peakArrays=").append(peakArrayStaging);
         System.err.println(sb);
     }
 }

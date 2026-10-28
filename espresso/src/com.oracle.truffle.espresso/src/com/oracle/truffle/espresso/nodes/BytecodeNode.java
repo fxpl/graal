@@ -1767,7 +1767,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     // PE-constant false, so this folds away entirely. Design: versioning-provenance.md §4.1.
     private StaticObject markProvenance(StaticObject obj) {
         if (getContext().isVersionedMemoryEnabled() &&
-                        Versioning.isApplicationClass(getMethod().getDeclaringKlass())) {
+                        Versioning.allocatesAppOwned(getMethod())) {
             obj.markAppOwned();
         }
         return obj;
@@ -2862,33 +2862,26 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
      *   curBCI = bs.next(curBCI);
      * </pre>
      */
-    // Sync-as-Share: does the versioned model handle this field access? Statics key on the declaring
-    // class (its owner); instance fields key on the RECEIVER's provenance -- peeked non-destructively
-    // from the stack at receiverSlot -- so an app-created instance of a library class is versioned while
-    // the runtime's own instances are not. Foreign or null receivers return false and stay on the stock
-    // path (which handles them / throws NPE). isVersionedMemoryEnabled() folds the whole thing away under
-    // shared. See design/versioning-provenance.md §4.
-    private boolean fieldViaModel(VirtualFrame frame, int receiverSlot, Field field, FieldAccessType mode) {
+    // Sync-as-Share: is this field access owned by the versioned model (rather than the physical slot)?
+    // Statics key on the declaring class (its owner); instance fields key on the receiver's provenance, so
+    // an app-created instance of a library class is versioned while the runtime's own instances are not.
+    // The receiver is already resolved and null-checked by the caller; a foreign receiver returns false and
+    // stays on the stock path. isVersionedMemoryEnabled() folds the whole thing away under shared. See
+    // design/versioning-provenance.md §4.
+    private boolean isFieldOwnedByVersionedModel(StaticObject receiver, Field field, FieldAccessType mode) {
         if (!getContext().isVersionedMemoryEnabled()) {
             return false;
         }
         if (mode.isStatic()) {
             return Versioning.versionsStatic(field);
         }
-        StaticObject receiver = peekObject(frame, receiverSlot);
-        return !StaticObject.isNull(receiver) && receiver.isEspressoObject() && Versioning.versionsInstance(receiver);
+        return receiver.isEspressoObject() && Versioning.versionsInstance(receiver);
     }
 
     private int putField(VirtualFrame frame, int top, Field field, int curBCI, int opcode, int statementIndex, FieldAccessType mode) {
         assert opcode == PUTFIELD || opcode == PUTSTATIC;
         CompilerAsserts.partialEvaluationConstant(field);
         CompilerAsserts.partialEvaluationConstant(mode);
-
-        // Instance receiver sits below the value(s): top - slotCount - 1 (slotCount 2 for long/double).
-        if (fieldViaModel(frame, top - field.getKind().getSlotCount() - 1, field, mode)) {
-            // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap.
-            return putFieldViaModel(frame, top, field, statementIndex, mode);
-        }
 
         Method method = getMethod();
         EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
@@ -2897,23 +2890,28 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         int slotCount = (typeHeader == 'J' || typeHeader == 'D') ? 2 : 1;
         assert slotCount == field.getKind().getSlotCount();
         int slot = top - slotCount - 1; // -receiver
-        StaticObject receiver;
-        if (mode.isStatic()) {
-            receiver = initializeAndGetStatics(field);
-        } else {
-            if (!noForeignObjects.isValid()) {
-                // Do not release the object, it might be read again in PutFieldNode
-                receiver = nullCheck(peekObject(frame, slot));
-                if (receiver.isForeignObject()) {
-                    CompilerDirectives.transferToInterpreterAndInvalidate();
-                    // Restore the receiver for quickening.
-                    putObject(frame, slot, receiver);
-                    return quickenPutField(frame, top, curBCI, opcode, statementIndex, field);
-                }
+        // Peeked, not popped: the stock path may need it left on the stack to quicken a foreign receiver.
+        StaticObject receiver = mode.isStatic()
+                        ? initializeAndGetStatics(field)
+                        : nullCheck(peekObject(frame, slot));
+
+        if (isFieldOwnedByVersionedModel(receiver, field, mode)) {
+            // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap.
+            if (!mode.isStatic()) {
                 popObject(frame, slot); // clear the slot
-            } else {
-                receiver = nullCheck(popObject(frame, slot));
             }
+            return putFieldViaModel(frame, top, receiver, field, statementIndex);
+        }
+
+        if (!mode.isStatic()) {
+            if (!noForeignObjects.isValid() && receiver.isForeignObject()) {
+                // Do not release the object, it might be read again in PutFieldNode
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                // Restore the receiver for quickening.
+                putObject(frame, slot, receiver);
+                return quickenPutField(frame, top, curBCI, opcode, statementIndex, field);
+            }
+            popObject(frame, slot); // clear the slot
         }
 
         switch (typeHeader) {
@@ -3003,15 +3001,9 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     // stock getField per-kind switch, but sources each value from the MemoryModel, falling back to the
     // real heap when the location has no versioned value (MemoryModel.ABSENT). Assumes Espresso-object
     // receivers (implicit interop is off under a versioned model in Phase 1).
-    private int getFieldViaModel(VirtualFrame frame, int top, Field field, int statementIndex, FieldAccessType mode) {
+    // The caller has done the access check and resolved the receiver (and cleared its slot).
+    private int getFieldViaModel(VirtualFrame frame, int top, StaticObject receiver, Field field, int statementIndex, FieldAccessType mode) {
         CompilerAsserts.partialEvaluationConstant(field);
-        Method method = getMethod();
-        EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
-
-        int slot = top - 1;
-        StaticObject receiver = mode.isStatic()
-                        ? initializeAndGetStatics(field)
-                        : nullCheck(popObject(frame, slot));
 
         MemoryModel model = getContext().getMemoryModel();
         // A volatile field's value lives in the model's un-versioned cell, not the versioned heap, so it
@@ -3100,18 +3092,12 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
 
     // Sync-as-Share (versioned model): stage a field write into the calling thread's view. Mirrors the
     // stock putField per-kind switch, staging a boxed value instead of writing the heap.
-    private int putFieldViaModel(VirtualFrame frame, int top, Field field, int statementIndex, FieldAccessType mode) {
+    // The caller has done the access check and resolved the receiver (and cleared its slot).
+    private int putFieldViaModel(VirtualFrame frame, int top, StaticObject receiver, Field field, int statementIndex) {
         CompilerAsserts.partialEvaluationConstant(field);
-        CompilerAsserts.partialEvaluationConstant(mode);
-        Method method = getMethod();
-        EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
 
         byte typeHeader = field.getType().byteAt(0);
         int slotCount = (typeHeader == 'J' || typeHeader == 'D') ? 2 : 1;
-        int slot = top - slotCount - 1; // -receiver
-        StaticObject receiver = mode.isStatic()
-                        ? initializeAndGetStatics(field)
-                        : nullCheck(popObject(frame, slot));
 
         MemoryModel model = getContext().getMemoryModel();
         Object toWrite;
@@ -3211,30 +3197,30 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         Method method = getMethod();
         EspressoLinkResolver.checkFieldAccessOrThrow(method.getContext(), field, mode, getDeclaringKlass(), method);
 
-        // Instance receiver sits on top of the stack (top - 1); statics have none.
-        if (fieldViaModel(frame, top - 1, field, mode)) {
+        // Instance receiver sits on top of the stack (top - 1); statics have none. Peeked, not popped: the
+        // stock path may need it left on the stack to quicken a foreign receiver.
+        int slot = top - 1;
+        StaticObject receiver = mode.isStatic()
+                        ? initializeAndGetStatics(field)
+                        : nullCheck(peekObject(frame, slot));
+
+        if (isFieldOwnedByVersionedModel(receiver, field, mode)) {
             // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap.
-            return getFieldViaModel(frame, top, field, statementIndex, mode);
+            if (!mode.isStatic()) {
+                popObject(frame, slot); // clear the slot
+            }
+            return getFieldViaModel(frame, top, receiver, field, statementIndex, mode);
         }
 
-        int slot = top - 1;
-        StaticObject receiver;
-        if (mode.isStatic()) {
-            receiver = initializeAndGetStatics(field);
-        } else {
-            if (!noForeignObjects.isValid()) {
+        if (!mode.isStatic()) {
+            if (!noForeignObjects.isValid() && receiver.isForeignObject()) {
                 // Do not release the object yet, it might be read again in GetFieldNode
-                receiver = nullCheck(peekObject(frame, slot));
-                if (receiver.isForeignObject()) {
-                    CompilerDirectives.transferToInterpreterAndInvalidate();
-                    // Restore the receiver for quickening.
-                    putObject(frame, slot, receiver);
-                    return quickenGetField(frame, top, curBCI, opcode, statementIndex, field);
-                }
-                popObject(frame, slot); // clear the slot
-            } else {
-                receiver = nullCheck(popObject(frame, slot));
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                // Restore the receiver for quickening.
+                putObject(frame, slot, receiver);
+                return quickenGetField(frame, top, curBCI, opcode, statementIndex, field);
             }
+            popObject(frame, slot); // clear the slot
         }
 
         if (instrumentation != null) {

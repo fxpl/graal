@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.espresso.memory.UserCodeLocation;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -162,7 +163,7 @@ public final class TracingScheduler implements Scheduler {
      * thread inside the seam, so its frames are live.
      */
     private String site() {
-        return context.getVM().topGuestSite();
+        return UserCodeLocation.current(context);
     }
 
     private static String label(StaticObject subject) {
