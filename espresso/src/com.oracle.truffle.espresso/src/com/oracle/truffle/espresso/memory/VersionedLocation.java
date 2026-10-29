@@ -24,12 +24,11 @@ package com.oracle.truffle.espresso.memory;
 
 /**
  * A versioned shared-memory location: the Espresso analogue of the prototype's {@code var} string.
- * Either a field slot ({@link FieldLocation}) or an array element ({@link ArrayLocation}) — arrays are
- * versioned per-index (the "cells" granularity; see array-design.md). Equality is by the holder's
- * {@link ObjectNumber} plus {@code Field} or index, so instances key the version store and staging map
+ * A field slot ({@link FieldLocation}); arrays are not versioned yet. Equality is by the holder's
+ * {@link ObjectNumber} plus {@code Field}, so instances key the version store and staging map
  * without keeping the holder alive.
  */
-public sealed interface VersionedLocation permits FieldLocation, ArrayLocation {
-    /** The number of the object (or array) this location belongs to. */
+public sealed interface VersionedLocation permits FieldLocation {
+    /** The number of the object this location belongs to. */
     ObjectNumber holder();
 }

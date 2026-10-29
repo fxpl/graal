@@ -94,40 +94,6 @@ public interface MemoryModel {
     default void captureRead(StaticObject holder, Field field, Object value) {
     }
 
-    /** As {@link #readField} but for an array element (per-index): staged, else base snapshot, else {@link #ABSENT}. */
-    Object readArray(StaticObject array, int index);
-
-    /** As {@link #writeField} but for an array element (per-index). Bounds/ArrayStore checks are the caller's job. */
-    void writeArray(StaticObject array, int index, Object value);
-
-    /**
-     * Sync-as-Share (stage-on-access): the acting thread's working copy of an app-owned array — a
-     * <em>real</em> host array of the array's exact component type ({@code byte[]}, {@code int[]},
-     * {@code StaticObject[]}, ...), materialised once on first access from the thread's staged-or-committed
-     * elements over the physical (version-0) array, then cached in the thread's view and reused. Returned
-     * by {@link StaticObject#unwrap} for app-owned arrays, so the native / reflection / {@code arraycopy}
-     * path reads AND writes the very same array the bytecode gate ({@link #readArray}/{@link #writeArray})
-     * uses — an {@code arraycopy} into it simply lands, no throwaway projection. Bulk writes into it record
-     * their touched range via {@link #markArrayRange}. Only ever consulted with the model live (the caller
-     * guards on {@code EspressoContext.isVersionedMemoryEnabled()}), so the default is unreachable.
-     * See design/view-realisation.md.
-     */
-    default Object arrayView(StaticObject array) {
-        throw com.oracle.truffle.espresso.meta.EspressoError.shouldNotReachHere("arrayView on a model without array working copies");
-    }
-
-    /**
-     * Record that indices {@code [destPos, destPos+length)} of {@code array} were written in bulk — an
-     * {@code arraycopy} whose destination is this app-owned array. The elements themselves already landed
-     * in the working copy ({@link #arrayView}) that the {@code arraycopy} wrote through; this only marks
-     * them in the array's write set so the next synchronisation flushes exactly those indices to per-index
-     * staging (and, cross-thread, conflict-checks them). Bytecode {@code aastore} marks its single index
-     * inside {@link #writeArray}; this is the range analogue for the native path.
-     */
-    default void markArrayRange(StaticObject array, int destPos, int length) {
-        throw com.oracle.truffle.espresso.meta.EspressoError.shouldNotReachHere("markArrayRange on a model without array working copies");
-    }
-
     // --- Synchronisation actions (Table 1). May report a conflict. ---
 
     void onThreadStart();

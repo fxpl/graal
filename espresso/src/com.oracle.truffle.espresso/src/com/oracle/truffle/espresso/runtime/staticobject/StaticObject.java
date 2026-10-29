@@ -43,7 +43,6 @@ import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
-import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.ObjectNumber;
 import com.oracle.truffle.espresso.memory.ObjectSyncState;
 import com.oracle.truffle.espresso.memory.SyncState;
@@ -374,16 +373,14 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     private Object getArray(EspressoLanguage language) {
         Object physical = language.getArrayProperty().getObject(this);
-        // Sync-as-Share (stage-on-access): for an app-owned array under a live versioned model, unwrap
-        // resolves to the acting thread's working copy of the array — a real host array holding that
-        // thread's staged/committed elements, the same array the bytecode gate reads/writes and that an
-        // arraycopy writes into. Non-app-owned arrays (and shared/inactive models) fast-path to the
-        // physical store; the isVersionedMemorySelected() guard is a PE constant that folds this away under
-        // --java.MemoryModel=shared. See design/view-realisation.md.
+        // Sync-as-Share: versioned arrays are not modelled yet, so host access to one (unwrap, arraycopy,
+        // native, Unsafe) fails loudly rather than read or write raw memory
         if (physical != null && appOwned && language.isVersionedMemorySelected()) {
-            MemoryModel model = EspressoContext.get(null).getMemoryModel();
-            if (model.isActive()) {
-                return model.arrayView(this);
+            EspressoContext context = EspressoContext.get(null);
+            if (context.getMemoryModel().isActive()) {
+                Meta meta = context.getMeta();
+                throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
+                                "Sync-as-Share: access to versioned array " + getKlass().getExternalName() + " is not defined by the memory model");
             }
         }
         return physical;

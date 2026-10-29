@@ -52,12 +52,6 @@ public final class BranchingView implements MemoryView {
     private final Supplier<SyncState> bindState;
     private Map<VersionedLocation, Object> staging = new HashMap<>(); // staged changes which are cleared when committed to history
     private final ReadCache readCache = new ReadCache();
-
-    // Sync-as-Share (stage-on-access): per-app-owned-array working copy, materialised on first access and
-    // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging and
-    // cleared at each commit, so it rebuilds from post-commit committed state next epoch. Keyed by the
-    // array's number, so aliases of one array share one copy and the view never holds the array itself.
-    private final Map<ObjectNumber, ArrayVersion> arrays = new HashMap<>();
     private String pendingConflict;
 
     // A count shared between views for the number of objects purged,
@@ -148,44 +142,6 @@ public final class BranchingView implements MemoryView {
         VersioningStats.observeStaging(staging.size());
     }
 
-    void stageArray(VersionedLocation loc, Object value) {
-        staging.put(loc, value);
-        VersioningStats.observeStaging(staging.size());
-    }
-
-    /** The acting thread's cached working copy of the array {@code array}, or {@code null} if not yet materialised. */
-    ArrayVersion arrayVersion(ObjectNumber array) {
-        return arrays.get(array);
-    }
-
-    /** Cache a freshly materialised working copy of the array {@code array}. */
-    void putArrayVersion(ObjectNumber array, ArrayVersion av) {
-        arrays.put(array, av);
-    }
-
-    /**
-     * Fold each array working copy's touched indices into per-index {@link ArrayLocation} staging, so the
-     * commit/merge machinery sees exactly the elements this thread wrote. Reads (untouched copies) flush
-     * nothing. Called just before a commit.
-     */
-    void flushArrays() {
-        int flushed = 0;
-        for (Map.Entry<ObjectNumber, ArrayVersion> e : arrays.entrySet()) {
-            ObjectNumber array = e.getKey();
-            ArrayVersion av = e.getValue();
-            for (int i = av.touched.nextSetBit(0); i >= 0; i = av.touched.nextSetBit(i + 1)) {
-                stageArray(new ArrayLocation(array, i), java.lang.reflect.Array.get(av.host, i));
-                flushed++;
-            }
-        }
-        VersioningStats.onFlushArrays(flushed);
-    }
-
-    /** Drop all working copies; they rebuild from committed state on next access. */
-    void clearArrays() {
-        arrays.clear();
-    }
-
     /** Staged value, else the committed value, else ABSENT. The shared genesis (version-0) cache is
      *  consulted by the model after this, not here. */
     Object readField(StaticObject holder, Field field) {
@@ -202,23 +158,6 @@ public final class BranchingView implements MemoryView {
         Object value = walk(loc);
         readCache.put(loc, value);
         track(holder, loc);
-        return value;
-    }
-
-    // Arrays are not tracked (as in stageArray), so a dead array's cached elements stay until evicted
-    Object readArray(ObjectNumber array, int index) {
-        ArrayLocation loc = new ArrayLocation(array, index);
-        Object known = stagedOrCached(loc);
-        if (known != null) {
-            return known;
-        }
-
-        if (state().commit == null) {
-            return MemoryModel.ABSENT;
-        }
-
-        Object value = walk(loc);
-        readCache.put(loc, value);
         return value;
     }
 
@@ -319,12 +258,6 @@ public final class BranchingView implements MemoryView {
 
     /** Turn staged writes into a new commit on this thread's branch (no-op if nothing staged). */
     private void commitStaging() {
-        // Fold array working-copy writes into per-index staging, then drop the copies (they rebuild from
-        // post-commit committed state next epoch). Done before the empty check so a commit whose only
-        // writes are array writes still lands.
-        flushArrays();
-        clearArrays();
-
         // before merging the changes into the head, first try to
         // purge any dead objects from the head commit (non-recursive)
         long deadCount = deadObjectCount.get();

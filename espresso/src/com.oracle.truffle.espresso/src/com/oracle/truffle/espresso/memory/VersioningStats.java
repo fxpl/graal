@@ -56,8 +56,6 @@ final class VersioningStats {
                                                                 // nodes live ~= commits - folds + merges - absorbed - released
     static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
     static final AtomicLong markedForPurging = new AtomicLong();     // ...of which the GC found dead (Cleaner ran)
-    static final AtomicLong arrayChanges = new AtomicLong();    // array entries flushed into staging (part of committedChanges)
-    static final AtomicLong peakArrayStaging = new AtomicLong(); // largest single array flush (part of peakStaging)
     static final AtomicLong readWalks = new AtomicLong();       // reads not in staging that walked the commit history
     static final AtomicLong readWalkMisses = new AtomicLong();  // ...of which found no committed value (ABSENT)
     static final AtomicLong readWalkVisited = new AtomicLong(); // commits visited by all walks
@@ -137,13 +135,6 @@ final class VersioningStats {
         }
     }
 
-    static void onFlushArrays(int entries) {
-        if (ENABLED) {
-            arrayChanges.addAndGet(entries);
-            observe(peakArrayStaging, entries);
-        }
-    }
-
     static void onReadWalk(int visited, boolean found) {
         if (ENABLED) {
             readWalks.incrementAndGet();
@@ -206,7 +197,6 @@ final class VersioningStats {
             sb.append(" branching")
                             .append("\n  commits:  commits=").append(commits)
                             .append(" committedChanges=").append(committedChanges)
-                            .append(" arrayChanges=").append(arrayChanges)
                             .append(" merges=").append(merges)
                             .append(" folds=").append(folds)
                             .append("\n  nodes:    created=").append(nodesCreated())
@@ -235,8 +225,7 @@ final class VersioningStats {
                                 .append(" resident~=").append(gVersions.get() - versionsDropped.get());
             }
         }
-        sb.append("\n  staging:  peak=").append(peakStaging)
-                        .append(" peakArrays=").append(peakArrayStaging);
+        sb.append("\n  staging:  peak=").append(peakStaging);
         System.err.println(sb);
     }
 }

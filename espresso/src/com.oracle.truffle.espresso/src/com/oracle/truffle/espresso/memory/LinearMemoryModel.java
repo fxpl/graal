@@ -32,7 +32,7 @@ import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-// FieldLocation / ArrayLocation / VersionedLocation are in this package.
+// FieldLocation / VersionedLocation are in this package.
 
 /**
  * The Linear version-controlled memory model (paper &sect;3.1/&sect;4.3), ported from the {@code
@@ -206,21 +206,13 @@ public final class LinearMemoryModel implements MemoryModel {
         currentView().stage(loc, value);
     }
 
-    // Push/pull wrappers that fold array working-copy writes into staging first (so the conflict check and
-    // publication see this thread's array writes at per-index granularity), then drop the working copies
-    // (they rebuild from the freshly-observed base on next access). Every sync action goes through these.
+    // Every sync action pushes or pulls through these.
     private VersionedLocation pushG(LinearLocalView view) {
-        view.flushArrays();
-        VersionedLocation conflict = global.push(view);
-        view.clearArrays();
-        return conflict;
+        return global.push(view);
     }
 
     private VersionedLocation pullG(LinearLocalView view) {
-        view.flushArrays();
-        VersionedLocation conflict = global.pull(view);
-        view.clearArrays();
-        return conflict;
+        return global.pull(view);
     }
 
     @Override
@@ -246,55 +238,6 @@ public final class LinearMemoryModel implements MemoryModel {
     public void captureRead(StaticObject holder, Field field, Object value) {
         // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
         genesis.putIfAbsent(new FieldLocation(holder.getObjectNumber(), field), value);
-    }
-
-    @Override
-    public Object readArray(StaticObject array, int index) {
-        return java.lang.reflect.Array.get(arrayVersionFor(array).host, index);
-    }
-
-    @Override
-    public void writeArray(StaticObject array, int index, Object value) {
-        ArrayVersion av = arrayVersionFor(array);
-        java.lang.reflect.Array.set(av.host, index, value);
-        av.touched.set(index);
-    }
-
-    @Override
-    public Object arrayView(StaticObject array) {
-        return arrayVersionFor(array).host;
-    }
-
-    @Override
-    public void markArrayRange(StaticObject array, int destPos, int length) {
-        arrayVersionFor(array).touched.set(destPos, destPos + length);
-    }
-
-    /**
-     * The acting thread's working copy of {@code array}, materialising it on first access: a real host
-     * array of the array's component type, seeded from the physical (version-0) array and overlaid with
-     * this thread's staged-or-committed elements ({@link #read}, i.e. staged else the value visible at the
-     * view's base). Cached on the view and reused until the next push/pull clears it. See {@link
-     * ArrayVersion}.
-     */
-    private ArrayVersion arrayVersionFor(StaticObject array) {
-        LinearLocalView view = currentView();
-        ArrayVersion av = view.arrayVersion(array);
-        if (av == null) {
-            Object physical = context.getLanguage().getArrayProperty().getObject(array);
-            int n = java.lang.reflect.Array.getLength(physical);
-            Object host = java.lang.reflect.Array.newInstance(physical.getClass().getComponentType(), n);
-            System.arraycopy(physical, 0, host, 0, n);
-            for (int i = 0; i < n; i++) {
-                Object v = read(new ArrayLocation(array.getObjectNumber(), i));
-                if (v != MemoryModel.ABSENT) {
-                    java.lang.reflect.Array.set(host, i, v);
-                }
-            }
-            av = new ArrayVersion(host);
-            view.putArrayVersion(array, av);
-        }
-        return av;
     }
 
     @Override
@@ -414,8 +357,6 @@ public final class LinearMemoryModel implements MemoryModel {
     private static String describe(VersionedLocation loc) {
         if (loc instanceof FieldLocation f) {
             return f.field().getDeclaringKlass().getName() + "." + f.field().getName();
-        } else if (loc instanceof ArrayLocation a) {
-            return "array element [" + a.index() + "]";
         }
         return String.valueOf(loc);
     }

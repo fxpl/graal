@@ -25,8 +25,6 @@ package com.oracle.truffle.espresso.memory;
 import java.util.HashMap;
 import java.util.Map;
 
-import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-
 /**
  * A thread's private view of memory (prototype: {@code LocalVersionStore}). Holds the staging area
  * {@code δ} (uncommitted writes) and the base counter — the position in the global history this
@@ -40,10 +38,6 @@ public final class LinearLocalView implements MemoryView {
     // lower bound (we would retain more, never drop something a thread still needs).
     private volatile long base;
     private final Map<VersionedLocation, Object> staging = new HashMap<>();
-    // Sync-as-Share (stage-on-access): per-app-owned-array working copy, materialised on first access and
-    // reused for reads/writes/unwrap this epoch. Flushed (touched indices only) to per-index staging before
-    // each push/pull and cleared after, so it rebuilds from the freshly-observed base next epoch.
-    private final Map<StaticObject, ArrayVersion> arrays = new HashMap<>();
     // A conflict detected during a synchronisation action, to be raised at the next safe point (the
     // top of the bytecode loop) rather than from inside the sync op. Null if none pending.
     private String pendingConflict;
@@ -73,38 +67,6 @@ public final class LinearLocalView implements MemoryView {
     public void stage(VersionedLocation loc, Object value) {
         staging.put(loc, value);
         VersioningStats.observeStaging(staging.size());
-    }
-
-    // --- Sync-as-Share array working copies (stage-on-access) ---
-
-    /** The acting thread's cached working copy of {@code array}, or {@code null} if not yet materialised. */
-    ArrayVersion arrayVersion(StaticObject array) {
-        return arrays.get(array);
-    }
-
-    /** Cache a freshly materialised working copy of {@code array}. */
-    void putArrayVersion(StaticObject array, ArrayVersion av) {
-        arrays.put(array, av);
-    }
-
-    /**
-     * Fold each array working copy's touched indices into per-index {@link ArrayLocation} staging, so the
-     * push/pull conflict check and publication see exactly the elements this thread wrote. Reads (untouched
-     * copies) flush nothing. Called just before a push or pull.
-     */
-    public void flushArrays() {
-        for (Map.Entry<StaticObject, ArrayVersion> e : arrays.entrySet()) {
-            StaticObject array = e.getKey();
-            ArrayVersion av = e.getValue();
-            for (int i = av.touched.nextSetBit(0); i >= 0; i = av.touched.nextSetBit(i + 1)) {
-                stage(new ArrayLocation(array.getObjectNumber(), i), java.lang.reflect.Array.get(av.host, i));
-            }
-        }
-    }
-
-    /** Drop all working copies; they rebuild from the freshly-observed base on next access. */
-    public void clearArrays() {
-        arrays.clear();
     }
 
     public Map<VersionedLocation, Object> staging() {
