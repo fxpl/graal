@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import com.oracle.truffle.espresso.EspressoOptions;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
+import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 // FieldLocation / VersionedLocation are in this package.
@@ -232,6 +233,22 @@ public final class LinearMemoryModel implements MemoryModel {
     public void writeField(StaticObject holder, Field field, Object value) {
         write(new FieldLocation(holder.getObjectNumber(), field), value);
         holder.markHasBeenVersioned();
+    }
+
+    @Override
+    public Object arrayForRead(StaticObject array, int from, int to) {
+        throw unsupportedArrayAccess(array);
+    }
+
+    @Override
+    public Object arrayForWrite(StaticObject array, int from, int to) {
+        throw unsupportedArrayAccess(array);
+    }
+
+    private static RuntimeException unsupportedArrayAccess(StaticObject array) {
+        Meta meta = array.getKlass().getMeta();
+        throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
+                        "Sync-as-Share: the linear model does not version arrays (" + array.getKlass().getExternalName() + ")");
     }
 
     @Override

@@ -32,6 +32,7 @@ import java.util.stream.Collectors;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
+import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -189,6 +190,22 @@ public final class BranchingMemoryModel implements MemoryModel {
         currentView().stageField(holder, field, value);
         holder.markHasBeenVersioned();
         registerForCleaning(holder);
+    }
+
+    @Override
+    public Object arrayForRead(StaticObject array, int from, int to) {
+        throw notYetVersioned(array);
+    }
+
+    @Override
+    public Object arrayForWrite(StaticObject array, int from, int to) {
+        throw notYetVersioned(array);
+    }
+
+    private static RuntimeException notYetVersioned(StaticObject array) {
+        Meta meta = array.getKlass().getMeta();
+        throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
+                        "Sync-as-Share: access to versioned array " + array.getKlass().getExternalName() + " is not defined by the memory model");
     }
 
     @Override

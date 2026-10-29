@@ -43,9 +43,11 @@ import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
+import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.ObjectNumber;
 import com.oracle.truffle.espresso.memory.ObjectSyncState;
 import com.oracle.truffle.espresso.memory.SyncState;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
@@ -321,7 +323,7 @@ public class StaticObject implements TruffleObject, Cloneable {
             return Meta.toHostStringStatic(this);
         }
         if (isArray()) {
-            return unwrap(meta.getLanguage()).toString();
+            return getRawArray(meta.getLanguage()).toString();
         }
         if (isStaticStorage()) {
             return "statics: " + getKlass().getType();
@@ -353,7 +355,7 @@ public class StaticObject implements TruffleObject, Cloneable {
             return Meta.toHostStringStatic(this);
         }
         if (isArray()) {
-            return unwrap(meta.getLanguage()).toString();
+            return getRawArray(meta.getLanguage()).toString();
         }
         if (getKlass() == meta.java_lang_Class) {
             return "mirror: " + getMirrorKlass().toString();
@@ -372,18 +374,68 @@ public class StaticObject implements TruffleObject, Cloneable {
      * Start of Array manipulation.
      */
     private Object getArray(EspressoLanguage language) {
-        Object physical = language.getArrayProperty().getObject(this);
-        // Sync-as-Share: versioned arrays are not modelled yet, so host access to one (unwrap, arraycopy,
-        // native, Unsafe) fails loudly rather than read or write raw memory
-        if (physical != null && appOwned && language.isVersionedMemorySelected()) {
+        Object physical = getRawArray(language);
+        if (language.isVersionedMemorySelected() && Versioning.versionsArray(this)) {
             EspressoContext context = EspressoContext.get(null);
             if (context.getMemoryModel().isActive()) {
                 Meta meta = context.getMeta();
                 throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
-                                "Sync-as-Share: access to versioned array " + getKlass().getExternalName() + " is not defined by the memory model");
+                                "Sync-as-Share: access to versioned array " + getKlass().getExternalName() + " without versioned accessor");
             }
         }
         return physical;
+    }
+
+    /**
+     * Return the raw array and don't track accesses
+     */
+    private Object getRawArray(EspressoLanguage language) {
+        checkNotForeign();
+        assert isArray();
+        Object array = language.getArrayProperty().getObject(this);
+        if (array == null) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            throw EspressoError.shouldNotReachHere();
+        }
+        return array;
+    }
+
+    /**
+     * Select to either read the raw memory if we are not versioning or this array is unversioned
+     * or track that we are reading this array at the given indices
+     */
+    @SuppressWarnings("unchecked")
+    public final <T> T getArrayForRead(EspressoLanguage language, int from, int to) {
+        if (language.isVersionedMemorySelected() && Versioning.versionsArray(this)) {
+            MemoryModel model = EspressoContext.get(null).getMemoryModel();
+            if (model.isActive()) {
+                return (T) model.arrayForRead(this, from, to);
+            }
+        }
+        return (T) getRawArray(language);
+    }
+
+    public final <T> T getArrayForRead(EspressoLanguage language, int index) {
+        return getArrayForRead(language, index, index + 1);
+    }
+
+    /**
+     * Select to either write the raw memory if we are not versioning or this array is unversioned
+     * or track that we are writing this array at the given indices
+     */
+    @SuppressWarnings("unchecked")
+    public final <T> T getArrayForWrite(EspressoLanguage language, int from, int to) {
+        if (language.isVersionedMemorySelected() && Versioning.versionsArray(this)) {
+            MemoryModel model = EspressoContext.get(null).getMemoryModel();
+            if (model.isActive()) {
+                return (T) model.arrayForWrite(this, from, to);
+            }
+        }
+        return (T) getRawArray(language);
+    }
+
+    public final <T> T getArrayForWrite(EspressoLanguage language, int index) {
+        return getArrayForWrite(language, index, index + 1);
     }
 
     /**
@@ -401,22 +453,19 @@ public class StaticObject implements TruffleObject, Cloneable {
         return (T) array;
     }
 
+    @SuppressWarnings("unchecked")
     public final <T> T get(EspressoLanguage language, int index) {
         checkNotForeign();
         assert isArray();
-        return this.<T[]> unwrap(language)[index];
+        return ((T[]) getArrayForRead(language, index))[index];
     }
 
     public final int length(EspressoLanguage language) {
-        checkNotForeign();
-        assert isArray();
-        return Array.getLength(getArray(language));
+        return Array.getLength(getRawArray(language));
     }
 
     public final Object cloneWrappedArray(EspressoLanguage language) {
-        checkNotForeign();
-        assert isArray();
-        Object array = getArray(language);
+        Object array = getArrayForRead(language, 0, length(language));
         if (array instanceof byte[]) {
             return ((byte[]) array).clone();
         }

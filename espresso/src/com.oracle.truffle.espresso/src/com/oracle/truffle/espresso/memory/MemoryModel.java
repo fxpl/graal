@@ -80,6 +80,53 @@ public interface MemoryModel {
     /** Stage a write of a field of {@code holder} into the calling thread's view (boxed value). */
     void writeField(StaticObject holder, Field field, Object value);
 
+    // --- Array access (called only for versioned arrays) ---
+
+    /**
+     * Declare that the caller is about to read elements [from, to) of {@code array}, and get the host
+     * array to read them through. The result has the guest array's host type ({@code int[]} for a guest
+     * {@code int[]}, {@code StaticObject[]} for a reference array) and length, and is indexed with the
+     * guest indices. What it is depends on the model: the caller must not assume it is the physical array.
+     *
+     * <p>Contract:
+     * <ul>
+     * <li>The caller has already checked {@code 0 <= from <= to <= length}; the model does not.</li>
+     * <li>The caller reads only [from, to), only for the duration of the operation, and does not keep the
+     * result.</li>
+     * <li>The caller does not write through the result; a write must be declared with
+     * {@link #arrayForWrite}.</li>
+     * <li>{@code from == to} is the empty range and is allowed.</li>
+     * <li>Volatile, compare-and-set and other atomic accesses are synchronisation actions and must not
+     * use this method.</li>
+     * </ul>
+     */
+    Object arrayForRead(StaticObject array, int from, int to);
+
+    /**
+     * Declare that the caller is about to write elements [from, to) of {@code array}, and get the host
+     * array to write them through (and to read any element in [from, to)). The model records every element
+     * of the range as written, whether or not the caller changes its value.
+     *
+     * <p>Contract, as {@link #arrayForRead}, plus:
+     * <ul>
+     * <li>The range must be what the caller <em>will</em> write. A range larger than the write is safe
+     * but may report false conflicts; a write outside the range is silently lost to other threads.</li>
+     * <li>Declare the range only once the write is certain: after bounds, store and other checks that
+     * could abandon it.</li>
+     * </ul>
+     */
+    Object arrayForWrite(StaticObject array, int from, int to);
+
+    /** {@link #arrayForRead(StaticObject, int, int)} for the single element {@code index}. */
+    default Object arrayForRead(StaticObject array, int index) {
+        return arrayForRead(array, index, index + 1);
+    }
+
+    /** {@link #arrayForWrite(StaticObject, int, int)} for the single element {@code index}. */
+    default Object arrayForWrite(StaticObject array, int index) {
+        return arrayForWrite(array, index, index + 1);
+    }
+
     /**
      * Sync-as-Share (stage-on-access): lazily capture the genesis (version-0) value of a versioned field
      * into the calling thread's view. Called by {@link com.oracle.truffle.espresso.impl.Field} the first
