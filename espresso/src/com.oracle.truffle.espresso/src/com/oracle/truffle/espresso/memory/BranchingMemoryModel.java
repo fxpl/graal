@@ -163,7 +163,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public Object readField(StaticObject holder, Field field) {
-        if (holder.hasBeenVersioned()) {
+        if (holder.hasVersionedWrite()) {
             return currentView().readField(holder, field);
         }
         // no thread has written the object, so every field is at version 0, its raw slot
@@ -173,7 +173,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
         currentView().stageField(holder, field, value);
-        holder.markHasBeenVersioned();
+        holder.markHasVersionedWrite();
         registerForCleaning(holder);
     }
 
@@ -185,7 +185,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public Object arrayForWrite(StaticObject array, int from, int to) {
         Object storage = currentView().arrayForWrite(array, from, to);
-        array.markHasBeenVersioned();
+        array.markHasVersionedWrite();
         registerForCleaning(array);
         return storage;
     }

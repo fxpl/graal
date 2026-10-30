@@ -41,6 +41,7 @@ import com.oracle.truffle.espresso.blocking.GuestInterruptedException;
 import com.oracle.truffle.espresso.blocking.ThreadRequests;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
@@ -145,6 +146,7 @@ public final class Target_java_lang_Thread {
                 // start) inherits the parent's pre-spawn writes. Runs on the parent, before the child
                 // starts. No-op/folded under shared; off during JDK bootstrap.
                 if (context.isVersionedMemoryEnabled()) {
+                    Versioning.versionReachableFrom(self);
                     context.getMemoryModel().onSpawn(self);
                 }
                 hostThread.start();

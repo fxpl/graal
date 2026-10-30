@@ -1746,30 +1746,18 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     private StaticObject newReferenceObject(Klass klass) {
         assert !klass.isPrimitive() : "Verifier guarantee";
         GuestAllocator.AllocationChecks.checkCanAllocateNewReference(getMethod().getMeta(), klass, true, this);
-        return markProvenance(getAllocator().createNew((ObjectKlass) klass));
+        return Versioning.markIfEligible(getAllocator().createNew((ObjectKlass) klass), getMethod());
     }
 
     private StaticObject newPrimitiveArray(byte jvmPrimitiveType, int length) {
         Meta meta = getMethod().getMeta();
         GuestAllocator.AllocationChecks.checkCanAllocateArray(meta, length, this);
-        return markProvenance(getAllocator().createNewPrimitiveArray(meta, jvmPrimitiveType, length));
+        return Versioning.markIfEligible(getAllocator().createNewPrimitiveArray(meta, jvmPrimitiveType, length), getMethod());
     }
 
     private StaticObject newReferenceArray(Klass componentType, int length) {
         GuestAllocator.AllocationChecks.checkCanAllocateArray(getMethod().getMeta(), length, this);
-        return markProvenance(getAllocator().createNewReferenceArray(componentType, length));
-    }
-
-    // Sync-as-Share: stamp a freshly-allocated object/array with application provenance when the method
-    // performing the allocation is application code. The allocating frame IS this node, so the check is
-    // O(1) off getMethod() -- no stack walk. Under --java.MemoryModel=shared isVersionedMemorySelected() is a
-    // PE-constant false, so this folds away entirely. Design: versioning-provenance.md §4.1.
-    private StaticObject markProvenance(StaticObject obj) {
-        if (getContext().isVersionedMemoryEnabled() &&
-                        Versioning.allocatesAppOwned(getMethod())) {
-            obj.markAppOwned();
-        }
-        return obj;
+        return Versioning.markIfEligible(getAllocator().createNewReferenceArray(componentType, length), getMethod());
     }
 
     private BaseQuickNode getBaseQuickNode(int curBCI, int top, int statementIndex, BaseQuickNode quickNode) {
@@ -2624,7 +2612,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         }
         Klass component = ((ArrayKlass) klass).getComponentType();
         GuestAllocator.AllocationChecks.checkCanAllocateMultiArray(getMethod().getMeta(), component, dimensions, this);
-        StaticObject value = markProvenance(getAllocator().createNewMultiArray(component, dimensions));
+        StaticObject value = Versioning.markIfEligible(getAllocator().createNewMultiArray(component, dimensions), getMethod());
         putObject(frame, top - allocatedDimensions, value);
         return -allocatedDimensions; // Does not include the created (pushed) array.
     }

@@ -555,7 +555,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (getDeclaringKlass().getContext().anyHierarchyChanged()) {
             checkSetValueValidity(value);
         }
-        // Sync-as-Share: a write to a versioned location is staged in the model, never written to the slot.
+
+        Versioning.versionValueIfTargetShared(obj, value);
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -610,6 +611,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        Versioning.versionValueIfTargetShared(obj, value);
         return (StaticObject) linkedField.getAndSetObject(obj, value);
     }
 
@@ -617,6 +619,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        Versioning.versionValueIfTargetShared(obj, after);
         return linkedField.compareAndSwapObject(obj, before, after);
     }
 
@@ -624,6 +627,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        Versioning.versionValueIfTargetShared(obj, after);
         return (StaticObject) linkedField.compareAndExchangeObject(obj, before, after);
     }
 

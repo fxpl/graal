@@ -222,7 +222,7 @@ public final class LinearMemoryModel implements MemoryModel {
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
         write(new FieldLocation(holder.getObjectNumber(), field), value);
-        holder.markHasBeenVersioned();
+        holder.markHasVersionedWrite();
     }
 
     @Override

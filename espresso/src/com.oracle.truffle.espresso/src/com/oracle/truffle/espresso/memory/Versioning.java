@@ -22,80 +22,140 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
+
+import com.oracle.truffle.espresso.EspressoLanguage;
+import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
+import com.oracle.truffle.espresso.impl.ObjectKlass;
+import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
- * The single authority for "does the Sync-as-Share model version this location?" — the discriminator
- * every gate consults (bytecode getfield/putfield/aaload/aastore, {@code Unsafe}, reflection), so the
- * decision is defined once instead of re-derived at each site (where it previously drifted: fields
- * keyed on the field's declaring class, arrays on the executing frame, {@code Unsafe} hand-copied the
- * field test).
+ * Whether the Sync-as-Share model owns a location. Every barrier asks here, and every question is
+ * answered whole: first whether a versioned model is running ({@link #modelOn}), then the location.
+ * Callers add no checks of their own.
  *
- * <p>The criterion is instance <b>provenance</b>: an object/array is versioned iff it is application
- * data — {@link StaticObject#isAppOwned()}, set at allocation and propagated on stores — not by the
- * declaring class. Statics have no instance, so they key on the class's loader (its owner). See
- * {@code design/versioning-provenance.md}.
+ * <p>An object is versioned once {@link StaticObject#isVersioned()}; only objects
+ * {@link StaticObject#isEligibleForVersioning() eligible for versioning} (today: allocated by
+ * a method of a class that is not boot loaded) ever become versioned. Statics have no instance, so
+ * they key on whether their class is boot loaded. See {@code design/versioning-provenance.md}.
  */
 public final class Versioning {
 
     private Versioning() {
     }
 
-    /** The atom: is {@code klass} defined by a non-boot (application) class loader? */
-    private static boolean isApplicationClass(Klass klass) {
-        return !StaticObject.isNull(klass.getDefiningClassLoader());
-    }
-
-    /** Is an object allocated by {@code allocator} application data, i.e. should it be marked app-owned? */
-    public static boolean allocatesAppOwned(Method allocator) {
-        return isApplicationClass(allocator.getDeclaringKlass());
+    // A versioned model is selected (a compilation constant, so under shared every check here folds
+    // away) and active (not during VM bootstrap).
+    private static boolean modelOn() {
+        return EspressoLanguage.get(null).isVersionedMemorySelected() && EspressoContext.get(null).getMemoryModel().isActive();
     }
 
     /**
-     * An instance field of {@code receiver} is versioned iff the object is application data — decided by
-     * its provenance ({@link StaticObject#isAppOwned()}), set at allocation and propagated on stores, NOT
-     * by the field's declaring class. So an app-created instance of a library class (e.g. a {@code
-     * HashMap} the program {@code new}'d) is versioned, while the runtime's own instances are not.
+     * Is {@code klass} defined by the boot class loader? Not the same as "a JDK class": the platform
+     * loader also defines JDK classes, and those count as not boot loaded.
      */
-    public static boolean versionsInstance(StaticObject receiver) {
-        return receiver.isAppOwned();
+    private static boolean isBootLoadedClass(Klass klass) {
+        return StaticObject.isNull(klass.getDefiningClassLoader());
     }
 
-    /** An array element is versioned iff the array is application data (its own provenance). */
-    public static boolean versionsArray(StaticObject array) {
-        return array.isAppOwned();
-    }
-
-    /**
-     * A static field is versioned iff its declaring class is application-loaded. A static's owner is the
-     * class (there is no instance), and a class's layer is fixed by who loaded it — so the loader is the
-     * right ownership test here (unlike for instances, where the app can create instances of runtime
-     * classes). See {@code design/versioning-provenance.md} §4.2.
-     */
-    public static boolean versionsStatic(Field field) {
-        return isApplicationClass(field.getDeclaringKlass());
+    /** Does the model own {@code obj}'s instance fields, or, for an array, its elements? */
+    public static boolean versionsObject(StaticObject obj) {
+        return modelOn() && obj.isVersioned();
     }
 
     /**
-     * Is {@code field} of {@code obj} a location the model owns (used by {@code Field}'s accessors)? A
-     * static by its declaring class, an instance field by {@code obj}'s provenance. Volatile fields are
-     * owned too: the model gives them their synchronisation, and keeps their value in the raw slot.
+     * Does the model own {@code field} of {@code obj}? A static if its class is not boot loaded, an
+     * instance field if {@code obj} is versioned. Volatile fields are owned too: the
+     * model gives them their synchronisation, and keeps their value in the raw slot.
      */
     public static boolean versionsField(StaticObject obj, Field field) {
-        // checked first so the whole test folds away under shared
-        if (!field.getDeclaringKlass().getLanguage().isVersionedMemorySelected()) {
-            return false;
-        }
         // Hidden fields are VM-injected storage (not guest-declared) holding host-side objects — the
         // EspressoLock in Thread.0toNativeLock, the host Thread in 0hostThread — which are never guest
         // values and never app data. They must stay raw: the hidden reader (getHiddenObjectHelper) is
         // already un-routed, so versioning the write alone would stage a value the reader never sees.
-        if (field.isHidden() || !field.getDeclaringKlass().getContext().isVersionedMemoryEnabled()) {
+        if (!modelOn() || field.isHidden()) {
             return false;
         }
-        return field.isStatic() ? versionsStatic(field) : versionsInstance(obj);
+        return field.isStatic() ? !isBootLoadedClass(field.getDeclaringKlass()) : obj.isVersioned();
     }
+
+    /** Mark {@code obj} eligible for versioning if it should be: today, if application code allocated it. */
+    public static StaticObject markIfEligible(StaticObject obj, Method allocator) {
+        if (modelOn() && !isBootLoadedClass(allocator.getDeclaringKlass())) {
+            obj.markEligibleForVersioning();
+        }
+        return obj;
+    }
+
+    /** Walk the object graph and mark everything as needing versioning */
+    private static void markForVersioning(StaticObject root) {
+        Deque<StaticObject> roots = new ArrayDeque<StaticObject>();
+        roots.push(root);
+
+        while (!roots.isEmpty()) {
+            StaticObject o = roots.pop();
+            if (StaticObject.isNull(o) || !o.isEligibleForVersioning() || o.isVersioned()) {
+                continue;
+            }
+            o.markVersioned();
+
+            Klass klass = o.getKlass();
+            if (klass.isArray()) {
+                // walk the reference elements of the array and push them as new roots to explore
+                if (!((ArrayKlass) klass).getComponentType().isPrimitive()) {
+                    for (StaticObject element : o.<StaticObject[]> getRawArray(EspressoLanguage.get(null))) {
+                        roots.push(element);
+                    }
+                }
+            } else {
+                // walk the eligible reference fields of the object and push them as new roots to explore
+                for (Field f : ((ObjectKlass) klass).getFieldTable()) {
+                    if (!f.getKind().isPrimitive() && !f.isHidden() && !f.isRemoved()) {
+                        roots.push((StaticObject) f.getRawValue(o));
+                    }
+                }
+            }
+
+        }
+    }
+
+    public static void versionReachableFrom(Object target) {
+        if (!modelOn() || !(target instanceof StaticObject o) || StaticObject.isNull(o) || !o.isEligibleForVersioning() || o.isVersioned()) {
+            return;
+        }
+        markForVersioning(o);
+    }
+
+    /** An event, check whether the value requires versioning, if the target is versioned and the value is not yet
+     * versioned, but is eligible, then mark the value for versioning
+     */
+    public static void versionValueIfTargetShared(StaticObject target, Object value) {
+        if (!modelOn() || !(value instanceof StaticObject o) || StaticObject.isNull(o) || !o.isEligibleForVersioning() || o.isVersioned()) {
+            return;
+        }
+        if (target != null && target.isEligibleForVersioning() && !target.isVersioned()) {
+            return;
+        }
+        markForVersioning(o);
+    }
+
+    /** As versionValueIfTargetShared, for every reference in values[from, to). */
+    public static void versionValuesIfTargetShared(StaticObject target, StaticObject[] values, int from, int to) {
+        if (!modelOn()) {
+            return;
+        }
+        if (target != null && target.isEligibleForVersioning() && !target.isVersioned()) {
+            return;
+        }
+        for (int i = from; i < to; i++) {
+            markForVersioning(values[i]);            // returns at once for null, versioned or ineligible values
+        }
+    }
+
+
 }

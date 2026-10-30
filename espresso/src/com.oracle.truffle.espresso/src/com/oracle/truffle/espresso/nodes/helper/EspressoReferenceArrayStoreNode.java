@@ -29,6 +29,7 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.espresso.EspressoLanguage;
 import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.meta.Meta;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.nodes.EspressoNode;
 import com.oracle.truffle.espresso.nodes.bytecodes.InstanceOf;
 import com.oracle.truffle.espresso.nodes.bytecodes.InstanceOfFactory;
@@ -54,6 +55,7 @@ public final class EspressoReferenceArrayStoreNode extends EspressoNode {
             enterArrayStoreEx();
             throw meta.throwException(meta.java_lang_ArrayStoreException);
         }
+        Versioning.versionValueIfTargetShared(array, value);
         (array.<StaticObject[]> getArrayForWrite(language, index))[index] = value;
     }
 

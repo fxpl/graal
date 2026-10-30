@@ -43,7 +43,6 @@ import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
-import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.ObjectNumber;
 import com.oracle.truffle.espresso.memory.ObjectSyncState;
 import com.oracle.truffle.espresso.memory.SyncState;
@@ -79,20 +78,15 @@ public class StaticObject implements TruffleObject, Cloneable {
     // Initialised lazily toa void creating one for shared a objects not used for sync actions
     private volatile ObjectSyncState objectSyncState;
 
-    // Sync-as-Share provenance (design/versioning-provenance.md): true iff this object/array is
-    // application data — created by application code, or reachable via a store into an already-owned
-    // object. It is the discriminator the versioned model keys on (via memory.Versioning), decided at
-    // allocation and propagated on stores; read identically from every frame. Default false: the
-    // pre-existing physical heap, VM/bootstrap allocations, NULL, foreign and mirror objects are all
-    // runtime-owned. Monotonic (only ever set true); a boolean write needs no synchronisation. Only
-    // touched under a versioned model; inert (always false) under --java.MemoryModel=shared.
-    private boolean appOwned;
+    private boolean eligibleForVersioning;
+    private boolean versioned;
 
     // Ideally the objectNumber would be final, but cloned objects copy the object number
     // and the number needs to be reset. The issue is that we are a JVM on a JVM, so Espresso
     // calls the clone() method of the static object which is then cloned including the number.
     private ObjectNumber objectNumber;
-    private boolean hasBeenVersioned;
+    // some thread has written this object through the memory model (until then every field is at version 0)
+    private boolean hasVersionedWrite;
     private boolean isCleanerRegistered;
 
     // region Constructors
@@ -108,7 +102,7 @@ public class StaticObject implements TruffleObject, Cloneable {
         }
         this.klass = klass;
         this.objectNumber = objectNumber;
-        this.hasBeenVersioned = false;
+        this.hasVersionedWrite = false;
         this.isCleanerRegistered = false;
     }
 
@@ -206,14 +200,20 @@ public class StaticObject implements TruffleObject, Cloneable {
         return !isForeignObject();
     }
 
-    /** Sync-as-Share provenance: is this object/array application data? See the {@code appOwned} field. */
-    public final boolean isAppOwned() {
-        return appOwned;
+    public final boolean isEligibleForVersioning() {
+        return eligibleForVersioning;
     }
 
-    /** Mark this object/array as application data (monotonic: set once at allocation or on propagation). */
-    public final void markAppOwned() {
-        appOwned = true;
+    public final void markEligibleForVersioning() {
+        eligibleForVersioning = true;
+    }
+
+    public final boolean isVersioned() {
+        return versioned;
+    }
+
+    public final void markVersioned() {
+        versioned = true;
     }
 
     public final ObjectSyncState getObjectSyncState() {
@@ -375,18 +375,19 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     private Object getArray(EspressoLanguage language) {
         Object physical = getRawArray(language);
-        if (language.isVersionedMemorySelected() && Versioning.versionsArray(this)) {
-            if (EspressoContext.get(null).getMemoryModel().isActive()) {
-                throw EspressoError.shouldNotReachHere("Sync-as-Share: versioned array " + getKlass().getExternalName() + " reached without an access barrier");
-            }
+        if (Versioning.versionsObject(this)) {
+            throw EspressoError.shouldNotReachHere("Sync-as-Share: versioned array " + getKlass().getExternalName() + " reached without an access barrier");
         }
         return physical;
     }
 
     /**
-     * Return the raw array and don't track accesses
+     * The host array behind this guest array, bypassing the memory model. Only for the model itself
+     * (version 0 of a versioned array, and reading a raw array before it is versioned), {@code length},
+     * and diagnostics; every other access goes through {@link #getArrayForRead}/{@link #getArrayForWrite}.
      */
-    private Object getRawArray(EspressoLanguage language) {
+    @SuppressWarnings("unchecked")
+    public final <T> T getRawArray(EspressoLanguage language) {
         checkNotForeign();
         assert isArray();
         Object array = language.getArrayProperty().getObject(this);
@@ -394,7 +395,7 @@ public class StaticObject implements TruffleObject, Cloneable {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             throw EspressoError.shouldNotReachHere();
         }
-        return array;
+        return (T) array;
     }
 
     /**
@@ -403,11 +404,8 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     @SuppressWarnings("unchecked")
     public final <T> T getArrayForRead(EspressoLanguage language, int from, int to) {
-        if (language.isVersionedMemorySelected() && Versioning.versionsArray(this)) {
-            MemoryModel model = EspressoContext.get(null).getMemoryModel();
-            if (model.isActive()) {
-                return (T) model.arrayForRead(this, from, to);
-            }
+        if (Versioning.versionsObject(this)) {
+            return (T) EspressoContext.get(null).getMemoryModel().arrayForRead(this, from, to);
         }
         return (T) getRawArray(language);
     }
@@ -422,11 +420,8 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     @SuppressWarnings("unchecked")
     public final <T> T getArrayForWrite(EspressoLanguage language, int from, int to) {
-        if (language.isVersionedMemorySelected() && Versioning.versionsArray(this)) {
-            MemoryModel model = EspressoContext.get(null).getMemoryModel();
-            if (model.isActive()) {
-                return (T) model.arrayForWrite(this, from, to);
-            }
+        if (Versioning.versionsObject(this)) {
+            return (T) EspressoContext.get(null).getMemoryModel().arrayForWrite(this, from, to);
         }
         return (T) getRawArray(language);
     }
@@ -593,16 +588,16 @@ public class StaticObject implements TruffleObject, Cloneable {
 
     public void resetObjectForClone(ObjectNumber objectNumber) {
         this.objectNumber = objectNumber;
-        this.hasBeenVersioned = false;
+        this.hasVersionedWrite = false;
         this.isCleanerRegistered = false;
     }
 
-    public boolean hasBeenVersioned() {
-        return hasBeenVersioned;
+    public boolean hasVersionedWrite() {
+        return hasVersionedWrite;
     }
 
-    public void markHasBeenVersioned() {
-        hasBeenVersioned = true;
+    public void markHasVersionedWrite() {
+        hasVersionedWrite = true;
     }
 
     public boolean isCleanerRegistered() {

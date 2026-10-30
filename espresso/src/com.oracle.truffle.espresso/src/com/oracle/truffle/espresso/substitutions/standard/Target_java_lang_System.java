@@ -38,6 +38,7 @@ import com.oracle.truffle.espresso.classfile.perf.DebugCounter;
 import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.helper.TypeCheckNode;
@@ -316,8 +317,9 @@ public final class Target_java_lang_System {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
                 boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
-                System.arraycopy(src.<StaticObject[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
-                                 dest.<StaticObject[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
+                StaticObject[] s = src.getArrayForRead(language, srcPos, srcPos + length);
+                Versioning.versionValuesIfTargetShared(dest, s, srcPos, srcPos + length);
+                System.arraycopy(s, srcPos, dest.<StaticObject[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -343,6 +345,7 @@ public final class Target_java_lang_System {
                 if (!StaticObject.isNull(cpy) && !copyTypeCheck.executeTypeCheck(destType, cpy.getKlass())) {
                     throw throwArrayStoreEx(meta, profiler);
                 }
+                Versioning.versionValueIfTargetShared(dest, cpy);
                 dest.<StaticObject[]> getArrayForWrite(language, destPos + i)[destPos + i] = cpy;
             }
         }

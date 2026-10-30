@@ -49,6 +49,7 @@ import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.nodes.BytecodeNode;
 import com.oracle.truffle.espresso.nodes.EspressoRootNode;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
@@ -376,6 +377,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         int length = wrapper.length(language);
         if (Integer.compareUnsigned(index, length) < 0) {
             if (StaticObject.isNull(value) || instanceOf(value, ((ArrayKlass) wrapper.getKlass()).getComponentType())) {
+                Versioning.versionValueIfTargetShared(wrapper, value);
                 wrapper.<StaticObject[]> getArrayForWrite(language, index)[index] = value;
                 return;
             } // else throw ArrayStoreException

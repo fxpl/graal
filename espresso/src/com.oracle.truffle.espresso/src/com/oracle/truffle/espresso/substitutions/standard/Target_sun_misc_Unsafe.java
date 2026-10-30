@@ -401,12 +401,10 @@ public final class Target_sun_misc_Unsafe {
         // Sync-as-Share: under any versioned model, reflective/Unsafe access to a versioned location
         // would bypass the calling thread's view and read/write the frozen physical heap (version 0),
         // silently diverging from the model. Rather than return stale data, fail loudly -- undesigned
-        // territory. Same discriminator as the bytecode gates (memory.Versioning): an instance field is
-        // versioned by the HOLDER's provenance, a static by its declaring class. So Unsafe on the
-        // runtime's own objects is unaffected; only app-owned data (or an app static) trips it. Inactive
-        // throughout bootstrap.
-        boolean versioned = field.isStatic() ? Versioning.versionsStatic(field) : Versioning.versionsInstance(holder);
-        if (meta.getContext().isVersionedMemoryEnabled() && versioned) {
+        // territory. The same decision as every other field access (Versioning.versionsField), so Unsafe
+        // on the runtime's own objects is unaffected and only versioned data (or an app static) trips it.
+        // Inactive throughout bootstrap.
+        if (Versioning.versionsField(holder, field)) {
             throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
                             "Sync-as-Share (--java.MemoryModel=" + meta.getContext().getLanguage().getMemoryModelMode().name().toLowerCase() +
                                             "): reflective/Unsafe access to versioned field " +
@@ -1250,6 +1248,7 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
+            Versioning.versionValueIfTargetShared(holder, value);
             UnsafeAccess.get().putObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
         }
 
@@ -1257,6 +1256,7 @@ public final class Target_sun_misc_Unsafe {
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @JavaType(Object.class) StaticObject value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
+            Versioning.versionValueIfTargetShared(holder, value);
             UnsafeAccess.get().putObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
         }
 
@@ -1846,6 +1846,7 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
+            Versioning.versionValueIfTargetShared(holder, value);
             UnsafeAccess.get().putOrderedObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
         }
 
@@ -1853,6 +1854,7 @@ public final class Target_sun_misc_Unsafe {
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @JavaType(Object.class) StaticObject value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
+            Versioning.versionValueIfTargetShared(holder, value);
             UnsafeAccess.get().putOrderedObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
         }
 
@@ -3236,6 +3238,7 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
+            Versioning.versionValueIfTargetShared(holder, value);
             UnsafeAccess.get().putObjectVolatile(unwrapArray(getLanguage(), holder), offset, value);
         }
 
@@ -3244,6 +3247,7 @@ public final class Target_sun_misc_Unsafe {
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @JavaType(Object.class) StaticObject value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
+            Versioning.versionValueIfTargetShared(holder, value);
             UnsafeAccess.get().putObjectVolatile(unwrapArray(getLanguage(), holder), offset, value);
         }
 
@@ -3714,6 +3718,7 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
+            Versioning.versionValueIfTargetShared(holder, after);
             return UnsafeAccess.get().compareAndSwapObject(unwrapArray(getLanguage(), holder), offset, before, after);
         }
 
@@ -3721,6 +3726,7 @@ public final class Target_sun_misc_Unsafe {
         boolean doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @JavaType(Object.class) StaticObject before, @JavaType(Object.class) StaticObject after,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
+            Versioning.versionValueIfTargetShared(holder, after);
             return UnsafeAccess.get().compareAndSwapObject(unwrapArray(getLanguage(), holder), offset, before, after);
         }
 
@@ -3936,6 +3942,7 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
+            Versioning.versionValueIfTargetShared(holder, after);
             return (StaticObject) UnsafeSupport.compareAndExchangeObject(unwrapArray(getLanguage(), holder), offset, before, after);
         }
 
@@ -3944,6 +3951,7 @@ public final class Target_sun_misc_Unsafe {
         StaticObject doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @JavaType(Object.class) StaticObject before, @JavaType(Object.class) StaticObject after,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
+            Versioning.versionValueIfTargetShared(holder, after);
             return (StaticObject) UnsafeSupport.compareAndExchangeObject(unwrapArray(getLanguage(), holder), offset, before, after);
         }
 
@@ -4319,6 +4327,7 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
+            Versioning.versionValueIfTargetShared(holder, value);
             return (StaticObject) UnsafeAccess.get().getAndSetObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
         }
 
@@ -4328,6 +4337,7 @@ public final class Target_sun_misc_Unsafe {
                         long offset,
                         @JavaType(Object.class) StaticObject value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
+            Versioning.versionValueIfTargetShared(holder, value);
             return (StaticObject) UnsafeAccess.get().getAndSetObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
         }
 
