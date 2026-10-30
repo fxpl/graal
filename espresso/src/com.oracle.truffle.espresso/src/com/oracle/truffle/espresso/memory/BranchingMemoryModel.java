@@ -257,7 +257,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         Object value;
         synchronized (state) {
             conflict = view.pull(state);
-            value = field.get(holder, true);   // forceVolatile; value is un-versioned, in the real heap
+            value = field.getRawValue(holder);   // the value is un-versioned, in the raw slot
         }
         handleConflicts(conflict, view, "volatile read");
         return value;
@@ -276,7 +276,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         synchronized (state) {
             conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
-                field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
+                field.setRawValue(holder, value);   // the value is un-versioned, in the raw slot
                 view.push(state);
             }
         }

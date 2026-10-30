@@ -79,16 +79,23 @@ public final class Versioning {
         return isApplicationClass(field.getDeclaringKlass());
     }
 
-    /** Is instance {@code field} of {@code obj} a versioned location (used by {@code Field}'s accessors)? */
-    public static boolean versionsInstanceField(StaticObject obj, Field field) {
+    /**
+     * Is {@code field} of {@code obj} a location the model owns (used by {@code Field}'s accessors)? A
+     * static by its declaring class, an instance field by {@code obj}'s provenance. Volatile fields are
+     * owned too: the model gives them their synchronisation, and keeps their value in the raw slot.
+     */
+    public static boolean versionsField(StaticObject obj, Field field) {
+        // checked first so the whole test folds away under shared
+        if (!field.getDeclaringKlass().getLanguage().isVersionedMemorySelected()) {
+            return false;
+        }
         // Hidden fields are VM-injected storage (not guest-declared) holding host-side objects — the
         // EspressoLock in Thread.0toNativeLock, the host Thread in 0hostThread — which are never guest
         // values and never app data. They must stay raw: the hidden reader (getHiddenObjectHelper) is
         // already un-routed, so versioning the write alone would stage a value the reader never sees.
-        if (!versionsInstance(obj) || field.isVolatile() || field.isHidden()) {
+        if (field.isHidden() || !field.getDeclaringKlass().getContext().isVersionedMemoryEnabled()) {
             return false;
         }
-        var ctx = field.getDeclaringKlass().getContext();
-        return ctx.isVersionedMemoryEnabled();
+        return field.isStatic() ? versionsStatic(field) : versionsInstance(obj);
     }
 }

@@ -336,7 +336,6 @@ import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.impl.Method.MethodVersion;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.memory.MemoryView;
-import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
@@ -2778,22 +2777,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
      *   curBCI = bs.next(curBCI);
      * </pre>
      */
-    // Sync-as-Share: is this field access owned by the versioned model (rather than the physical slot)?
-    // Statics key on the declaring class (its owner); instance fields key on the receiver's provenance, so
-    // an app-created instance of a library class is versioned while the runtime's own instances are not.
-    // The receiver is already resolved and null-checked by the caller; a foreign receiver returns false and
-    // stays on the stock path. isVersionedMemoryEnabled() folds the whole thing away under shared. See
-    // design/versioning-provenance.md §4.
-    private boolean isFieldOwnedByVersionedModel(StaticObject receiver, Field field, FieldAccessType mode) {
-        if (!getContext().isVersionedMemoryEnabled()) {
-            return false;
-        }
-        if (mode.isStatic()) {
-            return Versioning.versionsStatic(field);
-        }
-        return receiver.isEspressoObject() && Versioning.versionsInstance(receiver);
-    }
-
     private int putField(VirtualFrame frame, int top, Field field, int curBCI, int opcode, int statementIndex, FieldAccessType mode) {
         assert opcode == PUTFIELD || opcode == PUTSTATIC;
         CompilerAsserts.partialEvaluationConstant(field);
@@ -2810,14 +2793,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         StaticObject receiver = mode.isStatic()
                         ? initializeAndGetStatics(field)
                         : nullCheck(peekObject(frame, slot));
-
-        if (isFieldOwnedByVersionedModel(receiver, field, mode)) {
-            // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap.
-            if (!mode.isStatic()) {
-                popObject(frame, slot); // clear the slot
-            }
-            return putFieldViaModel(frame, top, receiver, field, statementIndex);
-        }
 
         if (!mode.isStatic()) {
             if (!noForeignObjects.isValid() && receiver.isForeignObject()) {
@@ -2913,149 +2888,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
      *   curBCI = bs.next(curBCI);
      * </pre>
      */
-    // Sync-as-Share (versioned model): read a field through the calling thread's view. Mirrors the
-    // stock getField per-kind switch, but sources each value from the MemoryModel. Assumes Espresso-object
-    // receivers (implicit interop is off under a versioned model in Phase 1).
-    // The caller has done the access check and resolved the receiver (and cleared its slot).
-    private int getFieldViaModel(VirtualFrame frame, int top, StaticObject receiver, Field field, int statementIndex, FieldAccessType mode) {
-        CompilerAsserts.partialEvaluationConstant(field);
-
-        MemoryModel model = getContext().getMemoryModel();
-        // A volatile field's value lives in the model's un-versioned cell, not the versioned heap, so it
-        // is read via onVolatileRead (which also does the acquire) rather than readField.
-        Object value = field.isVolatile() ? model.onVolatileRead(receiver, field) : model.readField(receiver, field);
-
-        if (instrumentation != null) {
-            instrumentation.notifyFieldAccess(frame, statementIndex, field, this, receiver);
-        }
-
-        int resultAt = mode.isStatic() ? top : (top - 1);
-        byte typeHeader = field.getType().byteAt(0);
-        // @formatter:off
-        switch (typeHeader) {
-            case 'Z' : putInt(frame, resultAt, (Boolean) value ? 1 : 0); break;
-            case 'B' : putInt(frame, resultAt, (Byte) value);            break;
-            case 'C' : putInt(frame, resultAt, (Character) value);       break;
-            case 'S' : putInt(frame, resultAt, (Short) value);           break;
-            case 'I' : putInt(frame, resultAt, (Integer) value);         break;
-            case 'F' : putFloat(frame, resultAt, (Float) value);         break;
-            case 'J' : putLong(frame, resultAt, (Long) value);           break;
-            case 'D' : putDouble(frame, resultAt, (Double) value);       break;
-            case '[' : // fall through
-            case 'L' : {
-                StaticObject v = (StaticObject) value;
-                putObject(frame, resultAt, v);
-                checkNoForeignObjectAssumption(v);
-                break;
-            }
-            default:
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                throw EspressoError.shouldNotReachHere("unexpected kind");
-        }
-        // @formatter:on
-        int slotCount = (typeHeader == 'J' || typeHeader == 'D') ? 2 : 1;
-        return slotCount;
-    }
-
-    // Sync-as-Share (versioned model): stage a field write into the calling thread's view. Mirrors the
-    // stock putField per-kind switch, staging a boxed value instead of writing the heap.
-    // The caller has done the access check and resolved the receiver (and cleared its slot).
-    private int putFieldViaModel(VirtualFrame frame, int top, StaticObject receiver, Field field, int statementIndex) {
-        CompilerAsserts.partialEvaluationConstant(field);
-
-        byte typeHeader = field.getType().byteAt(0);
-        int slotCount = (typeHeader == 'J' || typeHeader == 'D') ? 2 : 1;
-
-        MemoryModel model = getContext().getMemoryModel();
-        Object toWrite;
-        switch (typeHeader) {
-            case 'Z': {
-                boolean value = stackIntToBoolean(popInt(frame, top - 1));
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = Boolean.valueOf(value);
-                break;
-            }
-            case 'B': {
-                byte value = (byte) popInt(frame, top - 1);
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = Byte.valueOf(value);
-                break;
-            }
-            case 'C': {
-                char value = (char) popInt(frame, top - 1);
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = Character.valueOf(value);
-                break;
-            }
-            case 'S': {
-                short value = (short) popInt(frame, top - 1);
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = Short.valueOf(value);
-                break;
-            }
-            case 'I': {
-                int value = popInt(frame, top - 1);
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = Integer.valueOf(value);
-                break;
-            }
-            case 'D': {
-                double value = popDouble(frame, top - 1);
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = Double.valueOf(value);
-                break;
-            }
-            case 'F': {
-                float value = popFloat(frame, top - 1);
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = Float.valueOf(value);
-                break;
-            }
-            case 'J': {
-                long value = popLong(frame, top - 1);
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = Long.valueOf(value);
-                break;
-            }
-            case '[': // fall through
-            case 'L': {
-                StaticObject value = popObject(frame, top - 1);
-                if (instrumentation != null) {
-                    instrumentation.notifyFieldModification(frame, statementIndex, field, this, receiver, value);
-                }
-                toWrite = value;
-                break;
-            }
-            default:
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                throw EspressoError.shouldNotReachHere("unexpected kind");
-        }
-        // A volatile field's value is stored in the model's un-versioned cell (not staged/versioned):
-        // volatileWrite does the acquire, sets the cell value, and releases. Ordinary writes stage.
-        if (field.isVolatile()) {
-            model.onVolatileWrite(receiver, field, toWrite);
-        } else {
-            model.writeField(receiver, field, toWrite);
-        }
-        return -slotCount;
-    }
-
     private int getField(VirtualFrame frame, int top, Field field, int curBCI, int opcode, int statementIndex, FieldAccessType mode) {
         assert opcode == GETFIELD || opcode == GETSTATIC;
 
@@ -3070,14 +2902,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         StaticObject receiver = mode.isStatic()
                         ? initializeAndGetStatics(field)
                         : nullCheck(peekObject(frame, slot));
-
-        if (isFieldOwnedByVersionedModel(receiver, field, mode)) {
-            // Sync-as-Share seam. Folds away under shared (PE-constant); off during JDK bootstrap.
-            if (!mode.isStatic()) {
-                popObject(frame, slot); // clear the slot
-            }
-            return getFieldViaModel(frame, top, receiver, field, statementIndex, mode);
-        }
 
         if (!mode.isStatic()) {
             if (!noForeignObjects.isValid() && receiver.isForeignObject()) {

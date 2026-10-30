@@ -404,8 +404,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         return getDeclaringKlass().getContext().getMemoryModel();
     }
 
-    // Sync-as-Share: a versioned field is never volatile, so a volatile access to one is a VM path the
-    // model does not cover. Failing here keeps the field's raw slot unchanged, as its version 0.
+    // Sync-as-Share: a volatile access to a plain versioned field is a VM path the model does not cover.
+    // Failing here keeps the field's raw slot unchanged, as its version 0.
     private void checkNotForceVolatile(StaticObject obj, boolean forceVolatile) {
         if (forceVolatile) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
@@ -413,11 +413,40 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         }
     }
 
+    // Sync-as-Share: read a field the model owns: a volatile one with its acquire, a plain one through the
+    // calling thread's view. Boxed for primitives.
+    private Object readVersioned(StaticObject obj, boolean forceVolatile) {
+        if (isVolatile()) {
+            return memoryModel().onVolatileRead(obj, this);
+        }
+        checkNotForceVolatile(obj, forceVolatile);
+        return memoryModel().readField(obj, this);
+    }
+
     /**
      * The value in {@code obj}'s slot for this field, bypassing the memory model. Only for the model: a
-     * versioned field's slot is never written once it is versioned, so it holds the field's version 0.
+     * plain versioned field's slot is never written once it is versioned, so it holds the field's
+     * version 0; a volatile field's value lives in its slot.
      */
     public Object getRawValue(StaticObject obj) {
+        if (isVolatile()) {
+            // @formatter:off
+            switch (getKind()) {
+                case Boolean: return linkedField.getBooleanVolatile(obj);
+                case Byte: return linkedField.getByteVolatile(obj);
+                case Short: return linkedField.getShortVolatile(obj);
+                case Char: return linkedField.getCharVolatile(obj);
+                case Int: return linkedField.getIntVolatile(obj);
+                case Float: return linkedField.getFloatVolatile(obj);
+                case Long: return linkedField.getLongVolatile(obj);
+                case Double: return linkedField.getDoubleVolatile(obj);
+                case Object: return linkedField.getObjectVolatile(obj);
+                default:
+                    CompilerDirectives.transferToInterpreterAndInvalidate();
+                    throw EspressoError.shouldNotReachHere();
+            }
+            // @formatter:on
+        }
         // @formatter:off
         switch (getKind()) {
             case Boolean: return linkedField.getBoolean(obj);
@@ -429,6 +458,30 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
             case Long: return linkedField.getLong(obj);
             case Double: return linkedField.getDouble(obj);
             case Object: return linkedField.getObject(obj);
+            default:
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw EspressoError.shouldNotReachHere();
+        }
+        // @formatter:on
+    }
+
+    /**
+     * Write {@code value} to {@code obj}'s slot for this field, bypassing the memory model. Only for the
+     * model's volatile writes: a volatile field's value lives in its slot.
+     */
+    public void setRawValue(StaticObject obj, Object value) {
+        assert isVolatile() : "only a volatile field's slot is written by the model";
+        // @formatter:off
+        switch (getKind()) {
+            case Boolean: linkedField.setBooleanVolatile(obj, (boolean) value); break;
+            case Byte: linkedField.setByteVolatile(obj, (byte) value); break;
+            case Short: linkedField.setShortVolatile(obj, (short) value); break;
+            case Char: linkedField.setCharVolatile(obj, (char) value); break;
+            case Int: linkedField.setIntVolatile(obj, (int) value); break;
+            case Float: linkedField.setFloatVolatile(obj, (float) value); break;
+            case Long: linkedField.setLongVolatile(obj, (long) value); break;
+            case Double: linkedField.setDoubleVolatile(obj, (double) value); break;
+            case Object: linkedField.setObjectVolatile(obj, value); break;
             default:
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw EspressoError.shouldNotReachHere();
@@ -455,9 +508,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
 
         // Sync-as-Share: a versioned location reads through the model, so VM reads see what guest bytecode
         // sees.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return readVersioned(obj, forceVolatile);
         }
 
         if (!getDeclaringKlass().getContext().anyHierarchyChanged()) {
@@ -504,9 +556,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
             checkSetValueValidity(value);
         }
         // Sync-as-Share: a write to a versioned location is staged in the model, never written to the slot.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -624,9 +680,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as getObjectHelper; the model returns primitive kinds boxed.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return (Boolean) memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return (Boolean) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
             return linkedField.getBooleanVolatile(obj);
@@ -643,9 +698,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -676,9 +735,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public byte getByte(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return (Byte) memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return (Byte) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
             return linkedField.getByteVolatile(obj);
@@ -695,9 +753,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -728,9 +790,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public char getChar(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return (Character) memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return (Character) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
             return linkedField.getCharVolatile(obj);
@@ -747,9 +808,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -780,9 +845,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public double getDouble(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return (Double) memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return (Double) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
             return linkedField.getDoubleVolatile(obj);
@@ -799,9 +863,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -832,9 +900,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public float getFloat(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return (Float) memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return (Float) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
             return linkedField.getFloatVolatile(obj);
@@ -851,9 +918,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -884,9 +955,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public int getInt(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return (Integer) memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return (Integer) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
             return linkedField.getIntVolatile(obj);
@@ -903,9 +973,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -943,9 +1017,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return (Long) memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return (Long) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
             return linkedField.getLongVolatile(obj);
@@ -963,9 +1036,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
         // Sync-as-Share: as setObjectHelper.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -1004,9 +1081,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public short getShort(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            return (Short) memoryModel().readField(obj, this);
+        if (Versioning.versionsField(obj, this)) {
+            return (Short) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
             return linkedField.getShortVolatile(obj);
@@ -1023,9 +1099,13 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
-        if (Versioning.versionsInstanceField(obj, this)) {
-            checkNotForceVolatile(obj, forceVolatile);
-            memoryModel().writeField(obj, this, value);
+        if (Versioning.versionsField(obj, this)) {
+            if (isVolatile()) {
+                memoryModel().onVolatileWrite(obj, this, value);
+            } else {
+                checkNotForceVolatile(obj, forceVolatile);
+                memoryModel().writeField(obj, this, value);
+            }
             return;
         }
         if (isVolatile() || forceVolatile) {

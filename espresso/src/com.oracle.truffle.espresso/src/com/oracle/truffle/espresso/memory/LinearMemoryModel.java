@@ -303,7 +303,7 @@ public final class LinearMemoryModel implements MemoryModel {
         Object value;
         synchronized (volatileLock(new FieldLocation(holder.getObjectNumber(), field))) {
             handleConflict(pullG(view), view, "volatile read");
-            value = field.get(holder, true);   // forceVolatile; atomic with the pull (see volatileLocks)
+            value = field.getRawValue(holder);   // atomic with the pull (see volatileLocks)
         }
         return value;
     }
@@ -317,7 +317,7 @@ public final class LinearMemoryModel implements MemoryModel {
         LinearLocalView view = currentView();
         synchronized (volatileLock(new FieldLocation(holder.getObjectNumber(), field))) {
             handleConflict(pullG(view), view, "volatile write (acquire)");
-            field.set(holder, value, true);   // forceVolatile; un-versioned value in the real heap
+            field.setRawValue(holder, value);   // the value is un-versioned, in the raw slot
             handleConflict(pushG(view), view, "volatile write (release)");
         }
         maybeCollapse();

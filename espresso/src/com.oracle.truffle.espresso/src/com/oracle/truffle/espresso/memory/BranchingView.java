@@ -169,7 +169,7 @@ public final class BranchingView implements MemoryView {
         WorkingObject w = workingObject(holder);
         Object value = w.values.get(field);
         if (value != null) {
-            VersioningStats.onReadCacheHit();
+            VersioningStats.onWorkingFieldHit();
             return value;
         }
 
@@ -512,6 +512,7 @@ public final class BranchingView implements MemoryView {
     // writes to all of their indexes, so figuring out which array commits shadow which others is more complicated
     // than collecting history and applying it
     private WorkingArray createArrayFromHistory(StaticObject array) {
+        VersioningStats.onWorkingArrayBuild();
         ObjectNumber number = array.getObjectNumber();
         Object storage = array.copyOfRawArray(array.getKlass().getLanguage());
 
@@ -562,6 +563,7 @@ public final class BranchingView implements MemoryView {
     public Object arrayForRead(StaticObject array, int from, int to) {
         WorkingArray working = workingArrays.get(array.getObjectNumber());
         if (working != null) {
+            VersioningStats.onWorkingArrayHit();
             return working.storage;
         }
 
@@ -577,6 +579,8 @@ public final class BranchingView implements MemoryView {
             working = createArrayFromHistory(array);
             workingArrays.put(array.getObjectNumber(), working);
             track(array);
+        } else {
+            VersioningStats.onWorkingArrayHit();
         }
 
         working.markWrittenRange(from, to);

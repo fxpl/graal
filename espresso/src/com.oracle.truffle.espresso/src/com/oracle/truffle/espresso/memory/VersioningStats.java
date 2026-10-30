@@ -67,8 +67,9 @@ final class VersioningStats {
     static final AtomicLong readWalkMisses = new AtomicLong();  // ...of which found no committed value (ABSENT)
     static final AtomicLong readWalkVisited = new AtomicLong(); // commits visited by all walks
     static final AtomicLong readWalkMissVisited = new AtomicLong(); // ...of which by walks that found nothing
-    static final AtomicLong readCacheHits = new AtomicLong();   // reads answered by a view's read cache (no walk)
-    static final AtomicLong readCacheClears = new AtomicLong(); // times a read cache hit its cap and was cleared
+    static final AtomicLong workingFieldHits = new AtomicLong(); // field reads answered by a view's working value (no walk)
+    static final AtomicLong workingArrayHits = new AtomicLong(); // array accesses that found the view's working copy
+    static final AtomicLong workingArrayBuilds = new AtomicLong(); // ...and that had to build it from the history
 
     // Linear.
     static final AtomicLong gVersions = new AtomicLong();       // Version nodes ever appended to g
@@ -170,15 +171,21 @@ final class VersioningStats {
         }
     }
 
-    static void onReadCacheHit() {
+    static void onWorkingFieldHit() {
         if (ENABLED) {
-            readCacheHits.incrementAndGet();
+            workingFieldHits.incrementAndGet();
         }
     }
 
-    static void onReadCacheClear() {
+    static void onWorkingArrayHit() {
         if (ENABLED) {
-            readCacheClears.incrementAndGet();
+            workingArrayHits.incrementAndGet();
+        }
+    }
+
+    static void onWorkingArrayBuild() {
+        if (ENABLED) {
+            workingArrayBuilds.incrementAndGet();
         }
     }
 
@@ -243,8 +250,9 @@ final class VersioningStats {
                             .append(" missVisited=").append(readWalkMissVisited)
                             .append(" avgHitWalk=").append(hitWalks == 0 ? 0 : (readWalkVisited.get() - readWalkMissVisited.get()) / hitWalks)
                             .append(" avgMissWalk=").append(readWalkMisses.get() == 0 ? 0 : readWalkMissVisited.get() / readWalkMisses.get())
-                            .append("\n  cache:    hits=").append(readCacheHits)
-                            .append(" clears=").append(readCacheClears);
+                            .append("\n  working:  fieldHits=").append(workingFieldHits)
+                            .append(" arrayHits=").append(workingArrayHits)
+                            .append(" arrayBuilds=").append(workingArrayBuilds);
         }
         if (gVersions.get() > 0) {
             sb.append(" linear")
