@@ -25,13 +25,11 @@ package com.oracle.truffle.espresso.memory;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
-import com.oracle.truffle.espresso.EspressoLanguage;
 import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
-import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
@@ -50,9 +48,10 @@ public final class Versioning {
     }
 
     // A versioned model is selected (a compilation constant, so under shared every check here folds
-    // away) and active (not during VM bootstrap).
-    private static boolean modelOn() {
-        return EspressoLanguage.get(null).isVersionedMemorySelected() && EspressoContext.get(null).getMemoryModel().isActive();
+    // away) and active (not during VM bootstrap). Reached through a class the caller already has: a
+    // language or context lookup by thread is a thread-local read, too slow for every access.
+    private static boolean modelOn(Klass klass) {
+        return klass.getLanguage().isVersionedMemorySelected() && klass.getContext().getMemoryModel().isActive();
     }
 
     /**
@@ -65,7 +64,7 @@ public final class Versioning {
 
     /** Does the model own {@code obj}'s instance fields, or, for an array, its elements? */
     public static boolean versionsObject(StaticObject obj) {
-        return modelOn() && obj.isVersioned();
+        return modelOn(obj.getKlass()) && obj.isVersioned();
     }
 
     /**
@@ -78,7 +77,7 @@ public final class Versioning {
         // EspressoLock in Thread.0toNativeLock, the host Thread in 0hostThread — which are never guest
         // values and never app data. They must stay raw: the hidden reader (getHiddenObjectHelper) is
         // already un-routed, so versioning the write alone would stage a value the reader never sees.
-        if (!modelOn() || field.isHidden()) {
+        if (!modelOn(field.getDeclaringKlass()) || field.isHidden()) {
             return false;
         }
         return field.isStatic() ? !isBootLoadedClass(field.getDeclaringKlass()) : obj.isVersioned();
@@ -86,7 +85,7 @@ public final class Versioning {
 
     /** Mark {@code obj} eligible for versioning if it should be: today, if application code allocated it. */
     public static StaticObject markIfEligible(StaticObject obj, Method allocator) {
-        if (modelOn() && !isBootLoadedClass(allocator.getDeclaringKlass())) {
+        if (modelOn(allocator.getDeclaringKlass()) && !isBootLoadedClass(allocator.getDeclaringKlass())) {
             obj.markEligibleForVersioning();
         }
         return obj;
@@ -108,7 +107,7 @@ public final class Versioning {
             if (klass.isArray()) {
                 // walk the reference elements of the array and push them as new roots to explore
                 if (!((ArrayKlass) klass).getComponentType().isPrimitive()) {
-                    for (StaticObject element : o.<StaticObject[]> getRawArray(EspressoLanguage.get(null))) {
+                    for (StaticObject element : o.<StaticObject[]> getRawArray(klass.getLanguage())) {
                         roots.push(element);
                     }
                 }
@@ -125,7 +124,7 @@ public final class Versioning {
     }
 
     public static void versionReachableFrom(Object target) {
-        if (!modelOn() || !(target instanceof StaticObject o) || StaticObject.isNull(o) || !o.isEligibleForVersioning() || o.isVersioned()) {
+        if (!(target instanceof StaticObject o) || StaticObject.isNull(o) || !modelOn(o.getKlass()) || !o.isEligibleForVersioning() || o.isVersioned()) {
             return;
         }
         markForVersioning(o);
@@ -135,7 +134,7 @@ public final class Versioning {
      * versioned, but is eligible, then mark the value for versioning
      */
     public static void versionValueIfTargetShared(StaticObject target, Object value) {
-        if (!modelOn() || !(value instanceof StaticObject o) || StaticObject.isNull(o) || !o.isEligibleForVersioning() || o.isVersioned()) {
+        if (!modelOn(target.getKlass()) || !(value instanceof StaticObject o) || StaticObject.isNull(o) || !o.isEligibleForVersioning() || o.isVersioned()) {
             return;
         }
         if (target != null && target.isEligibleForVersioning() && !target.isVersioned()) {
@@ -146,7 +145,7 @@ public final class Versioning {
 
     /** As versionValueIfTargetShared, for every reference in values[from, to). */
     public static void versionValuesIfTargetShared(StaticObject target, StaticObject[] values, int from, int to) {
-        if (!modelOn()) {
+        if (!modelOn(target.getKlass())) {
             return;
         }
         if (target != null && target.isEligibleForVersioning() && !target.isVersioned()) {
