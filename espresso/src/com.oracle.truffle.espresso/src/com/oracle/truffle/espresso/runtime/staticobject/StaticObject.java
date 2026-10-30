@@ -376,11 +376,8 @@ public class StaticObject implements TruffleObject, Cloneable {
     private Object getArray(EspressoLanguage language) {
         Object physical = getRawArray(language);
         if (language.isVersionedMemorySelected() && Versioning.versionsArray(this)) {
-            EspressoContext context = EspressoContext.get(null);
-            if (context.getMemoryModel().isActive()) {
-                Meta meta = context.getMeta();
-                throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
-                                "Sync-as-Share: access to versioned array " + getKlass().getExternalName() + " without versioned accessor");
+            if (EspressoContext.get(null).getMemoryModel().isActive()) {
+                throw EspressoError.shouldNotReachHere("Sync-as-Share: versioned array " + getKlass().getExternalName() + " reached without an access barrier");
             }
         }
         return physical;
@@ -464,8 +461,7 @@ public class StaticObject implements TruffleObject, Cloneable {
         return Array.getLength(getRawArray(language));
     }
 
-    public final Object cloneWrappedArray(EspressoLanguage language) {
-        Object array = getArrayForRead(language, 0, length(language));
+    private static final Object cloneArray(Object array) {
         if (array instanceof byte[]) {
             return ((byte[]) array).clone();
         }
@@ -488,6 +484,15 @@ public class StaticObject implements TruffleObject, Cloneable {
             return ((long[]) array).clone();
         }
         return ((Object[]) array).clone();
+    }
+
+    public final Object cloneWrappedArray(EspressoLanguage language) {
+        return cloneArray(getArrayForRead(language, 0, length(language)));
+    }
+
+    /** A copy of the physical array, its version 0. For the memory model to build a view's copy from. */
+    public final Object copyOfRawArray(EspressoLanguage language) {
+        return cloneArray(getRawArray(language));
     }
 
     public final StaticObject copy(EspressoContext context) {

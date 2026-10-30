@@ -167,7 +167,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<byte[]> unwrap(language), srcPos, dest.<byte[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<byte[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<byte[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -180,7 +182,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<int[]> unwrap(language), srcPos, dest.<int[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<int[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<int[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -193,7 +197,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<double[]> unwrap(language), srcPos, dest.<double[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<double[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<double[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -206,7 +212,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<long[]> unwrap(language), srcPos, dest.<long[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<long[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<long[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -219,7 +227,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<char[]> unwrap(language), srcPos, dest.<char[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<char[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<char[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -232,7 +242,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<short[]> unwrap(language), srcPos, dest.<short[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<short[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<short[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -245,7 +257,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<float[]> unwrap(language), srcPos, dest.<float[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<float[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<float[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -270,7 +284,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<StaticObject[]> unwrap(language), srcPos, dest.<StaticObject[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<StaticObject[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<StaticObject[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -299,7 +315,9 @@ public final class Target_java_lang_System {
                         @Inject SubstitutionProfiler profiler) {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             try {
-                System.arraycopy(src.<StaticObject[]> unwrap(language), srcPos, dest.<StaticObject[]> unwrap(language), destPos, length);
+                boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
+                System.arraycopy(src.<StaticObject[]> getArrayForRead(language, srcPos, srcPos + length), srcPos,
+                                 dest.<StaticObject[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
             }
@@ -319,14 +337,13 @@ public final class Target_java_lang_System {
             SYSTEM_ARRAYCOPY_COUNT.inc();
             boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
             Klass destType = ((ArrayKlass) dest.getKlass()).getComponentType();
-            StaticObject[] s = src.unwrap(language);
-            StaticObject[] d = dest.unwrap(language);
+            StaticObject[] s = src.getArrayForRead(language, srcPos, srcPos + length);
             for (int i = 0; i < length; i++) {
                 StaticObject cpy = s[i + srcPos];
                 if (!StaticObject.isNull(cpy) && !copyTypeCheck.executeTypeCheck(destType, cpy.getKlass())) {
                     throw throwArrayStoreEx(meta, profiler);
                 }
-                d[destPos + i] = cpy;
+                dest.<StaticObject[]> getArrayForWrite(language, destPos + i)[destPos + i] = cpy;
             }
         }
     }

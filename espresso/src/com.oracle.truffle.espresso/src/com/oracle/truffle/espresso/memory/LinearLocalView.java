@@ -37,7 +37,7 @@ public final class LinearLocalView implements MemoryView {
     // trigger reads it cross-thread to compute the min-base threshold. A stale-low read is a safe
     // lower bound (we would retain more, never drop something a thread still needs).
     private volatile long base;
-    private final Map<VersionedLocation, Object> staging = new HashMap<>();
+    private final Map<FieldLocation, Object> staging = new HashMap<>();
     // A conflict detected during a synchronisation action, to be raised at the next safe point (the
     // top of the bytecode loop) rather than from inside the sync op. Null if none pending.
     private String pendingConflict;
@@ -60,16 +60,16 @@ public final class LinearLocalView implements MemoryView {
     }
 
     /** Staged value for {@code loc}, or {@code null} if not staged (staged values are never null). */
-    public Object getStaged(VersionedLocation loc) {
+    public Object getStaged(FieldLocation loc) {
         return staging.get(loc);
     }
 
-    public void stage(VersionedLocation loc, Object value) {
+    public void stage(FieldLocation loc, Object value) {
         staging.put(loc, value);
         VersioningStats.observeStaging(staging.size());
     }
 
-    public Map<VersionedLocation, Object> staging() {
+    public Map<FieldLocation, Object> staging() {
         return staging;
     }
 

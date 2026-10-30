@@ -37,10 +37,10 @@ final class ReadCache {
     // past this many entries the cache is cleared; hot locations come back with one walk each
     private static final int CAPACITY = 1 << 20;
 
-    private final Map<VersionedLocation, Object> entries = new HashMap<>();
+    private final Map<FieldLocation, Object> entries = new HashMap<>();
 
     /** The cached value, {@link MemoryModel#ABSENT} if cached as never committed, or null if not cached. */
-    Object get(VersionedLocation loc) {
+    Object get(FieldLocation loc) {
         Object value = entries.get(loc);
         if (value != null) {
             VersioningStats.onReadCacheHit();
@@ -48,7 +48,7 @@ final class ReadCache {
         return value;
     }
 
-    void put(VersionedLocation loc, Object value) {
+    void put(FieldLocation loc, Object value) {
         if (entries.size() >= CAPACITY) {
             clear();
         }
@@ -56,19 +56,19 @@ final class ReadCache {
     }
 
     /** The changes this view just committed: the head now says exactly these values. */
-    void putAll(Map<VersionedLocation, Object> committed) {
+    void putAll(Map<FieldLocation, Object> committed) {
         if (entries.size() + committed.size() > CAPACITY) {
             clear();
         }
         entries.putAll(committed);
     }
 
-    void evict(VersionedLocation loc) {
+    void evict(FieldLocation loc) {
         entries.remove(loc);
     }
 
-    void evictAll(Collection<VersionedLocation> locs) {
-        for (VersionedLocation loc : locs) {
+    void evictAll(Collection<FieldLocation> locs) {
+        for (FieldLocation loc : locs) {
             entries.remove(loc);
         }
     }

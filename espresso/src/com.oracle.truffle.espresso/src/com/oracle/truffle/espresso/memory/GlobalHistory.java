@@ -41,21 +41,21 @@ public interface GlobalHistory {
      * then reads through to the real heap — the pre-main state is the implicit initial committed
      * version).
      */
-    Object snapshot(VersionedLocation loc, long base);
+    Object snapshot(FieldLocation loc, long base);
 
     /**
      * Pull: conflict-check the view's staged writes against the visible history and, on success,
      * advance the view's base to the current global position. Returns {@code null} on success, or the
      * offending location on conflict (leaving the view unchanged).
      */
-    VersionedLocation pull(LinearLocalView view);
+    FieldLocation pull(LinearLocalView view);
 
     /**
      * Push: conflict-check, then (if there are staged writes) publish them as a new global version,
      * clear staging, and rebase. Returns {@code null} on success, or the offending location on
      * conflict (leaving the view unchanged).
      */
-    VersionedLocation push(LinearLocalView view);
+    FieldLocation push(LinearLocalView view);
 
     /** The current visible global position (the newest committed counter). */
     long currentCounter();

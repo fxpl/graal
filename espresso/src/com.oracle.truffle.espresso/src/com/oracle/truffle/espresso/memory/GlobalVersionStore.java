@@ -61,7 +61,7 @@ public final class GlobalVersionStore implements GlobalHistory {
     // Value = newest version of the location (chain head); older versions via Version.prev(). null =
     // no version yet. Mutated only under the write lock; read lock-free by snapshot, read-locked by
     // firstConflict.
-    private final ConcurrentHashMap<VersionedLocation, Version> history = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<FieldLocation, Version> history = new ConcurrentHashMap<>();
     private final AtomicLong counter = new AtomicLong(0);
     // writesThrough[c] = total writes published by the pushes numbered 1..c, so the writes a pull brings
     // in are writesThrough[new base] - writesThrough[old base]. Written under the write lock, read under
@@ -80,7 +80,7 @@ public final class GlobalVersionStore implements GlobalHistory {
      * reads through to the real heap — the pre-main state is the implicit initial committed version).
      */
     @Override
-    public Object snapshot(VersionedLocation loc, long base) {
+    public Object snapshot(FieldLocation loc, long base) {
         // Walk the immutable chain newest-first; the first node at or below base is the visible value.
         for (Version v = history.get(loc); v != null; v = v.prev()) {
             if (v.counter() <= base) {
@@ -96,13 +96,13 @@ public final class GlobalVersionStore implements GlobalHistory {
      * and leave the view unchanged.
      */
     @Override
-    public VersionedLocation pull(LinearLocalView view) {
+    public FieldLocation pull(LinearLocalView view) {
         // Read-only over g: conflict-check heads, read the counter, advance the caller's own view.
         // The read lock excludes only committing pushes; concurrent pulls/empty-pushes run in parallel.
         Lock read = gLock.readLock();
         read.lock();
         try {
-            VersionedLocation conflict = firstConflict(view);
+            FieldLocation conflict = firstConflict(view);
             if (conflict != null) {
                 view.setLastPulledWrites(0);
                 return conflict;
@@ -122,7 +122,7 @@ public final class GlobalVersionStore implements GlobalHistory {
      * (view left unchanged).
      */
     @Override
-    public VersionedLocation push(LinearLocalView view) {
+    public FieldLocation push(LinearLocalView view) {
         // An empty-delta push publishes nothing -- it only fast-forwards this thread's base and cannot
         // conflict (no staged locations) -- so it does not mutate g and shares the read lock with pulls.
         // (Safe to test stagingEmpty() outside the lock: the view is owned by the calling thread.)
@@ -140,7 +140,7 @@ public final class GlobalVersionStore implements GlobalHistory {
         Lock write = gLock.writeLock();
         write.lock();
         try {
-            VersionedLocation conflict = firstConflict(view);
+            FieldLocation conflict = firstConflict(view);
             if (conflict != null) {
                 return conflict;
             }
@@ -149,7 +149,7 @@ public final class GlobalVersionStore implements GlobalHistory {
                 writesThrough = Arrays.copyOf(writesThrough, writesThrough.length * 2);
             }
             writesThrough[(int) next] = writesThrough[(int) next - 1] + view.staging().size();
-            for (Map.Entry<VersionedLocation, Object> e : view.staging().entrySet()) {
+            for (Map.Entry<FieldLocation, Object> e : view.staging().entrySet()) {
                 // New head whose prev is the old head (null if first): O(1), no copy.
                 history.compute(e.getKey(), (k, old) -> new Version(next, e.getValue(), old));
                 VersioningStats.onGVersion(history.size());
@@ -168,9 +168,9 @@ public final class GlobalVersionStore implements GlobalHistory {
      * called while holding {@code gLock} (read lock suffices — it only reads history heads); a
      * committing push holds the write lock so its subsequent append sees the same checked state.
      */
-    private VersionedLocation firstConflict(LinearLocalView view) {
+    private FieldLocation firstConflict(LinearLocalView view) {
         long base = view.base();
-        for (VersionedLocation loc : view.staging().keySet()) {
+        for (FieldLocation loc : view.staging().keySet()) {
             Version head = history.get(loc);   // newest version; null if none
             if (head != null && head.counter() > base) {
                 return loc;
@@ -200,7 +200,7 @@ public final class GlobalVersionStore implements GlobalHistory {
         Lock write = gLock.writeLock();
         write.lock();
         try {
-            for (Map.Entry<VersionedLocation, Version> e : history.entrySet()) {
+            for (Map.Entry<FieldLocation, Version> e : history.entrySet()) {
                 Version head = e.getValue();
                 // Floor = newest version with counter <= threshold.
                 Version floor = head;
@@ -256,7 +256,7 @@ public final class GlobalVersionStore implements GlobalHistory {
         Lock write = gLock.writeLock();
         write.lock();
         try {
-            for (Map.Entry<VersionedLocation, Version> e : history.entrySet()) {
+            for (Map.Entry<FieldLocation, Version> e : history.entrySet()) {
                 Version head = e.getValue();
                 // Kept versions, newest-first. The head is always kept (conflict detection).
                 java.util.ArrayList<Version> kept = new java.util.ArrayList<>();

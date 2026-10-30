@@ -22,13 +22,19 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.BitSet;
+import java.util.Map;
+import java.util.Set;
+
 /**
- * A versioned shared-memory location: the Espresso analogue of the prototype's {@code var} string.
- * A field slot ({@link FieldLocation}); arrays are not versioned yet. Equality is by the holder's
- * {@link ObjectNumber} plus {@code Field}, so instances key the version store and staging map
- * without keeping the holder alive.
+ * The locations written on both sides of a merge: fields, and for each array the indices both sides
+ * wrote.
  */
-public sealed interface VersionedLocation permits FieldLocation {
-    /** The number of the object this location belongs to. */
-    ObjectNumber holder();
+record Conflicts(Set<FieldLocation> fields, Map<ObjectNumber, BitSet> arrays) {
+
+    static final Conflicts NONE = new Conflicts(Set.of(), Map.of());
+
+    boolean isEmpty() {
+        return fields.isEmpty() && arrays.isEmpty();
+    }
 }

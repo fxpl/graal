@@ -23,12 +23,11 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
@@ -68,7 +67,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     // field with no staged/committed value freezes the physical (genesis) value here; every thread then
     // reads that one frozen value instead of the live slot, so v0 is a single fixed version (the paper's
     // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
-    private final Map<VersionedLocation, Object> genesis = new ConcurrentHashMap<>();
+    private final Map<FieldLocation, Object> genesis = new ConcurrentHashMap<>();
 
     private final AtomicLong deadObjectCount;
 
@@ -194,18 +193,15 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public Object arrayForRead(StaticObject array, int from, int to) {
-        throw notYetVersioned(array);
+        return currentView().arrayForRead(array, from, to);
     }
 
     @Override
     public Object arrayForWrite(StaticObject array, int from, int to) {
-        throw notYetVersioned(array);
-    }
-
-    private static RuntimeException notYetVersioned(StaticObject array) {
-        Meta meta = array.getKlass().getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
-                        "Sync-as-Share: access to versioned array " + array.getKlass().getExternalName() + " is not defined by the memory model");
+        Object storage = currentView().arrayForWrite(array, from, to);
+        array.markHasBeenVersioned();
+        registerForCleaning(array);
+        return storage;
     }
 
     @Override
@@ -278,7 +274,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // against a concurrent volatile write to the same field.
         BranchingView view = currentView();
         SyncState state = holder.volatileSyncState(field);
-        Set<VersionedLocation> conflict;
+        Conflicts conflict;
         Object value;
         synchronized (state) {
             conflict = view.pull(state);
@@ -297,7 +293,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Atomic per field.
         BranchingView view = currentView();
         SyncState state = holder.volatileSyncState(field);
-        Set<VersionedLocation> conflicts;
+        Conflicts conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
@@ -313,7 +309,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Class-init release: pull from the class's init sync state, then push to it.
         BranchingView view = currentView();
         SyncState state = klass.getClassInitSyncState();
-        Set<VersionedLocation> conflicts;
+        Conflicts conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
@@ -328,14 +324,14 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Class-init acquire: pull from the class's init sync state, no push.
         BranchingView view = currentView();
         SyncState state = klass.getClassInitSyncState();
-        Set<VersionedLocation> conflicts;
+        Conflicts conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
         }
         handleConflicts(conflicts, view, "class init");
     }
 
-    private void handleConflicts(Set<VersionedLocation> conflicts, BranchingView view, String at) {
+    private void handleConflicts(Conflicts conflicts, BranchingView view, String at) {
         if (conflicts.isEmpty()) {
             return;
         }
@@ -344,16 +340,15 @@ public final class BranchingMemoryModel implements MemoryModel {
         // thread's final sync. We must NOT throw from inside the monitor op itself: that corrupts the
         // synchronized block's exit machinery.
 
-        String where = conflicts.stream().map(BranchingMemoryModel::describe).sorted()
-                            .collect(Collectors.joining(", "));
+        String where = Stream.concat(
+                        conflicts.fields().stream().map(BranchingMemoryModel::describe),
+                        conflicts.arrays().entrySet().stream().map(e -> "array " + e.getKey().threadId + ":" + e.getKey().count + " at indices " + e.getValue()))
+                        .sorted().collect(Collectors.joining(", "));
         view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + where
                         + ", caught at " + at + " in " + UserCodeLocation.current(context));
     }
 
-    private static String describe(VersionedLocation loc) {
-        if (loc instanceof FieldLocation f) {
-            return f.field().getDeclaringKlass().getName() + "." + f.field().getName();
-        }
-        return String.valueOf(loc);
+    private static String describe(FieldLocation loc) {
+        return loc.field().getDeclaringKlass().getName() + "." + loc.field().getName();
     }
 }

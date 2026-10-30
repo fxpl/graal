@@ -54,7 +54,7 @@ public final class EspressoReferenceArrayStoreNode extends EspressoNode {
             enterArrayStoreEx();
             throw meta.throwException(meta.java_lang_ArrayStoreException);
         }
-        (array.<StaticObject[]> unwrap(language))[index] = value;
+        (array.<StaticObject[]> getArrayForWrite(language, index))[index] = value;
     }
 
     private void enterOutOfBound() {

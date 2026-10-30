@@ -117,15 +117,15 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public int getArrayInt(EspressoLanguage language, int index, @JavaType(int[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        int[] underlying = array.<int[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            return underlying[index];
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            return array.<int[]> getArrayForRead(language, index)[index];
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public StaticObject getArrayObject(EspressoLanguage language, int index, @JavaType(Object[].class) StaticObject array) {
@@ -133,15 +133,15 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public StaticObject getArrayObject(EspressoLanguage language, int index, @JavaType(Object[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        StaticObject[] underlying = array.<StaticObject[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            return underlying[index];
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            return array.<StaticObject[]> getArrayForRead(language, index)[index];
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public long getArrayLong(EspressoLanguage language, int index, @JavaType(long[].class) StaticObject array) {
@@ -149,15 +149,15 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public long getArrayLong(EspressoLanguage language, int index, @JavaType(long[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        long[] underlying = array.<long[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            return underlying[index];
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            return array.<long[]> getArrayForRead(language, index)[index];
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public float getArrayFloat(EspressoLanguage language, int index, @JavaType(float[].class) StaticObject array) {
@@ -165,15 +165,15 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public float getArrayFloat(EspressoLanguage language, int index, @JavaType(float[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        float[] underlying = array.<float[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            return underlying[index];
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            return array.<float[]> getArrayForRead(language, index)[index];
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public double getArrayDouble(EspressoLanguage language, int index, @JavaType(double[].class) StaticObject array) {
@@ -181,15 +181,15 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public double getArrayDouble(EspressoLanguage language, int index, @JavaType(double[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        double[] underlying = array.<double[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            return underlying[index];
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            return array.<double[]> getArrayForRead(language, index)[index];
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public byte getArrayByte(EspressoLanguage language, int index,
@@ -199,15 +199,15 @@ public final class InterpreterToVM extends ContextAccessImpl {
 
     public byte getArrayByte(EspressoLanguage language, int index,
                     @JavaType(byte[].class /* or boolean[].class */) StaticObject array, BytecodeNode bytecodeNode) {
-        byte[] underlying = array.<byte[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            return underlying[index];
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            return array.<byte[]> getArrayForRead(language, index)[index];
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public char getArrayChar(EspressoLanguage language, int index, @JavaType(char[].class) StaticObject array) {
@@ -215,15 +215,15 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public char getArrayChar(EspressoLanguage language, int index, @JavaType(char[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        char[] underlying = array.<char[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            return underlying[index];
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            return array.<char[]> getArrayForRead(language, index)[index];
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public short getArrayShort(EspressoLanguage language, int index, @JavaType(short[].class) StaticObject array) {
@@ -231,15 +231,15 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public short getArrayShort(EspressoLanguage language, int index, @JavaType(short[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        short[] underlying = array.<short[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            return underlying[index];
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            return array.<short[]> getArrayForRead(language, index)[index];
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     // endregion
@@ -251,16 +251,16 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public void setArrayInt(EspressoLanguage language, int value, int index, @JavaType(int[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        int[] underlying = array.<int[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            underlying[index] = value;
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            array.<int[]> getArrayForWrite(language, index)[index] = value;
             return;
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public void setArrayLong(EspressoLanguage language, long value, int index, @JavaType(long[].class) StaticObject array) {
@@ -268,16 +268,16 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public void setArrayLong(EspressoLanguage language, long value, int index, @JavaType(long[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        long[] underlying = array.<long[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            underlying[index] = value;
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            array.<long[]> getArrayForWrite(language, index)[index] = value;
             return;
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public void setArrayFloat(EspressoLanguage language, float value, int index, @JavaType(float[].class) StaticObject array) {
@@ -285,16 +285,16 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public void setArrayFloat(EspressoLanguage language, float value, int index, @JavaType(float[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        float[] underlying = array.<float[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            underlying[index] = value;
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            array.<float[]> getArrayForWrite(language, index)[index] = value;
             return;
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public void setArrayDouble(EspressoLanguage language, double value, int index, @JavaType(double[].class) StaticObject array) {
@@ -302,16 +302,16 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public void setArrayDouble(EspressoLanguage language, double value, int index, @JavaType(double[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        double[] underlying = array.<double[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            underlying[index] = value;
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            array.<double[]> getArrayForWrite(language, index)[index] = value;
             return;
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public void setArrayByte(EspressoLanguage language, byte value, int index,
@@ -322,16 +322,16 @@ public final class InterpreterToVM extends ContextAccessImpl {
     public void setArrayByte(EspressoLanguage language, byte value, int index,
                     @JavaType(byte[].class /* or boolean[].class */) StaticObject array, BytecodeNode bytecodeNode) {
         byte maybeMaskedValue = getJavaVersion().java9OrLater() && array.getKlass() == getMeta()._boolean_array ? (byte) (value & 1) : value;
-        byte[] underlying = array.<byte[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            underlying[index] = maybeMaskedValue;
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            array.<byte[]> getArrayForWrite(language, index)[index] = maybeMaskedValue;
             return;
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public void setArrayChar(EspressoLanguage language, char value, int index, @JavaType(char[].class) StaticObject array) {
@@ -339,16 +339,16 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public void setArrayChar(EspressoLanguage language, char value, int index, @JavaType(char[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        char[] underlying = array.<char[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            underlying[index] = value;
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            array.<char[]> getArrayForWrite(language, index)[index] = value;
             return;
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public void setArrayShort(EspressoLanguage language, short value, int index, @JavaType(short[].class) StaticObject array) {
@@ -356,16 +356,16 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public void setArrayShort(EspressoLanguage language, short value, int index, @JavaType(short[].class) StaticObject array, BytecodeNode bytecodeNode) {
-        short[] underlying = array.<short[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
-            underlying[index] = value;
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
+            array.<short[]> getArrayForWrite(language, index)[index] = value;
             return;
         }
         if (bytecodeNode != null) {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     public void setArrayObject(EspressoLanguage language, StaticObject value, int index, StaticObject wrapper) {
@@ -373,10 +373,10 @@ public final class InterpreterToVM extends ContextAccessImpl {
     }
 
     public void setArrayObject(EspressoLanguage language, StaticObject value, int index, StaticObject wrapper, BytecodeNode bytecodeNode) {
-        StaticObject[] underlying = wrapper.<StaticObject[]> unwrap(language);
-        if (Integer.compareUnsigned(index, underlying.length) < 0) {
+        int length = wrapper.length(language);
+        if (Integer.compareUnsigned(index, length) < 0) {
             if (StaticObject.isNull(value) || instanceOf(value, ((ArrayKlass) wrapper.getKlass()).getComponentType())) {
-                underlying[index] = value;
+                wrapper.<StaticObject[]> getArrayForWrite(language, index)[index] = value;
                 return;
             } // else throw ArrayStoreException
             if (bytecodeNode != null) {
@@ -389,7 +389,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
             bytecodeNode.enterImplicitExceptionProfile();
         }
         Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, underlying.length));
+        throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
     }
 
     // endregion

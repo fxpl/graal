@@ -28,7 +28,7 @@ import com.oracle.truffle.espresso.impl.Field;
  * A field slot on a holder object. Instance fields use the receiver as holder; static fields use the
  * declaring klass's statics {@link StaticObject}.
  */
-public record FieldLocation(ObjectNumber holder, Field field) implements VersionedLocation {
+public record FieldLocation(ObjectNumber holder, Field field) {
     public FieldLocation {
         assert holder != null : "an unnumbered object reached the memory model";
     }

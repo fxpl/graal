@@ -32,7 +32,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 class StagedReference extends PhantomReference<StaticObject> {
 
     final ObjectNumber number;
-    final Set<VersionedLocation> locations = new HashSet<>();
+    final Set<FieldLocation> locations = new HashSet<>();
 
     StagedReference(StaticObject referent, ObjectNumber number, ReferenceQueue<StaticObject> queue) {
         super(referent, queue);

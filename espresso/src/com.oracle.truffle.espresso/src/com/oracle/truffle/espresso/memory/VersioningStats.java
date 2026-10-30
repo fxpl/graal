@@ -46,12 +46,15 @@ final class VersioningStats {
     static final AtomicLong commits = new AtomicLong();        // commitStaging calls that committed something
                                                                 // (folded or not)
     static final AtomicLong committedChanges = new AtomicLong(); // staged writes committed, summed over commits
+    static final AtomicLong committedArrays = new AtomicLong();  // arrays with writes in a commit, summed over commits
+    static final AtomicLong committedArrayElements = new AtomicLong(); // array elements written, summed over commits
     static final AtomicLong merges = new AtomicLong();          // merge commits created
     static final AtomicLong folds = new AtomicLong();           // ...commits that folded into an exclusive head in
                                                                 // place (no new node). New nodes ~= commits - folds + merges
     static final AtomicLong absorbed = new AtomicLong();        // commits absorbed into a descendant by compression
                                                                 // (resident nodes <= commits - folds + merges - absorbed)
     static final AtomicLong purgedEntries = new AtomicLong();   // commit entries removed because their object died
+    static final AtomicLong purgedArrays = new AtomicLong();    // ...of which arrays (one entry per array per commit)
     static final AtomicLong released = new AtomicLong();        // commits whose ref count reached 0 (the decRef cascade)
                                                                 // nodes live ~= commits - folds + merges - absorbed - released
     static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
@@ -85,10 +88,12 @@ final class VersioningStats {
         }
     }
 
-    static void onCommit(int changes) {
+    static void onCommit(int fieldChanges, int arrays, long arrayElements) {
         if (ENABLED) {
             commits.incrementAndGet();
-            committedChanges.addAndGet(changes);
+            committedChanges.addAndGet(fieldChanges);
+            committedArrays.addAndGet(arrays);
+            committedArrayElements.addAndGet(arrayElements);
         }
     }
 
@@ -110,9 +115,10 @@ final class VersioningStats {
         }
     }
 
-    static void onPurge(int entriesRemoved) {
+    static void onPurge(int fieldEntriesRemoved, int arraysRemoved) {
         if (ENABLED) {
-            purgedEntries.addAndGet(entriesRemoved);
+            purgedEntries.addAndGet(fieldEntriesRemoved + arraysRemoved);
+            purgedArrays.addAndGet(arraysRemoved);
         }
     }
 
@@ -197,6 +203,8 @@ final class VersioningStats {
             sb.append(" branching")
                             .append("\n  commits:  commits=").append(commits)
                             .append(" committedChanges=").append(committedChanges)
+                            .append(" committedArrays=").append(committedArrays)
+                            .append(" committedArrayElements=").append(committedArrayElements)
                             .append(" merges=").append(merges)
                             .append(" folds=").append(folds)
                             .append("\n  nodes:    created=").append(nodesCreated())
@@ -206,6 +214,7 @@ final class VersioningStats {
                             .append("\n  dead:     cleanerRegistrations=").append(cleanerRegistrations)
                             .append(" markedForPurging=").append(markedForPurging)
                             .append(" purgedEntries=").append(purgedEntries)
+                            .append(" purgedArrays=").append(purgedArrays)
                             .append("\n  reads:    walks=").append(readWalks)
                             .append(" misses=").append(readWalkMisses)
                             .append(" visited=").append(readWalkVisited)

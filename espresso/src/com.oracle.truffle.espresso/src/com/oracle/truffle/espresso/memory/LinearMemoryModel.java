@@ -33,7 +33,7 @@ import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-// FieldLocation / VersionedLocation are in this package.
+// FieldLocation is in this package.
 
 /**
  * The Linear version-controlled memory model (paper &sect;3.1/&sect;4.3), ported from the {@code
@@ -55,7 +55,7 @@ public final class LinearMemoryModel implements MemoryModel {
     // field with no staged/committed value freezes the physical (genesis) value here; every thread then
     // reads that one frozen value instead of the live slot, so v0 is a single fixed version (the paper's
     // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
-    private final Map<VersionedLocation, Object> genesis = new ConcurrentHashMap<>();
+    private final Map<FieldLocation, Object> genesis = new ConcurrentHashMap<>();
     // Per-volatile-field lock making a volatile read's (pull, get-value) and a volatile write's
     // (pull, set-value, push) atomic per field — the paper's pull-push is one action. Without it a
     // reader could see a new volatile value while its pull missed the ordinary writes published with it
@@ -191,7 +191,7 @@ public final class LinearMemoryModel implements MemoryModel {
         return v == null ? 0 : ((LinearLocalView) v).lastPulledWrites();
     }
 
-    private Object read(VersionedLocation loc) {
+    private Object read(FieldLocation loc) {
         LinearLocalView view = currentView();
         Object staged = view.getStaged(loc);
         if (staged != null) {
@@ -203,16 +203,16 @@ public final class LinearMemoryModel implements MemoryModel {
         return global.snapshot(loc, view.base());
     }
 
-    private void write(VersionedLocation loc, Object value) {
+    private void write(FieldLocation loc, Object value) {
         currentView().stage(loc, value);
     }
 
     // Every sync action pushes or pulls through these.
-    private VersionedLocation pushG(LinearLocalView view) {
+    private FieldLocation pushG(LinearLocalView view) {
         return global.push(view);
     }
 
-    private VersionedLocation pullG(LinearLocalView view) {
+    private FieldLocation pullG(LinearLocalView view) {
         return global.pull(view);
     }
 
@@ -261,14 +261,14 @@ public final class LinearMemoryModel implements MemoryModel {
     public void onThreadStart() {
         // Fresh thread with empty staging: pull can never conflict.
         LinearLocalView view = currentView();
-        VersionedLocation conflict = pullG(view);
+        FieldLocation conflict = pullG(view);
         assert conflict == null : "starting thread cannot conflict";
     }
 
     @Override
     public void onThreadEnd() {
         LinearLocalView view = currentView();
-        VersionedLocation conflict = pushG(view);
+        FieldLocation conflict = pushG(view);
         if (conflict != null) {
             // OPEN DESIGN DECISION (worklist: "what a failed thread end does"). Thread end now runs at
             // the real end of the thread (ThreadAccess.setTerminateStatusAndNotify), where no guest frame
@@ -355,7 +355,7 @@ public final class LinearMemoryModel implements MemoryModel {
         handleConflict(pullG(view), view, "class init");
     }
 
-    private void handleConflict(VersionedLocation conflict, LinearLocalView view, String at) {
+    private void handleConflict(FieldLocation conflict, LinearLocalView view, String at) {
         if (conflict == null) {
             return;
         }
@@ -371,10 +371,7 @@ public final class LinearMemoryModel implements MemoryModel {
         view.advanceBase(global.currentCounter());
     }
 
-    private static String describe(VersionedLocation loc) {
-        if (loc instanceof FieldLocation f) {
-            return f.field().getDeclaringKlass().getName() + "." + f.field().getName();
-        }
-        return String.valueOf(loc);
+    private static String describe(FieldLocation loc) {
+        return loc.field().getDeclaringKlass().getName() + "." + loc.field().getName();
     }
 }

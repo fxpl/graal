@@ -2005,24 +2005,11 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         }
     }
 
-    // Sync-as-Share: the guest exception for an access to a versioned array, which the model does not
-    // define yet
-    private EspressoException versionedArrayAccess(StaticObject array) {
-        CompilerDirectives.transferToInterpreter();
-        Meta meta = getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
-                        "Sync-as-Share: access to versioned array " + array.getKlass().getExternalName() + " is not defined by the memory model");
-    }
-
     private void arrayLoad(VirtualFrame frame, int top, int curBCI, int loadOpcode) {
         assert IALOAD <= loadOpcode && loadOpcode <= SALOAD;
         CompilerAsserts.partialEvaluationConstant(loadOpcode);
         int index = popInt(frame, top - 1);
         StaticObject array = nullCheck(popObject(frame, top - 2));
-        // Sync-as-Share: versioned arrays are not modelled yet, so fail loudly rather than read raw memory
-        if (getContext().isVersionedMemoryEnabled() && array.isEspressoObject() && Versioning.versionsArray(array)) {
-            throw versionedArrayAccess(array);
-        }
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
             EspressoLanguage language = getLanguage();
             // @formatter:off
@@ -2056,10 +2043,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         int offset = (storeOpcode == LASTORE || storeOpcode == DASTORE) ? 2 : 1;
         int index = popInt(frame, top - 1 - offset);
         StaticObject array = nullCheck(popObject(frame, top - 2 - offset));
-        // Sync-as-Share: versioned arrays are not modelled yet, so fail loudly rather than write raw memory
-        if (getContext().isVersionedMemoryEnabled() && array.isEspressoObject() && Versioning.versionsArray(array)) {
-            throw versionedArrayAccess(array);
-        }
         if (noForeignObjects.isValid() || array.isEspressoObject()) {
             EspressoLanguage language = getLanguage();
             // @formatter:off
@@ -2088,7 +2071,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     }
 
     private void referenceArrayStore(VirtualFrame frame, int top, int index, StaticObject array) {
-        // Stock AASTORE path (the versioned model handles AASTORE in arrayStoreViaModel via setArrayObject).
         if (refArrayStoreNode == null) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             atomic(() -> {
