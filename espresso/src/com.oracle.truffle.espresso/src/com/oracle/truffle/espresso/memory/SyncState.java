@@ -31,5 +31,19 @@ package com.oracle.truffle.espresso.memory;
  * state: communication is the single global {@code g}.)
  */
 public final class SyncState {
+
+    public enum Kind {
+        THREAD,
+        CLASS_INIT,
+        LOCK,
+        VOLATILE
+    }
+
     Commit commit;
+    final Kind kind;
+
+    public SyncState(Kind kind) {
+        this.kind = kind;
+        VersioningStats.onSyncStateCreated(this);
+    }
 }

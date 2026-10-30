@@ -22,6 +22,12 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -80,6 +86,10 @@ final class VersioningStats {
 
     // Both.
     static final AtomicLong peakStaging = new AtomicLong();     // largest staging map seen (residency)
+
+    // Every sync state still reachable, so the dump can count them by kind and the commits they pin.
+    // Weak: a sync state whose object died drops out on its own.
+    private static final Set<SyncState> syncStates = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     private static final AtomicBoolean ARMED = new AtomicBoolean();
 
@@ -171,6 +181,12 @@ final class VersioningStats {
         }
     }
 
+    static void onSyncStateCreated(SyncState state) {
+        if (ENABLED) {
+            syncStates.add(state);
+        }
+    }
+
     static void onWorkingFieldHit() {
         if (ENABLED) {
             workingFieldHits.incrementAndGet();
@@ -216,6 +232,31 @@ final class VersioningStats {
         }
     }
 
+    // For each kind of sync state still alive: how many, how many hold a commit, and how many distinct
+    // commits those are; then the distinct commits pinned across all kinds.
+    private static String syncStateSummary() {
+        // clear sync states of objects that have died, so "live" counts only those still reachable
+        System.gc();
+        Map<SyncState.Kind, int[]> counts = new EnumMap<>(SyncState.Kind.class);
+        Map<SyncState.Kind, Set<Commit>> held = new EnumMap<>(SyncState.Kind.class);
+        Set<Commit> pinned = new HashSet<>();
+        synchronized (syncStates) {
+            for (SyncState s : syncStates) {
+                counts.computeIfAbsent(s.kind, k -> new int[2])[0]++;
+                Commit c = s.commit;
+                if (c != null) {
+                    counts.get(s.kind)[1]++;
+                    held.computeIfAbsent(s.kind, k -> new HashSet<>()).add(c);
+                    pinned.add(c);
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        counts.forEach((kind, n) -> sb.append(' ').append(kind.name().toLowerCase())
+                        .append("=").append(n[0]).append('/').append(n[1]).append('/').append(held.getOrDefault(kind, Set.of()).size()));
+        return sb.append(" pinnedCommits=").append(pinned.size()).append(" (live/holding/distinct)").toString();
+    }
+
     /** Commit nodes ever created: every commit that did not fold, plus every merge commit. */
     private static long nodesCreated() {
         return commits.get() - folds.get() + merges.get();
@@ -252,7 +293,8 @@ final class VersioningStats {
                             .append(" avgMissWalk=").append(readWalkMisses.get() == 0 ? 0 : readWalkMissVisited.get() / readWalkMisses.get())
                             .append("\n  working:  fieldHits=").append(workingFieldHits)
                             .append(" arrayHits=").append(workingArrayHits)
-                            .append(" arrayBuilds=").append(workingArrayBuilds);
+                            .append(" arrayBuilds=").append(workingArrayBuilds)
+                            .append("\n  sync:    ").append(syncStateSummary());
         }
         if (gVersions.get() > 0) {
             sb.append(" linear")

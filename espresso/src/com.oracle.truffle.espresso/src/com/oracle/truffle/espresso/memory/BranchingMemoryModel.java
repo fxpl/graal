@@ -110,7 +110,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     private SyncState newThreadSyncState(StaticObject thread) {
-        SyncState state = new SyncState();
+        SyncState state = new SyncState(SyncState.Kind.THREAD);
 
         // store the state on the thread object itself
         context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);

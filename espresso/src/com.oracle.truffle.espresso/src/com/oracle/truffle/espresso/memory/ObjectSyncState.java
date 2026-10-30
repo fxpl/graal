@@ -30,7 +30,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 public final class ObjectSyncState {
 
-  final SyncState lock = new SyncState();
+  final SyncState lock = new SyncState(SyncState.Kind.LOCK);
   final ConcurrentHashMap<Field, SyncState> volatiles = new ConcurrentHashMap<>();
 
   private ObjectSyncState() {}
@@ -45,6 +45,7 @@ public final class ObjectSyncState {
   private static void release(SyncState s) {
       if (s != null && s.commit != null) {
           s.commit.decRef();
+          s.commit = null;
       }
   }
 
@@ -59,7 +60,7 @@ public final class ObjectSyncState {
 
   public SyncState getVolatileSyncState(Field f) {
       // only run the construction of a new SyncState if there is nothing there
-      return volatiles.computeIfAbsent(f, k -> new SyncState());
+      return volatiles.computeIfAbsent(f, k -> new SyncState(SyncState.Kind.VOLATILE));
   }
 
 }
