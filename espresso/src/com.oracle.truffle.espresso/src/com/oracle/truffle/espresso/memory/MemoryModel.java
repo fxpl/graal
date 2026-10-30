@@ -72,8 +72,9 @@ public interface MemoryModel {
 
     /**
      * Read a field of {@code holder} through the calling thread's view: the staged value, else the
-     * value visible at the thread's base version, else {@link #ABSENT} (read through to the heap).
-     * The result is boxed for primitives, a {@code StaticObject} for reference fields.
+     * value visible at the thread's base version, else the field's version 0 (its raw slot, which is
+     * never written once versioned). The result is boxed for primitives, a {@code StaticObject} for
+     * reference fields.
      */
     Object readField(StaticObject holder, Field field);
 
@@ -125,20 +126,6 @@ public interface MemoryModel {
     /** {@link #arrayForWrite(StaticObject, int, int)} for the single element {@code index}. */
     default Object arrayForWrite(StaticObject array, int index) {
         return arrayForWrite(array, index, index + 1);
-    }
-
-    /**
-     * Sync-as-Share (stage-on-access): lazily capture the genesis (version-0) value of a versioned field
-     * into the calling thread's view. Called by {@link com.oracle.truffle.espresso.impl.Field} the first
-     * time a versioned field is read with no staged or committed value — instead of reading through to the
-     * live physical slot on every such read, the physical value is captured once (it is the immutable
-     * initial committed version) so the view is self-contained: a later non-versioned mutation of that slot
-     * (Unsafe / atomics / native) cannot leak into a versioned reader. The capture is a <em>read</em>, never
-     * a write: it is not published at a commit and never enters conflict detection; a committed value that
-     * later appears for the location shadows it (read precedence: staged, then committed, then captured).
-     * A no-op by default (shared / models without genesis capture); only ever called for versioned fields.
-     */
-    default void captureRead(StaticObject holder, Field field, Object value) {
     }
 
     // --- Synchronisation actions (Table 1). May report a conflict. ---

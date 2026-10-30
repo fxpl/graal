@@ -23,9 +23,7 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -64,11 +62,6 @@ public final class BranchingMemoryModel implements MemoryModel {
     private final EspressoContext context;
     private volatile boolean active = false;
 
-    // Sync-as-Share (stage-on-access): the shared version-0 cache. The first thread to read a versioned
-    // field with no staged/committed value freezes the physical (genesis) value here; every thread then
-    // reads that one frozen value instead of the live slot, so v0 is a single fixed version (the paper's
-    // root commit) rather than a per-thread capture. Populated once per field via putIfAbsent.
-    private final Map<ObjectNumber, Map<Field, Object>> genesis = new ConcurrentHashMap<>();
 
     private final AtomicLong deadObjectCount;
 
@@ -171,17 +164,10 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public Object readField(StaticObject holder, Field field) {
         if (holder.hasBeenVersioned()) {
-            Object v = currentView().readField(holder, field);
-            if (v != MemoryModel.ABSENT) {
-                return v;
-            }
+            return currentView().readField(holder, field);
         }
-
-        // Not staged and no committed version: the shared frozen genesis, else ABSENT (caller reads the
-        // slot and captures it here). read() checks committed first, so a committed value shadows genesis.
-        Map<Field, Object> fields = genesis.get(holder.getObjectNumber());
-        Object g = fields == null ? null : fields.get(field);
-        return g != null ? g : MemoryModel.ABSENT;
+        // no thread has written the object, so every field is at version 0, its raw slot
+        return field.getRawValue(holder);
     }
 
     @Override
@@ -202,13 +188,6 @@ public final class BranchingMemoryModel implements MemoryModel {
         array.markHasBeenVersioned();
         registerForCleaning(array);
         return storage;
-    }
-
-    @Override
-    public void captureRead(StaticObject holder, Field field, Object value) {
-        // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
-        genesis.computeIfAbsent(holder.getObjectNumber(), n -> new ConcurrentHashMap<>()).putIfAbsent(field, value);
-        registerForCleaning(holder);
     }
 
     // --- Synchronisation actions (Table 1). May report a conflict at the merge. ---

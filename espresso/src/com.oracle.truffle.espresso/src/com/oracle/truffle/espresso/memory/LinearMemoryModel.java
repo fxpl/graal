@@ -51,11 +51,6 @@ public final class LinearMemoryModel implements MemoryModel {
     private final GlobalHistory global;
     private final EspressoContext context;
     private volatile boolean active = false;
-    // Sync-as-Share (stage-on-access): the shared version-0 cache. The first thread to read a versioned
-    // field with no staged/committed value freezes the physical (genesis) value here; every thread then
-    // reads that one frozen value instead of the live slot, so v0 is a single fixed version (the paper's
-    // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
-    private final Map<FieldLocation, Object> genesis = new ConcurrentHashMap<>();
     // Per-volatile-field lock making a volatile read's (pull, get-value) and a volatile write's
     // (pull, set-value, push) atomic per field — the paper's pull-push is one action. Without it a
     // reader could see a new volatile value while its pull missed the ordinary writes published with it
@@ -220,13 +215,8 @@ public final class LinearMemoryModel implements MemoryModel {
     public Object readField(StaticObject holder, Field field) {
         FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
         Object v = read(loc);
-        if (v != MemoryModel.ABSENT) {
-            return v;
-        }
-        // Not staged and no committed version: the shared frozen genesis, else ABSENT (caller reads the
-        // slot and captures it here). Committed is checked first (in read()), so it shadows genesis.
-        Object g = genesis.get(loc);
-        return g != null ? g : MemoryModel.ABSENT;
+        // Not staged and no committed version: version 0, the field's raw slot
+        return v != MemoryModel.ABSENT ? v : field.getRawValue(holder);
     }
 
     @Override
@@ -249,12 +239,6 @@ public final class LinearMemoryModel implements MemoryModel {
         Meta meta = array.getKlass().getMeta();
         throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
                         "Sync-as-Share: the linear model does not version arrays (" + array.getKlass().getExternalName() + ")");
-    }
-
-    @Override
-    public void captureRead(StaticObject holder, Field field, Object value) {
-        // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
-        genesis.putIfAbsent(new FieldLocation(holder.getObjectNumber(), field), value);
     }
 
     @Override

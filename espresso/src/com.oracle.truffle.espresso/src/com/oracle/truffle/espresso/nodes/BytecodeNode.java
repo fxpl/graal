@@ -2914,8 +2914,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
      * </pre>
      */
     // Sync-as-Share (versioned model): read a field through the calling thread's view. Mirrors the
-    // stock getField per-kind switch, but sources each value from the MemoryModel, falling back to the
-    // real heap when the location has no versioned value (MemoryModel.ABSENT). Assumes Espresso-object
+    // stock getField per-kind switch, but sources each value from the MemoryModel. Assumes Espresso-object
     // receivers (implicit interop is off under a versioned model in Phase 1).
     // The caller has done the access check and resolved the receiver (and cleared its slot).
     private int getFieldViaModel(VirtualFrame frame, int top, StaticObject receiver, Field field, int statementIndex, FieldAccessType mode) {
@@ -2926,13 +2925,6 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         // is read via onVolatileRead (which also does the acquire) rather than readField.
         Object value = field.isVolatile() ? model.onVolatileRead(receiver, field) : model.readField(receiver, field);
 
-        // Each case resolves the value the same way: use the model's value if it has one, else read the
-        // physical (version-0) slot and — for an ordinary versioned field — freeze that first read as the
-        // genesis so later reads resolve from the model, not the live slot. A volatile is not captured
-        // (its value belongs to the un-versioned cell). ABSENT means "no staged or committed value".
-        boolean absent = value == MemoryModel.ABSENT;
-        boolean capture = absent && !field.isVolatile();
-
         if (instrumentation != null) {
             instrumentation.notifyFieldAccess(frame, statementIndex, field, this, receiver);
         }
@@ -2941,58 +2933,17 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         byte typeHeader = field.getType().byteAt(0);
         // @formatter:off
         switch (typeHeader) {
-            case 'Z' : {
-                boolean v = absent ? InterpreterToVM.getFieldBoolean(receiver, field) : (Boolean) value;
-                if (capture) { model.captureRead(receiver, field, v); }
-                putInt(frame, resultAt, v ? 1 : 0);
-                break;
-            }
-            case 'B' : {
-                byte v = absent ? InterpreterToVM.getFieldByte(receiver, field) : (Byte) value;
-                if (capture) { model.captureRead(receiver, field, v); }
-                putInt(frame, resultAt, v);
-                break;
-            }
-            case 'C' : {
-                char v = absent ? InterpreterToVM.getFieldChar(receiver, field) : (Character) value;
-                if (capture) { model.captureRead(receiver, field, v); }
-                putInt(frame, resultAt, v);
-                break;
-            }
-            case 'S' : {
-                short v = absent ? InterpreterToVM.getFieldShort(receiver, field) : (Short) value;
-                if (capture) { model.captureRead(receiver, field, v); }
-                putInt(frame, resultAt, v);
-                break;
-            }
-            case 'I' : {
-                int v = absent ? InterpreterToVM.getFieldInt(receiver, field) : (Integer) value;
-                if (capture) { model.captureRead(receiver, field, v); }
-                putInt(frame, resultAt, v);
-                break;
-            }
-            case 'F' : {
-                float v = absent ? InterpreterToVM.getFieldFloat(receiver, field) : (Float) value;
-                if (capture) { model.captureRead(receiver, field, v); }
-                putFloat(frame, resultAt, v);
-                break;
-            }
-            case 'J' : {
-                long v = absent ? InterpreterToVM.getFieldLong(receiver, field) : (Long) value;
-                if (capture) { model.captureRead(receiver, field, v); }
-                putLong(frame, resultAt, v);
-                break;
-            }
-            case 'D' : {
-                double v = absent ? InterpreterToVM.getFieldDouble(receiver, field) : (Double) value;
-                if (capture) { model.captureRead(receiver, field, v); }
-                putDouble(frame, resultAt, v);
-                break;
-            }
+            case 'Z' : putInt(frame, resultAt, (Boolean) value ? 1 : 0); break;
+            case 'B' : putInt(frame, resultAt, (Byte) value);            break;
+            case 'C' : putInt(frame, resultAt, (Character) value);       break;
+            case 'S' : putInt(frame, resultAt, (Short) value);           break;
+            case 'I' : putInt(frame, resultAt, (Integer) value);         break;
+            case 'F' : putFloat(frame, resultAt, (Float) value);         break;
+            case 'J' : putLong(frame, resultAt, (Long) value);           break;
+            case 'D' : putDouble(frame, resultAt, (Double) value);       break;
             case '[' : // fall through
             case 'L' : {
-                StaticObject v = absent ? InterpreterToVM.getFieldObject(receiver, field) : (StaticObject) value;
-                if (capture) { model.captureRead(receiver, field, v); }
+                StaticObject v = (StaticObject) value;
                 putObject(frame, resultAt, v);
                 checkNoForeignObjectAssumption(v);
                 break;
