@@ -58,7 +58,7 @@ public final class BranchingView implements MemoryView {
     private int stagedFieldCount; // written fields, summed over writtenObjects (only used for versioning stats)
     private final Map<ObjectNumber, WorkingArray> workingArrays = new HashMap<>(); // versioned arrays this view has accessed, as this view sees them
 
-    private String pendingConflict;
+    private ConflictReport pendingConflict; // found by a synchronisation action, raised at the next safe point
 
     // A count shared between views for the number of objects purged,
     // and the number we saw at the last purge
@@ -338,7 +338,7 @@ public final class BranchingView implements MemoryView {
      * by both branches (empty means none). Staging must be empty — every sync action (lock
      * acquire, join, volatile read/write) commits first.
      */
-    Conflicts merge(Commit otherHead) {
+    ConflictingLocations merge(Commit otherHead) {
         assert writtenObjects.isEmpty();
 
         if (state().commit == null) {
@@ -351,17 +351,17 @@ public final class BranchingView implements MemoryView {
                 workingObjects.clear();
                 workingArrays.clear();
             }
-            return Conflicts.NONE;
+            return ConflictingLocations.NONE;
         }
 
         if (otherHead == null) {
             // just return as there is nothing to merge
-            return Conflicts.NONE;
+            return ConflictingLocations.NONE;
         }
 
         if (otherHead == state().commit) {
             // no point in doing this
-            return Conflicts.NONE;
+            return ConflictingLocations.NONE;
         }
 
         // walk back from head and otherHead and collect their history
@@ -382,7 +382,7 @@ public final class BranchingView implements MemoryView {
 
         if (headsHistory.contains(otherHead)) {
             // their head is already in our history, so nothing to merge
-            return Conflicts.NONE;
+            return ConflictingLocations.NONE;
         }
 
         Set<Commit> otherHeadsHistory = HashSet.newHashSet(lastHistorySize);
@@ -464,22 +464,22 @@ public final class BranchingView implements MemoryView {
             // the history as we dropped a ref to part way through the
             // history
             compress();
-            return Conflicts.NONE;
+            return ConflictingLocations.NONE;
         }
 
         if (!fieldConflicts.isEmpty() || !arrayConflicts.isEmpty()) {
-            return new Conflicts(fieldConflicts, arrayConflicts);
+            return new ConflictingLocations(fieldConflicts, arrayConflicts);
         }
 
         // create the merge of the parents
         Commit mergeCommit = Commit.merge(state().commit, otherHead);
         VersioningStats.onMerge();
         setHead(mergeCommit);
-        return Conflicts.NONE;
+        return ConflictingLocations.NONE;
     }
 
     // pull from another commit and report any conflicting locations
-    Conflicts pull(SyncState from) {
+    ConflictingLocations pull(SyncState from) {
         commitStaging();
         return merge(from.commit);
     }
@@ -587,20 +587,18 @@ public final class BranchingView implements MemoryView {
         return working.storage;
     }
 
-    // --- MemoryView: deferred-conflict flag (raised at the bytecode safe point / thread end) ---
+    // --- Pending conflict (raised at the bytecode safe point, asked through the model) ---
 
-    void setPendingConflict(String description) {
-        this.pendingConflict = description;
+    void setPendingConflict(ConflictReport conflict) {
+        this.pendingConflict = conflict;
     }
 
-    @Override
-    public boolean hasPendingConflict() {
+    boolean hasPendingConflict() {
         return pendingConflict != null;
     }
 
-    @Override
-    public String takePendingConflict() {
-        String c = pendingConflict;
+    ConflictReport takePendingConflict() {
+        ConflictReport c = pendingConflict;
         pendingConflict = null;
         return c;
     }

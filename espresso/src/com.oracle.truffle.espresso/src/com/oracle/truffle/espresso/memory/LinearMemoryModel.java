@@ -348,11 +348,21 @@ public final class LinearMemoryModel implements MemoryModel {
         // here: see onThreadEnd.) We must NOT throw from inside the monitor op itself: that corrupts
         // the synchronized block's exit machinery (the implicit exception-path monitorexit re-runs).
         // `at` names the synchronization point that caught it, plus the guest site, for diagnosis.
-        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + describe(conflict)
-                        + ", caught at " + at + " in " + UserCodeLocation.current(context));
+        ConflictingLocations locations = new ConflictingLocations(Map.of(conflict.holder(), Set.of(conflict.field())), Map.of());
+        view.setPendingConflict(new ConflictReport(locations, at, UserCodeLocation.current(context)));
         // Recover the view so it stays consistent if the conflict is caught and execution continues.
         view.clearStaging();
         view.advanceBase(global.currentCounter());
+    }
+
+    @Override
+    public boolean hasPendingConflict(MemoryView view) {
+        return ((LinearLocalView) view).hasPendingConflict();
+    }
+
+    @Override
+    public ConflictReport takePendingConflict(MemoryView view) {
+        return ((LinearLocalView) view).takePendingConflict();
     }
 
     private static String describe(FieldLocation loc) {

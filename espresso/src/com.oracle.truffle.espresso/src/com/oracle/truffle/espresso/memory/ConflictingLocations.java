@@ -32,9 +32,9 @@ import com.oracle.truffle.espresso.impl.Field;
  * The locations written on both sides of a merge: for each object the fields, and for each array the
  * indices, both sides wrote.
  */
-record Conflicts(Map<ObjectNumber, Set<Field>> fields, Map<ObjectNumber, BitSet> arrays) {
+record ConflictingLocations(Map<ObjectNumber, Set<Field>> fields, Map<ObjectNumber, BitSet> arrays) {
 
-    static final Conflicts NONE = new Conflicts(Map.of(), Map.of());
+    static final ConflictingLocations NONE = new ConflictingLocations(Map.of(), Map.of());
 
     boolean isEmpty() {
         return fields.isEmpty() && arrays.isEmpty();

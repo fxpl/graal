@@ -23,14 +23,10 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
-import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -253,7 +249,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // against a concurrent volatile write to the same field.
         BranchingView view = currentView();
         SyncState state = holder.volatileSyncState(field);
-        Conflicts conflict;
+        ConflictingLocations conflict;
         Object value;
         synchronized (state) {
             conflict = view.pull(state);
@@ -272,7 +268,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Atomic per field.
         BranchingView view = currentView();
         SyncState state = holder.volatileSyncState(field);
-        Conflicts conflicts;
+        ConflictingLocations conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
@@ -288,7 +284,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Class-init release: pull from the class's init sync state, then push to it.
         BranchingView view = currentView();
         SyncState state = klass.getClassInitSyncState();
-        Conflicts conflicts;
+        ConflictingLocations conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
@@ -303,31 +299,31 @@ public final class BranchingMemoryModel implements MemoryModel {
         // Class-init acquire: pull from the class's init sync state, no push.
         BranchingView view = currentView();
         SyncState state = klass.getClassInitSyncState();
-        Conflicts conflicts;
+        ConflictingLocations conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
         }
         handleConflicts(conflicts, view, "class init");
     }
 
-    private void handleConflicts(Conflicts conflicts, BranchingView view, String at) {
+    private void handleConflicts(ConflictingLocations conflicts, BranchingView view, String at) {
         if (conflicts.isEmpty()) {
             return;
         }
         // Record a pending conflict, raised as a guest exception at the next safe point (top of the
-        // bytecode loop, past any just-executed monitorexit), or by GuestRunnable if this was the
-        // thread's final sync. We must NOT throw from inside the monitor op itself: that corrupts the
-        // synchronized block's exit machinery.
-
-        String where = Stream.concat(
-                        conflicts.fields().values().stream().flatMap(Set::stream).map(BranchingMemoryModel::describe),
-                        conflicts.arrays().entrySet().stream().map(e -> "array " + e.getKey().threadId + ":" + e.getKey().count + " at indices " + e.getValue()))
-                        .sorted().collect(Collectors.joining(", "));
-        view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + where
-                        + ", caught at " + at + " in " + UserCodeLocation.current(context));
+        // bytecode loop, past any just-executed monitorexit). We must NOT throw from inside the monitor
+        // op itself: that corrupts the synchronized block's exit machinery. The user code location is
+        // taken now, while the thread is still at the action.
+        view.setPendingConflict(new ConflictReport(conflicts, at, UserCodeLocation.current(context)));
     }
 
-    private static String describe(Field field) {
-        return field.getDeclaringKlass().getName() + "." + field.getName();
+    @Override
+    public boolean hasPendingConflict(MemoryView view) {
+        return ((BranchingView) view).hasPendingConflict();
+    }
+
+    @Override
+    public ConflictReport takePendingConflict(MemoryView view) {
+        return ((BranchingView) view).takePendingConflict();
     }
 }

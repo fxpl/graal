@@ -68,6 +68,16 @@ public interface MemoryModel {
      */
     MemoryView newThreadView();
 
+    /**
+     * Has a synchronisation action on {@code view}'s thread found a conflict that is still waiting to be
+     * raised? Asked at a safe point (the top of the bytecode loop): a conflict cannot be thrown from
+     * inside the action, as that corrupts a synchronized block's exit.
+     */
+    boolean hasPendingConflict(MemoryView view);
+
+    /** The conflict waiting on {@code view}'s thread, which is cleared; called just before raising it. */
+    ConflictReport takePendingConflict(MemoryView view);
+
     // --- Ordinary field access (called only when enabled; the hot-path guard folds under shared) ---
 
     /**

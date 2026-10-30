@@ -23,22 +23,10 @@
 package com.oracle.truffle.espresso.memory;
 
 /**
- * A guest thread's private Sync-as-Share memory view. The concrete shape is model-specific — Linear's
- * {@link LinearLocalView} is a staging map plus a scalar base cursor; Branching's is a staging map
- * plus a commit-DAG head — so the per-thread state is created by the active model via
- * {@link MemoryModel#newThreadView()}.
- *
- * <p>This interface exposes only the <em>model-agnostic</em> bits the interpreter needs directly: the
- * deferred-conflict flag, checked at a safe point (top of the bytecode loop) and at thread end, so a
- * conflict raised inside a synchronisation action surfaces as a catchable guest {@code Error} without
- * corrupting the sync machinery. Everything else (staging, base/head, merge) is model-private and
- * accessed by the owning {@link MemoryModel} through its concrete view type.
+ * A guest thread's state under the active Sync-as-Share model, created by that model
+ * ({@link MemoryModel#newThreadView()}) and carried by the thread. Opaque outside the model: everything
+ * about it, including a conflict waiting to be raised, is asked of the {@link MemoryModel} that made
+ * it, which alone knows its concrete type ({@link BranchingView}, {@link LinearLocalView}).
  */
 public interface MemoryView {
-
-    /** Whether a conflict has been recorded and is pending to be raised at the next safe point. */
-    boolean hasPendingConflict();
-
-    /** Take (and clear) the pending conflict message; called just before raising the guest error. */
-    String takePendingConflict();
 }

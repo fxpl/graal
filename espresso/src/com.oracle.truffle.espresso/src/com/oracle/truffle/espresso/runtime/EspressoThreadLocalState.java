@@ -62,9 +62,8 @@ public class EspressoThreadLocalState {
 
     private List<PinnedObject> pinnedObjects;
 
-    // Sync-as-Share: this thread's private view of memory (staging + base/head). Lazily created by the
-    // active memory model (Linear or Branching); only ever touched under a non-stock model, so it
-    // costs nothing under shared.
+    // Sync-as-Share: this thread's state under the active memory model, created lazily by that model and
+    // read only through it; only ever touched under a non-stock model, so it costs nothing under shared.
     private MemoryView memoryView;
 
     private ObjectNumber currentObjectNumber;

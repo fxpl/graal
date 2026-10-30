@@ -55,6 +55,16 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
+    public boolean hasPendingConflict(MemoryView view) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.hasPendingConflict: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public ConflictReport takePendingConflict(MemoryView view) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.takePendingConflict: memory-model hooks must be folded under shared");
+    }
+
+    @Override
     public Object readField(StaticObject holder, Field field) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.readField: memory-model hooks must be folded under shared");
     }

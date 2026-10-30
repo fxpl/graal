@@ -335,6 +335,7 @@ import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.impl.Method.MethodVersion;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
+import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.MemoryView;
 import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
@@ -470,6 +471,10 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
 
     @CompilationFinal(dimensions = 1) private final int[] branchInfos;
 
+    // Sync-as-Share: whether a versioned memory model is selected, fixed for the run, so each call reads a
+    // field instead of looking the language up by thread.
+    private final boolean versionedMemorySelected;
+
     public BytecodeNode(MethodVersion methodVersion) {
         CompilerAsserts.neverPartOfCompilation();
         Method method = methodVersion.getMethod();
@@ -484,6 +489,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         this.stackOverflowErrorInfo = method.getSOEHandlerInfo();
         this.frameDescriptor = createFrameDescriptor(methodVersion.getMaxLocals(), methodVersion.getMaxStackSize());
         this.noForeignObjects = getLanguage().isImplicitInteropEnabled() ? Truffle.getRuntime().createAssumption("noForeignObjects") : Assumption.ALWAYS_VALID;
+        this.versionedMemorySelected = getLanguage().isVersionedMemorySelected();
         this.implicitExceptionProfile = false;
         this.livenessAnalysis = methodVersion.getLivenessAnalysis();
         /*
@@ -776,6 +782,12 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
             livenessAnalysis.onStart(frame, skipLivenessActions);
         }
 
+        // Sync-as-Share: the pending-conflict check below runs before every bytecode; fetching the model
+        // and this thread's view here, once per call, keeps the thread-local lookup out of the loop (a
+        // frame only ever runs on one thread). Under shared neither is fetched.
+        final MemoryModel memoryModel = versionedMemorySelected ? getMethodContext().getMemoryModel() : null;
+        final MemoryView mmView = versionedMemorySelected ? getLanguage().getThreadLocalState().getMemoryView() : null;
+
         loop: while (true) {
             final int curOpcode = bs.opcode(curBCI);
             EXECUTED_BYTECODES_COUNT.inc();
@@ -796,14 +808,13 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
                     setBCI(frame, curBCI);
                 }
 
-                if (getLanguage().isVersionedMemorySelected()) {
+                if (versionedMemorySelected) {
                     // Sync-as-Share: raise a conflict detected by the previous synchronisation action
                     // here, at a safe point (past any just-executed monitorexit), so it propagates as an
                     // ordinary catchable guest exception. Folds away under shared (PE-constant guard).
-                    MemoryView mmView = getLanguage().getThreadLocalState().getMemoryView();
-                    if (mmView.hasPendingConflict()) {
+                    if (memoryModel.hasPendingConflict(mmView)) {
                         setBCI(frame, curBCI);
-                        throw getMeta().throwExceptionWithMessage(getMeta().java_lang_Error, mmView.takePendingConflict());
+                        throw getMeta().throwExceptionWithMessage(getMeta().java_lang_Error, memoryModel.takePendingConflict(mmView).message());
                     }
                 }
 

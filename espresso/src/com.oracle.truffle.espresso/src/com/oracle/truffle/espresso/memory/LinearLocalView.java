@@ -40,7 +40,7 @@ public final class LinearLocalView implements MemoryView {
     private final Map<FieldLocation, Object> staging = new HashMap<>();
     // A conflict detected during a synchronisation action, to be raised at the next safe point (the
     // top of the bytecode loop) rather than from inside the sync op. Null if none pending.
-    private String pendingConflict;
+    private ConflictReport pendingConflict;
     private int lastPulledWrites;   // writes the most recent pull brought in (schedule explorer only)
 
     public long base() {
@@ -85,17 +85,17 @@ public final class LinearLocalView implements MemoryView {
         staging.clear();
     }
 
-    public boolean hasPendingConflict() {
+    boolean hasPendingConflict() {
         return pendingConflict != null;
     }
 
-    public void setPendingConflict(String description) {
-        this.pendingConflict = description;
+    void setPendingConflict(ConflictReport conflict) {
+        this.pendingConflict = conflict;
     }
 
-    /** Returns the pending conflict description and clears it. */
-    public String takePendingConflict() {
-        String c = pendingConflict;
+    /** Returns the pending conflict and clears it. */
+    ConflictReport takePendingConflict() {
+        ConflictReport c = pendingConflict;
         pendingConflict = null;
         return c;
     }
