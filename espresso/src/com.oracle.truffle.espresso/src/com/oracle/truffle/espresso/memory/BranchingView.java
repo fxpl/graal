@@ -52,10 +52,11 @@ public final class BranchingView implements MemoryView {
     // during VM bootstrap, before the Thread exists. Never read directly, always through state().
     private SyncState unboundOrState;
     private final Supplier<SyncState> bindState;
-    private Map<FieldLocation, Object> staging = new HashMap<>(); // staged changes which are cleared when committed to history
+    private Map<ObjectNumber, FieldChanges> staging = new HashMap<>(); // staged field writes, cleared when committed to history
+    private int stagedFieldCount; // fields in staging, summed over its objects (only used for versioning stats)
     private final Map<ObjectNumber, WorkingArray> stagedArrays = new HashMap<>(); // versioned arrays this view has accessed, as this view sees them
 
-    private final ReadCache readCache = new ReadCache();
+    private final FieldReadCache readCache = new FieldReadCache();
 
     private String pendingConflict;
 
@@ -108,7 +109,7 @@ public final class BranchingView implements MemoryView {
     }
 
     int stagingSize() {
-        return staging.size();
+        return stagedFieldCount;
     }
 
     // We reduce the staging size by removing references to static
@@ -120,43 +121,49 @@ public final class BranchingView implements MemoryView {
         Reference<?> deadReference;
         while ((deadReference = deadQueue.poll()) != null) {
             StagedReference deadObject = (StagedReference) deadReference;
-            trackedObjects.remove(deadObject.number);
-            stagedArrays.remove(deadObject.number);
-            deadObject.locations.forEach(k -> staging.remove(k));
-            readCache.evictAll(deadObject.locations);
+            ObjectNumber number = deadObject.number;
+            trackedObjects.remove(number);
+            WorkingArray array = stagedArrays.remove(number);
+            if (array != null) {
+                VersioningStats.onDrainArray(array.written.cardinality());
+            }
+            FieldChanges staged = staging.remove(number);
+            if (staged != null) {
+                stagedFieldCount -= (int) staged.writeCount();
+                VersioningStats.onDrainStagedFields(staged.writeCount());
+            }
+            readCache.evictObject(number);
         }
     }
 
-    // Track a holder is in the staging or the read cache so that it can
-    // be dropped from both when the holder dies
-    private StagedReference track(StaticObject holder) {
-        return trackedObjects.computeIfAbsent(holder.getObjectNumber(), n -> new StagedReference(holder, n, deadQueue));
-    }
-
-    // Record that loc, associated with a field loc, is in staging or the read cache, so it is
-    // dropped from both when holder dies
-    private void track(StaticObject holder, FieldLocation loc) {
-        track(holder).locations.add(loc);
+    // Track that an object is in staging, the read cache or the staged arrays, so that it can
+    // be dropped from them when it dies
+    private void track(StaticObject object) {
+        trackedObjects.computeIfAbsent(object.getObjectNumber(), n -> new StagedReference(object, n, deadQueue));
     }
 
     void stageField(StaticObject holder, Field field, Object value) {
-        FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
-
-        if (staging.put(loc, value) == null) {
-            // This is the first time we have staged a write to this
-            // object's field this commit window
-            track(holder, loc);
+        ObjectNumber number = holder.getObjectNumber();
+        FieldChanges changes = staging.get(number);
+        if (changes == null) {
+            // This is the first time we have staged a write to this object this commit window
+            changes = new FieldChanges();
+            staging.put(number, changes);
+            track(holder);
+        }
+        if (changes.put(field, value)) {
+            stagedFieldCount++;
         }
 
         emptyDeadQueue();
-        VersioningStats.observeStaging(staging.size());
+        VersioningStats.observeStaging(stagedFieldCount);
     }
 
     /** Staged value, else the committed value, else ABSENT. The shared genesis (version-0) cache is
      *  consulted by the model after this, not here. */
     Object readField(StaticObject holder, Field field) {
-        FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
-        Object known = stagedOrCached(loc);
+        ObjectNumber number = holder.getObjectNumber();
+        Object known = stagedOrCached(number, field);
         if (known != null) {
             return known;
         }
@@ -165,23 +172,31 @@ public final class BranchingView implements MemoryView {
             return MemoryModel.ABSENT;
         }
 
-        Object value = getLastCommittedValue(loc);
-        readCache.put(loc, value);
-        track(holder, loc);
+        Object value = getLastCommittedValue(number, field);
+        readCache.put(number, field, value);
+        track(holder);
         return value;
     }
 
     // The staged value, else the cached one (possibly ABSENT), else null
-    private Object stagedOrCached(FieldLocation loc) {
-        Object staged = staging.get(loc);
+    private Object stagedOrCached(ObjectNumber number, Field field) {
+        FieldChanges staged = staging.get(number);
         if (staged != null) {
-            return staged;
+            Object value = staged.get(field);
+            if (value != null) {
+                return value;
+            }
         }
-        return readCache.get(loc);
+        return readCache.get(number, field);
     }
 
-    /** The newest committed value of {@code loc} under the head, else ABSENT. The head must be set. */
-    private Object getLastCommittedValue(FieldLocation loc) {
+    // The value commit c wrote to field of object number, or null if c did not write it
+    private static Object getValueWrittenBy(Commit c, ObjectNumber number, Field field) {
+        return c.changes().get(number) instanceof FieldChanges f ? f.get(field) : null;
+    }
+
+    /** The newest committed value of the field under the head, else ABSENT. The head must be set. */
+    private Object getLastCommittedValue(ObjectNumber number, Field field) {
         // The pathological cases are:
         // 1) the value is all the way back at version 0
         // 2) we have multiple candidates
@@ -203,7 +218,7 @@ public final class BranchingView implements MemoryView {
             Commit current = heads.pop();
 
             // once we find a candidate stop
-            if (current.fieldChanges().containsKey(loc)) {
+            if (getValueWrittenBy(current, number, field) != null) {
                 candidates.add(current);
             } else {
                 // add the parents to explore if we haven't already
@@ -226,7 +241,7 @@ public final class BranchingView implements MemoryView {
 
         // There was only one candidate commit, so just return that
         if (candidates.size() == 1) {
-            return candidates.iterator().next().fieldChanges().get(loc);
+            return getValueWrittenBy(candidates.iterator().next(), number, field);
         }
 
         // We had multiple candidates, so now we need to work out which is the only
@@ -263,7 +278,7 @@ public final class BranchingView implements MemoryView {
         // alive now holds exactly one commit: the newest writer
         assert alive.size() == 1;
         Commit latest = alive.iterator().next();
-        return latest.fieldChanges().get(loc);
+        return getValueWrittenBy(latest, number, field);
     }
 
     /** Turn staged writes into a new commit on this thread's branch (no-op if nothing staged). */
@@ -279,16 +294,22 @@ public final class BranchingView implements MemoryView {
         // before commit, try to clear out anything that is dead from staging
         emptyDeadQueue();
 
-        // Create the array changes set and clear all the written bit from the staged array
-        Map<ObjectNumber, ArrayChanges> arrayChanges = new HashMap<>();
-        stagedArrays.forEach((number, w) -> {
+        // The staged fields, plus the written elements of each staged array, whose written bits are cleared
+        Map<ObjectNumber, ObjectChanges> changes = new HashMap<>(staging);
+        long arrayElements = 0;
+        int arrays = 0;
+        for (Map.Entry<ObjectNumber, WorkingArray> e : stagedArrays.entrySet()) {
+            WorkingArray w = e.getValue();
             if (!w.written.isEmpty()) {
-                arrayChanges.put(number, ArrayChanges.of(w));   // copies the bits and values
+                ArrayChanges a = ArrayChanges.of(w);   // copies the bits and values
+                changes.put(e.getKey(), a);
+                arrayElements += a.writeCount();
+                arrays++;
                 w.written.clear();
             }
-        });
+        }
 
-        if (staging.isEmpty() && arrayChanges.isEmpty()) {
+        if (changes.isEmpty()) {
             return;
         }
 
@@ -296,13 +317,13 @@ public final class BranchingView implements MemoryView {
         // So avoid any walks looking for it
         readCache.putAll(staging);
 
-        // Grab the staging and clear it
-        Map<FieldLocation, Object> fieldChanges = staging;
-        staging = new HashMap<>();
+        VersioningStats.onCommit(stagedFieldCount, arrays, arrayElements);
 
-        VersioningStats.onCommit(fieldChanges.size(), arrayChanges.size(),
-                        arrayChanges.values().stream().mapToLong(c -> c.written().cardinality()).sum());
-        setHead(state().commit == null ? Commit.first(fieldChanges, arrayChanges) : state().commit.extend(fieldChanges, arrayChanges));
+        // the commit now holds the staged field changes, so start a fresh staging
+        staging = new HashMap<>();
+        stagedFieldCount = 0;
+
+        setHead(state().commit == null ? Commit.first(changes) : state().commit.extend(changes));
     }
 
     /** Shallow compression from this thread's head (no-op if it has no head yet). */
@@ -390,39 +411,45 @@ public final class BranchingView implements MemoryView {
         Set<Commit> mineOnly = new HashSet<>(headsHistory);
         mineOnly.removeAll(otherHeadsHistory);
 
-        Set<FieldLocation> mineFieldsWritten = new HashSet<>();
+        Map<ObjectNumber, Set<Field>> mineFieldsWritten = new HashMap<>();
         Map<ObjectNumber, BitSet> mineArrayWritten = new HashMap<>();
         for (Commit c : mineOnly) {
-            mineFieldsWritten.addAll(c.fieldChanges().keySet());
-            c.arrayChanges().forEach((number, changes) -> {
-                mineArrayWritten.computeIfAbsent(number, n -> new BitSet()).or(changes.written);
+            c.changes().forEach((number, changes) -> {
+                if (changes instanceof FieldChanges f) {
+                    mineFieldsWritten.computeIfAbsent(number, n -> new HashSet<>()).addAll(f.fields());
+                } else if (changes instanceof ArrayChanges a) {
+                    mineArrayWritten.computeIfAbsent(number, n -> new BitSet()).or(a.written());
+                }
             });
         }
 
         Set<Commit> theirsOnly = new HashSet<>(otherHeadsHistory);
         theirsOnly.removeAll(headsHistory);
-        Set<FieldLocation> fieldConflicts = new HashSet<>();
+        Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
         Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
         for (Commit c : theirsOnly) {
-            for (FieldLocation loc : c.fieldChanges().keySet()) {
-                // the merge brought in an updated value of a location
-                // so drop the cached value
-                readCache.evict(loc);
-                if (mineFieldsWritten.contains(loc)) {
-                    fieldConflicts.add(loc);
-                }
-            }
-
-            // We clear out only the arrays that were changed by theirs
-            // we could instead change just the elements and keep what
-            // didn't change but it's a bit more work
-            c.arrayChanges().forEach((o, changes) -> {
-                stagedArrays.remove(o);
-                BitSet mine = mineArrayWritten.get(o);
-                if (mine != null && mine.intersects(changes.written)) {
-                    BitSet both = (BitSet) mine.clone();
-                    both.and(changes.written);
-                    arrayConflicts.computeIfAbsent(o, n -> new BitSet()).or(both);
+            c.changes().forEach((number, changes) -> {
+                if (changes instanceof FieldChanges f) {
+                    Set<Field> mine = mineFieldsWritten.getOrDefault(number, Set.of());
+                    for (Field field : f.fields()) {
+                        // the merge brought in an updated value of a field
+                        // so drop the cached value
+                        readCache.evict(number, field);
+                        if (mine.contains(field)) {
+                            fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                        }
+                    }
+                } else if (changes instanceof ArrayChanges a) {
+                    // We clear out only the arrays that were changed by theirs
+                    // we could instead change just the elements and keep what
+                    // didn't change but it's a bit more work
+                    stagedArrays.remove(number);
+                    BitSet mine = mineArrayWritten.get(number);
+                    if (mine != null && mine.intersects(a.written())) {
+                        BitSet both = (BitSet) mine.clone();
+                        both.and(a.written());
+                        arrayConflicts.computeIfAbsent(number, n -> new BitSet()).or(both);
+                    }
                 }
             });
         }
@@ -528,8 +555,7 @@ public final class BranchingView implements MemoryView {
 
         // Apply each commit's writes in that order, so the last writer of each index wins.
         for (Commit c : order) {
-            ArrayChanges changes = c.arrayChanges().get(number);
-            if (changes != null) {
+            if (c.changes().get(number) instanceof ArrayChanges changes) {
                 changes.applyTo(storage);
             }
         }

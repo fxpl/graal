@@ -53,8 +53,12 @@ final class VersioningStats {
                                                                 // place (no new node). New nodes ~= commits - folds + merges
     static final AtomicLong absorbed = new AtomicLong();        // commits absorbed into a descendant by compression
                                                                 // (resident nodes <= commits - folds + merges - absorbed)
-    static final AtomicLong purgedEntries = new AtomicLong();   // commit entries removed because their object died
-    static final AtomicLong purgedArrays = new AtomicLong();    // ...of which arrays (one entry per array per commit)
+    static final AtomicLong purgedFields = new AtomicLong();    // committed field writes removed because their object died
+    static final AtomicLong purgedArrays = new AtomicLong();    // committed arrays removed because they died (one per array per commit)
+    static final AtomicLong purgeRuns = new AtomicLong();       // purgeObjects calls
+    static final AtomicLong drainedStagedFields = new AtomicLong(); // staged field writes dropped because their object died
+    static final AtomicLong drainedArrays = new AtomicLong();   // array working copies dropped because their array died
+    static final AtomicLong drainedArrayElements = new AtomicLong(); // ...and their written elements not yet committed
     static final AtomicLong released = new AtomicLong();        // commits whose ref count reached 0 (the decRef cascade)
                                                                 // nodes live ~= commits - folds + merges - absorbed - released
     static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
@@ -117,8 +121,22 @@ final class VersioningStats {
 
     static void onPurge(int fieldEntriesRemoved, int arraysRemoved) {
         if (ENABLED) {
-            purgedEntries.addAndGet(fieldEntriesRemoved + arraysRemoved);
+            purgeRuns.incrementAndGet();
+            purgedFields.addAndGet(fieldEntriesRemoved);
             purgedArrays.addAndGet(arraysRemoved);
+        }
+    }
+
+    static void onDrainStagedFields(long fields) {
+        if (ENABLED) {
+            drainedStagedFields.addAndGet(fields);
+        }
+    }
+
+    static void onDrainArray(long writtenElements) {
+        if (ENABLED) {
+            drainedArrays.incrementAndGet();
+            drainedArrayElements.addAndGet(writtenElements);
         }
     }
 
@@ -213,8 +231,12 @@ final class VersioningStats {
                             .append(" live=").append(nodesCreated() - absorbed.get() - released.get())
                             .append("\n  dead:     cleanerRegistrations=").append(cleanerRegistrations)
                             .append(" markedForPurging=").append(markedForPurging)
-                            .append(" purgedEntries=").append(purgedEntries)
+                            .append(" purgedFields=").append(purgedFields)
                             .append(" purgedArrays=").append(purgedArrays)
+                            .append(" purgeRuns=").append(purgeRuns)
+                            .append(" drainedStagedFields=").append(drainedStagedFields)
+                            .append(" drainedArrays=").append(drainedArrays)
+                            .append(" drainedArrayElements=").append(drainedArrayElements)
                             .append("\n  reads:    walks=").append(readWalks)
                             .append(" misses=").append(readWalkMisses)
                             .append(" visited=").append(readWalkVisited)

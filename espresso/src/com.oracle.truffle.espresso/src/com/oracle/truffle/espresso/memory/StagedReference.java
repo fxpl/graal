@@ -24,15 +24,12 @@ package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.PhantomReference;
 import java.lang.ref.ReferenceQueue;
-import java.util.HashSet;
-import java.util.Set;
 
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 class StagedReference extends PhantomReference<StaticObject> {
 
     final ObjectNumber number;
-    final Set<FieldLocation> locations = new HashSet<>();
 
     StagedReference(StaticObject referent, ObjectNumber number, ReferenceQueue<StaticObject> queue) {
         super(referent, queue);

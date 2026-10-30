@@ -24,6 +24,7 @@ package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -66,8 +67,8 @@ public final class BranchingMemoryModel implements MemoryModel {
     // Sync-as-Share (stage-on-access): the shared version-0 cache. The first thread to read a versioned
     // field with no staged/committed value freezes the physical (genesis) value here; every thread then
     // reads that one frozen value instead of the live slot, so v0 is a single fixed version (the paper's
-    // root commit) rather than a per-thread capture. Populated once per location via putIfAbsent.
-    private final Map<FieldLocation, Object> genesis = new ConcurrentHashMap<>();
+    // root commit) rather than a per-thread capture. Populated once per field via putIfAbsent.
+    private final Map<ObjectNumber, Map<Field, Object>> genesis = new ConcurrentHashMap<>();
 
     private final AtomicLong deadObjectCount;
 
@@ -169,8 +170,6 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public Object readField(StaticObject holder, Field field) {
-        FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
-
         if (holder.hasBeenVersioned()) {
             Object v = currentView().readField(holder, field);
             if (v != MemoryModel.ABSENT) {
@@ -180,7 +179,8 @@ public final class BranchingMemoryModel implements MemoryModel {
 
         // Not staged and no committed version: the shared frozen genesis, else ABSENT (caller reads the
         // slot and captures it here). read() checks committed first, so a committed value shadows genesis.
-        Object g = genesis.get(loc);
+        Map<Field, Object> fields = genesis.get(holder.getObjectNumber());
+        Object g = fields == null ? null : fields.get(field);
         return g != null ? g : MemoryModel.ABSENT;
     }
 
@@ -207,7 +207,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public void captureRead(StaticObject holder, Field field, Object value) {
         // First capture wins (putIfAbsent) so v0 is a single value shared by all threads.
-        genesis.putIfAbsent(new FieldLocation(holder.getObjectNumber(), field), value);
+        genesis.computeIfAbsent(holder.getObjectNumber(), n -> new ConcurrentHashMap<>()).putIfAbsent(field, value);
         registerForCleaning(holder);
     }
 
@@ -341,14 +341,14 @@ public final class BranchingMemoryModel implements MemoryModel {
         // synchronized block's exit machinery.
 
         String where = Stream.concat(
-                        conflicts.fields().stream().map(BranchingMemoryModel::describe),
+                        conflicts.fields().values().stream().flatMap(Set::stream).map(BranchingMemoryModel::describe),
                         conflicts.arrays().entrySet().stream().map(e -> "array " + e.getKey().threadId + ":" + e.getKey().count + " at indices " + e.getValue()))
                         .sorted().collect(Collectors.joining(", "));
         view.setPendingConflict("Sync-as-Share conflict: incompatible concurrent update to " + where
                         + ", caught at " + at + " in " + UserCodeLocation.current(context));
     }
 
-    private static String describe(FieldLocation loc) {
-        return loc.field().getDeclaringKlass().getName() + "." + loc.field().getName();
+    private static String describe(Field field) {
+        return field.getDeclaringKlass().getName() + "." + field.getName();
     }
 }

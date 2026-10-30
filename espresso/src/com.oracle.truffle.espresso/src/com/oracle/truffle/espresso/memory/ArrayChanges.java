@@ -25,7 +25,7 @@ package com.oracle.truffle.espresso.memory;
 import java.lang.reflect.Array;
 import java.util.BitSet;
 
-final class ArrayChanges {
+final class ArrayChanges implements ObjectChanges {
   Object changes;
   BitSet written;
 
@@ -60,20 +60,27 @@ final class ArrayChanges {
       copyWritten(written, changes, storage);
   }
 
-  void putAll(ArrayChanges newer) {
-      copyWritten(newer.written, newer.changes, changes);
-      written.or(newer.written);
+  @Override
+  public void putAll(ObjectChanges newer) {
+      ArrayChanges n = (ArrayChanges) newer;
+      copyWritten(n.written, n.changes, changes);
+      written.or(n.written);
   }
 
-  // A new ArrayChanges holding the writes of older and of these, these winning where both wrote.
-  // Neither is modified, as other threads may be reading them.
-  ArrayChanges createFoldWithOlder(ArrayChanges older) {
+  @Override
+  public ObjectChanges createFoldWithOlder(ObjectChanges older) {
+      ArrayChanges o = (ArrayChanges) older;
       Object values = Array.newInstance(changes.getClass().getComponentType(), Array.getLength(changes));
-      copyWritten(older.written, older.changes, values);
+      copyWritten(o.written, o.changes, values);
       copyWritten(written, changes, values);
       BitSet all = (BitSet) written.clone();
-      all.or(older.written);
+      all.or(o.written);
       return new ArrayChanges(values, all);
+  }
+
+  @Override
+  public long writeCount() {
+      return written.cardinality();
   }
 
 }

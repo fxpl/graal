@@ -26,13 +26,15 @@ import java.util.BitSet;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * The locations written on both sides of a merge: fields, and for each array the indices both sides
- * wrote.
- */
-record Conflicts(Set<FieldLocation> fields, Map<ObjectNumber, BitSet> arrays) {
+import com.oracle.truffle.espresso.impl.Field;
 
-    static final Conflicts NONE = new Conflicts(Set.of(), Map.of());
+/**
+ * The locations written on both sides of a merge: for each object the fields, and for each array the
+ * indices, both sides wrote.
+ */
+record Conflicts(Map<ObjectNumber, Set<Field>> fields, Map<ObjectNumber, BitSet> arrays) {
+
+    static final Conflicts NONE = new Conflicts(Map.of(), Map.of());
 
     boolean isEmpty() {
         return fields.isEmpty() && arrays.isEmpty();
