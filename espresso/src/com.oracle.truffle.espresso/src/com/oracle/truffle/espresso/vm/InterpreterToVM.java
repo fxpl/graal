@@ -405,7 +405,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         if (!monitorTryLock(lock)) {
             contendedMonitorEnter(obj, meta, lock, context);
         }
-        if (context.isVersionedMemoryEnabled()) {
+        if (context.isVersionedMemoryEnabled() && Versioning.isSynchronisingOnSharedObject(obj)) {
             // Sync-as-Share: lock = pull. After acquiring, import updates published to g by the previous
             // holder's unlock and conflict-check this thread's staged writes. Folds away under shared;
             // off during JDK bootstrap.
@@ -451,7 +451,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         // Seam fires before the publish so it observes the staging about to be pushed (flow-commit
         // detection) and, for the driver, controls order before the release takes effect.
         meta.getContext().seam(SyncOp.MONITOR_EXIT, obj);
-        if (meta.getContext().isVersionedMemoryEnabled()) {
+        if (meta.getContext().isVersionedMemoryEnabled() && Versioning.isSynchronisingOnSharedObject(obj)) {
             // Sync-as-Share: unlock = push. Publish this thread's view to g while still holding the
             // lock (may raise a conflict). Folds away under shared; off during JDK bootstrap.
             meta.getContext().getMemoryModel().onMonitorExit(obj);

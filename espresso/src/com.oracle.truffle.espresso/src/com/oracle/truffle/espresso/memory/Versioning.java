@@ -87,6 +87,7 @@ public final class Versioning {
     public static StaticObject markIfEligible(StaticObject obj, Method allocator) {
         if (modelOn(allocator.getDeclaringKlass()) && !isBootLoadedClass(allocator.getDeclaringKlass())) {
             obj.markEligibleForVersioning();
+            VersioningStats.onEligible(obj.isArray());
         }
         return obj;
     }
@@ -102,6 +103,7 @@ public final class Versioning {
                 continue;
             }
             o.markVersioned();
+            VersioningStats.onVersioned(o.isArray());
 
             Klass klass = o.getKlass();
             if (klass.isArray()) {
@@ -156,5 +158,16 @@ public final class Versioning {
         }
     }
 
+    /** Known to be reachable only by the thread that created it: eligible, and not yet escaped. */
+    static boolean isKnownUnshared(StaticObject obj) {
+        return obj.isEligibleForVersioning() && !obj.isVersioned();
+    }
+
+    public static boolean isSynchronisingOnSharedObject(StaticObject target) {
+        // if we don't know this object is unshared, there we have to assume
+        // it is. Versioned objects are easy but other shared VM internals etc.
+        // do exist
+        return modelOn(target.getKlass()) && !isKnownUnshared(target);
+    }
 
 }

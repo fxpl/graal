@@ -73,6 +73,10 @@ final class VersioningStats {
     static final AtomicLong readWalkMisses = new AtomicLong();  // ...of which found no committed value (ABSENT)
     static final AtomicLong readWalkVisited = new AtomicLong(); // commits visited by all walks
     static final AtomicLong readWalkMissVisited = new AtomicLong(); // ...of which by walks that found nothing
+    static final AtomicLong eligibleObjects = new AtomicLong();  // objects (not arrays) allocated eligible for versioning
+    static final AtomicLong eligibleArrays = new AtomicLong();   // arrays allocated eligible for versioning
+    static final AtomicLong versionedObjects = new AtomicLong(); // ...of which objects that were versioned (they escaped)
+    static final AtomicLong versionedArrays = new AtomicLong();  // ...of which arrays that were versioned (they escaped)
     static final AtomicLong workingFieldHits = new AtomicLong(); // field reads answered by a view's working value (no walk)
     static final AtomicLong workingArrayHits = new AtomicLong(); // array accesses that found the view's working copy
     static final AtomicLong workingArrayBuilds = new AtomicLong(); // ...and that had to build it from the history
@@ -187,6 +191,18 @@ final class VersioningStats {
         }
     }
 
+    static void onEligible(boolean array) {
+        if (ENABLED) {
+            (array ? eligibleArrays : eligibleObjects).incrementAndGet();
+        }
+    }
+
+    static void onVersioned(boolean array) {
+        if (ENABLED) {
+            (array ? versionedArrays : versionedObjects).incrementAndGet();
+        }
+    }
+
     static void onWorkingFieldHit() {
         if (ENABLED) {
             workingFieldHits.incrementAndGet();
@@ -291,6 +307,8 @@ final class VersioningStats {
                             .append(" missVisited=").append(readWalkMissVisited)
                             .append(" avgHitWalk=").append(hitWalks == 0 ? 0 : (readWalkVisited.get() - readWalkMissVisited.get()) / hitWalks)
                             .append(" avgMissWalk=").append(readWalkMisses.get() == 0 ? 0 : readWalkMissVisited.get() / readWalkMisses.get())
+                            .append("\n  sharing:  objects versioned/eligible=").append(versionedObjects).append('/').append(eligibleObjects)
+                            .append(" arrays versioned/eligible=").append(versionedArrays).append('/').append(eligibleArrays)
                             .append("\n  working:  fieldHits=").append(workingFieldHits)
                             .append(" arrayHits=").append(workingArrayHits)
                             .append(" arrayBuilds=").append(workingArrayBuilds)

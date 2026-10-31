@@ -138,6 +138,7 @@ import com.oracle.truffle.espresso.jni.JniVersion;
 import com.oracle.truffle.espresso.jni.NativeEnv;
 import com.oracle.truffle.espresso.jni.NoSafepoint;
 import com.oracle.truffle.espresso.jvmti.JVMTI;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.meta.MetaUtil;
@@ -930,7 +931,7 @@ public final class VM extends NativeEnv {
             context.seam(SyncOp.WAIT_RELEASE, self);
             // wait() releases the monitor here: publish this thread's view to the lock, as a normal
             // monitorexit would (the internal release fires no bytecode hook otherwise).
-            if (context.isVersionedMemoryEnabled()) {
+            if (context.isVersionedMemoryEnabled() && Versioning.isSynchronisingOnSharedObject(self)) {
                 context.getMemoryModel().onMonitorExit(self);
             }
             if (context.getEspressoEnv().EnableManagement) {
@@ -941,7 +942,7 @@ public final class VM extends NativeEnv {
             }
             // wait() re-acquired the monitor on wake: merge whatever the notifier published, as a
             // normal monitorenter would (the internal re-lock fires no bytecode hook otherwise).
-            if (context.isVersionedMemoryEnabled()) {
+            if (context.isVersionedMemoryEnabled() && Versioning.isSynchronisingOnSharedObject(self)) {
                 context.getMemoryModel().onMonitorEnter(self);
             }
             // Seam after the model's acquire, as in monitorEnter, so it observes what the acquire brought in.
