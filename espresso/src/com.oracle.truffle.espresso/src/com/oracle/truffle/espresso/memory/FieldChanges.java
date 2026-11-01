@@ -59,6 +59,11 @@ final class FieldChanges implements ObjectChanges {
         return values;
     }
 
+    /** Write these values into {@code w}'s working values (its written marks are left alone). */
+    void applyTo(WorkingObject w) {
+        w.values.putAll(values);
+    }
+
     @Override
     public ObjectChanges createFoldWithOlder(ObjectChanges older) {
         Map<Field, Object> folded = new HashMap<>(((FieldChanges) older).values);

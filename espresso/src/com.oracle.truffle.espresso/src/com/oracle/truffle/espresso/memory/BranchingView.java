@@ -26,11 +26,13 @@ import java.lang.Integer;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Queue;
@@ -338,8 +340,8 @@ public final class BranchingView implements MemoryView {
             return ConflictingLocations.NONE;
         }
 
-        Set<Commit> mineOnly = new HashSet<>();
-        Set<Commit> theirsOnly = new HashSet<>();
+        List<Commit> mineOnly = new ArrayList<>();
+        List<Commit> theirsOnly = new ArrayList<>();
 
         Queue<Commit> heads = new PriorityQueue<>((c1, c2) ->
             Integer.compare(c2.generation(), c1.generation())
@@ -406,33 +408,49 @@ public final class BranchingView implements MemoryView {
             });
         }
 
-        Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
-        Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
-        for (Commit c : theirsOnly) {
-            c.changes().forEach((number, changes) -> {
-                if (changes instanceof FieldChanges f) {
-                    Set<Field> mine = mineFieldsWritten.getOrDefault(number, Set.of());
-                    WorkingObject w = workingObjects.get(number);
-                    for (Field field : f.fields()) {
-                        // the merge brought in an updated value of a field
-                        // so drop our working value
-                        if (w != null) {
-                            w.values.remove(field);
+        // First check for conflicts between mine and theirs
+        if (!mineFieldsWritten.isEmpty() || !mineArrayWritten.isEmpty()) {
+            Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
+            Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
+            for (Commit c : theirsOnly) {
+                c.changes().forEach((number, changes) -> {
+                    if (changes instanceof FieldChanges f) {
+                        Set<Field> mine = mineFieldsWritten.get(number);
+                        if (mine != null) {
+                            for (Field field : f.fields()) {
+                                if (mine.contains(field)) {
+                                    fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                                }
+                            }
                         }
-                        if (mine.contains(field)) {
-                            fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                    } else if (changes instanceof ArrayChanges a) {
+                        BitSet mine = mineArrayWritten.get(number);
+                        if (mine != null && mine.intersects(a.written())) {
+                            BitSet both = (BitSet) mine.clone();
+                            both.and(a.written());
+                            arrayConflicts.computeIfAbsent(number, n -> new BitSet()).or(both);
                         }
                     }
+                });
+            }
+            if (!fieldConflicts.isEmpty() || !arrayConflicts.isEmpty()) {
+                return new ConflictingLocations(fieldConflicts, arrayConflicts);
+            }
+        }
+
+        // No conflicts, so install their writes into our working. This is instead
+        // of dropping the value and picking up the new values on read
+        for (Commit c : theirsOnly.reversed()) {
+            c.changes().forEach((number, changes) -> {
+                if (changes instanceof FieldChanges f) {
+                    WorkingObject w = workingObjects.get(number);
+                    if (w != null) {
+                        f.applyTo(w);
+                    }
                 } else if (changes instanceof ArrayChanges a) {
-                    // We clear out only the arrays that were changed by theirs
-                    // we could instead change just the elements and keep what
-                    // didn't change but it's a bit more work
-                    workingArrays.remove(number);
-                    BitSet mine = mineArrayWritten.get(number);
-                    if (mine != null && mine.intersects(a.written())) {
-                        BitSet both = (BitSet) mine.clone();
-                        both.and(a.written());
-                        arrayConflicts.computeIfAbsent(number, n -> new BitSet()).or(both);
+                    WorkingArray working = workingArrays.get(number);
+                    if (working != null) {
+                        a.applyTo(working.storage);
                     }
                 }
             });
@@ -447,10 +465,6 @@ public final class BranchingView implements MemoryView {
             // history
             compress();
             return ConflictingLocations.NONE;
-        }
-
-        if (!fieldConflicts.isEmpty() || !arrayConflicts.isEmpty()) {
-            return new ConflictingLocations(fieldConflicts, arrayConflicts);
         }
 
         // create the merge of the parents
