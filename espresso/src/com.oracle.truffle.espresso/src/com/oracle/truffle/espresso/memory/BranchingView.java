@@ -75,6 +75,9 @@ public final class BranchingView implements MemoryView {
     // commits visited by the last read walk, to pre-size the next walk's visited set
     private int lastWalkSize = 16;
 
+    // commits coloured by the last merge walk, to pre-size the next walk's colour map
+    private int lastMergeWalkSize = 16;
+
     public BranchingView(Supplier<SyncState> bindState, AtomicLong deadObjectCount) {
         this.bindState = bindState;
         this.deadObjectCount = deadObjectCount;
@@ -206,25 +209,36 @@ public final class BranchingView implements MemoryView {
         );
 
         visited.add(state().commit);
-        heads.add(state().commit);
 
         Object found = null;
-        while (!heads.isEmpty() && found == null) {
-            Commit current = heads.remove();
-
+        Commit current = state().commit;
+        while (current != null) {
             // parents before changes: a concurrent absorb swaps changes then parents, so new parents
             // guarantee the new changes are seen too
             Set<Commit> parents = current.parents();
             found = getValueWrittenBy(current, number, field);
-            if (found == null) {
-                // add the parents to explore if we haven't already
-                // seen them
-                for (Commit p : parents) {
-                    if (visited.add(p)) {
-                        heads.add(p);
-                    }
+            if (found != null) {
+                break;
+            }
+
+            // Most of the history is chains of single parent commits, so if
+            // there is only one parent and it is at least as new as anything
+            // waiting in the queue, it would be the next thing popped anyway.
+            // In that case just step straight to it and skip the queue.
+            boolean isOnlyParent = parents.size() == 1;
+            Commit next = null;
+            for (Commit p : parents) {
+                if (!visited.add(p)) {
+                    continue;
+                }
+                boolean isNextToPop = heads.isEmpty() || p.generation() >= heads.peek().generation();
+                if (isOnlyParent && isNextToPop) {
+                    next = p;
+                } else {
+                    heads.add(p);
                 }
             }
+            current = next != null ? next : heads.poll();
         }
 
         lastWalkSize = visited.size();
@@ -330,7 +344,7 @@ public final class BranchingView implements MemoryView {
         Queue<Commit> heads = new PriorityQueue<>((c1, c2) ->
             Integer.compare(c2.generation(), c1.generation())
         );
-        Map<Commit, CommitColour> colours = new HashMap<>();
+        Map<Commit, CommitColour> colours = HashMap.newHashMap(lastMergeWalkSize);
 
         heads.add(myHead);
         heads.add(theirHead);
@@ -373,6 +387,7 @@ public final class BranchingView implements MemoryView {
                 }
             }
         }
+        lastMergeWalkSize = colours.size();
 
         if (theirsOnly.isEmpty()) {
             // they are an ancestor of us so nothing to do
