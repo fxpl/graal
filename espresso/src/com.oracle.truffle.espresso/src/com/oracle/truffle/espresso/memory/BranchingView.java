@@ -22,6 +22,7 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.lang.Integer;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.util.ArrayDeque;
@@ -31,6 +32,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
@@ -71,9 +74,6 @@ public final class BranchingView implements MemoryView {
 
     // commits visited by the last read walk, to pre-size the next walk's visited set
     private int lastWalkSize = 16;
-
-    // commits in the last history collected by merge, to pre-size the next merge's history sets
-    private int lastHistorySize = 16;
 
     public BranchingView(Supplier<SyncState> bindState, AtomicLong deadObjectCount) {
         this.bindState = bindState;
@@ -192,31 +192,34 @@ public final class BranchingView implements MemoryView {
     private Object getLastCommittedValue(ObjectNumber number, Field field) {
         // The pathological cases are:
         // 1) the value is all the way back at version 0
-        // 2) we have multiple candidates
 
-        // Walk back from the current head through the commit history to find
-        // the most recent committed value for this location.
-        // We know that there is a unique last writer for each location in the
-        // commit history as the merges are conflict free.
-        // We have to make sure to find the latest committed value for this location.
+        // Walk back through the DAG, building a priority queue where
+        // the newest commits are to be explored first, the moment we find a
+        // value, we know we have the newest value, if we don't find a value
+        // we add the parents to the queue (in priority order).
+        // We are assuming that this a conflict free graph, so there can
+        // only be _one_ latest value
 
         Set<Commit> visited = HashSet.newHashSet(lastWalkSize);
-        Set<Commit> candidates = new HashSet<>();
-        Deque<Commit> heads = new ArrayDeque<>();
+        Queue<Commit> heads = new PriorityQueue<Commit>((commit1, commit2) ->
+            Integer.compare(commit2.generation(), commit1.generation())
+        );
 
         visited.add(state().commit);
         heads.add(state().commit);
 
-        while (!heads.isEmpty()) {
-            Commit current = heads.pop();
+        Object found = null;
+        while (!heads.isEmpty() && found == null) {
+            Commit current = heads.remove();
 
-            // once we find a candidate stop
-            if (getValueWrittenBy(current, number, field) != null) {
-                candidates.add(current);
-            } else {
+            // parents before changes: a concurrent absorb swaps changes then parents, so new parents
+            // guarantee the new changes are seen too
+            Set<Commit> parents = current.parents();
+            found = getValueWrittenBy(current, number, field);
+            if (found == null) {
                 // add the parents to explore if we haven't already
                 // seen them
-                for (Commit p : current.parents()) {
+                for (Commit p : parents) {
                     if (visited.add(p)) {
                         heads.add(p);
                     }
@@ -225,53 +228,8 @@ public final class BranchingView implements MemoryView {
         }
 
         lastWalkSize = visited.size();
-        VersioningStats.onReadWalk(visited.size(), !candidates.isEmpty());
-
-        // If no candidates were found, no commit wrote the field.
-        if (candidates.isEmpty()) {
-            return null;
-        }
-
-        // There was only one candidate commit, so just return that
-        if (candidates.size() == 1) {
-            return getValueWrittenBy(candidates.iterator().next(), number, field);
-        }
-
-        // We had multiple candidates, so now we need to work out which is the only
-        // one which isn't shadowed
-        Set<Commit> alive = new HashSet<>(candidates);
-        visited.clear();
-
-        for (Commit c : candidates) {
-
-            // If we have already visited this commit then we already know about
-            // it and it's ancestry, so continue to the next candidate
-            if (!alive.contains(c)) {
-                continue;
-            }
-
-            // Otherwise, start walking back from c to build up a collection of
-            // nodes visible from c. We reuse visited so eventually we will
-            // end up with just one commit not visible from the others
-            Deque<Commit> stack = new ArrayDeque<>(c.parents());
-            while (!stack.isEmpty()) {
-                Commit x = stack.pop();
-
-                // already went this way
-                if (!visited.add(x)) {
-                    continue;
-                }
-
-                // x is an ancestor of c so it can't be newest
-                alive.remove(x);
-                stack.addAll(x.parents());
-            }
-        }
-
-        // alive now holds exactly one commit: the newest writer
-        assert alive.size() == 1;
-        Commit latest = alive.iterator().next();
-        return getValueWrittenBy(latest, number, field);
+        VersioningStats.onReadWalk(visited.size(), found != null);
+        return found;
     }
 
     /** Turn staged writes into a new commit on this thread's branch (no-op if nothing staged). */
@@ -333,19 +291,21 @@ public final class BranchingView implements MemoryView {
         setHead(forkPoint);
     }
 
+    private enum CommitColour { MINE, THEIRS, BOTH; };
+
     /**
      * Merge the branch tip {@code otherHead} into this branch. Returns a set of locations written
      * by both branches (empty means none). Staging must be empty — every sync action (lock
      * acquire, join, volatile read/write) commits first.
      */
-    ConflictingLocations merge(Commit otherHead) {
+    ConflictingLocations merge(Commit theirHead) {
         assert writtenObjects.isEmpty();
-
-        if (state().commit == null) {
+        Commit myHead = state().commit;
+        if (myHead == null) {
             // either pickup the other commit as head (there is nothing to merge)
             // or the genuinely is no operation to do here
-            if (otherHead != null) {
-                setHead(otherHead);
+            if (theirHead != null) {
+                setHead(theirHead);
                 // our working objects and arrays were read from version 0 alone, so may be stale against
                 // the adopted history; with no head we have never committed, so none has written marks
                 workingObjects.clear();
@@ -354,55 +314,70 @@ public final class BranchingView implements MemoryView {
             return ConflictingLocations.NONE;
         }
 
-        if (otherHead == null) {
+        if (theirHead == null) {
             // just return as there is nothing to merge
             return ConflictingLocations.NONE;
         }
 
-        if (otherHead == state().commit) {
+        if (theirHead == myHead) {
             // no point in doing this
             return ConflictingLocations.NONE;
         }
 
-        // walk back from head and otherHead and collect their history
-        Set<Commit> headsHistory = HashSet.newHashSet(lastHistorySize);
-        Deque<Commit> heads = new ArrayDeque<>();
+        Set<Commit> mineOnly = new HashSet<>();
+        Set<Commit> theirsOnly = new HashSet<>();
 
-        headsHistory.add(state().commit);
-        heads.add(state().commit);
+        Queue<Commit> heads = new PriorityQueue<>((c1, c2) ->
+            Integer.compare(c2.generation(), c1.generation())
+        );
+        Map<Commit, CommitColour> colours = new HashMap<>();
 
-        while(!heads.isEmpty()) {
-            Commit current = heads.pop();
-            for (Commit p : current.parents()) {
-                if (headsHistory.add(p)) {
+        heads.add(myHead);
+        heads.add(theirHead);
+
+        colours.put(myHead, CommitColour.MINE);
+        colours.put(theirHead, CommitColour.THEIRS);
+
+        int nonBoth = 2;
+        while (nonBoth > 0) {
+            Commit head = heads.remove();
+            CommitColour colour = colours.get(head);
+
+            // We've now visited everything below this node,
+            // So we now know the colour of the node and whose
+            // change set the changes belong to
+            if (colour == CommitColour.MINE) {
+                mineOnly.add(head);
+                nonBoth--;
+            } else if (colour == CommitColour.THEIRS) {
+                theirsOnly.add(head);
+                nonBoth--;
+            }
+
+            for (Commit p : head.parents()) {
+                CommitColour parentColour = colours.get(p);
+
+                if (parentColour == null) {
+                    colours.put(p, colour);
                     heads.add(p);
+
+                    if (colour != CommitColour.BOTH) {
+                        nonBoth++;
+                    }
+                } else if (parentColour != colour) {
+                    colours.put(p, CommitColour.BOTH);
+
+                    if (parentColour != CommitColour.BOTH) {
+                        nonBoth--;
+                    }
                 }
             }
         }
 
-        if (headsHistory.contains(otherHead)) {
-            // their head is already in our history, so nothing to merge
+        if (theirsOnly.isEmpty()) {
+            // they are an ancestor of us so nothing to do
             return ConflictingLocations.NONE;
         }
-
-        Set<Commit> otherHeadsHistory = HashSet.newHashSet(lastHistorySize);
-
-        otherHeadsHistory.add(otherHead);
-        heads.add(otherHead);
-
-        while(!heads.isEmpty()) {
-            Commit current = heads.pop();
-            for (Commit p : current.parents()) {
-                if (otherHeadsHistory.add(p)) {
-                    heads.add(p);
-                }
-            }
-        }
-
-        lastHistorySize = Math.max(headsHistory.size(), otherHeadsHistory.size());
-
-        Set<Commit> mineOnly = new HashSet<>(headsHistory);
-        mineOnly.removeAll(otherHeadsHistory);
 
         Map<ObjectNumber, Set<Field>> mineFieldsWritten = new HashMap<>();
         Map<ObjectNumber, BitSet> mineArrayWritten = new HashMap<>();
@@ -416,8 +391,6 @@ public final class BranchingView implements MemoryView {
             });
         }
 
-        Set<Commit> theirsOnly = new HashSet<>(otherHeadsHistory);
-        theirsOnly.removeAll(headsHistory);
         Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
         Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
         for (Commit c : theirsOnly) {
@@ -450,15 +423,9 @@ public final class BranchingView implements MemoryView {
             });
         }
 
-        if (otherHeadsHistory.contains(state().commit)) {
-            // if this head is already some ancestor of the other head, then
-            // there is no point in merging (it would not be wrong it just creates
-            // extra edges and makes reference counting compaction harder)
-            // so instead just fast-forward the head to the other head.
-            // This can happen when we take a lock we just released
-            // but have committed nothing in the mean time but the lock has
-            // moved on by some other thread
-            setHead(otherHead);
+        if (mineOnly.isEmpty()) {
+            // we are some ancestor of theirs, so just fast forward
+            setHead(theirHead);
 
             // At this point, we have also moved our head, so try to compress
             // the history as we dropped a ref to part way through the
@@ -472,7 +439,7 @@ public final class BranchingView implements MemoryView {
         }
 
         // create the merge of the parents
-        Commit mergeCommit = Commit.merge(state().commit, otherHead);
+        Commit mergeCommit = Commit.merge(state().commit, theirHead);
         VersioningStats.onMerge();
         setHead(mergeCommit);
         return ConflictingLocations.NONE;

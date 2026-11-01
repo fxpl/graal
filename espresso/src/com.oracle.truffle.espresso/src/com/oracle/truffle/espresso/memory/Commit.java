@@ -57,6 +57,12 @@ public class Commit {
     private volatile Map<ObjectNumber, ObjectChanges> changes;
     private volatile Set<Commit> parents;
 
+    // A counter of the generation in which this commit was created
+    // relative to its parents, for working out relative orders with
+    // ancestors when we walk the graph
+    // ancestors are always strictly lower in generation.
+    private final int generation;
+
     private volatile int refCount;
     private static final AtomicIntegerFieldUpdater<Commit> REF_COUNT =
                 AtomicIntegerFieldUpdater.newUpdater(Commit.class, "refCount");
@@ -65,9 +71,13 @@ public class Commit {
         this.changes = new HashMap<>(changes);
         this.parents = Set.copyOf(parents);
 
+        int generation = 0;
         for (Commit p : this.parents) {
             p.incRef();
+            generation = Math.max(generation, p.generation);
         }
+
+        this.generation = generation + 1;
     }
 
     /** A thread's first commit: no parents. (One-parent commits come from {@link #extend}.) */
@@ -102,6 +112,10 @@ public class Commit {
 
     public Set<Commit> parents() {
         return parents;
+    }
+
+    public int generation() {
+        return generation;
     }
 
     public void incRef() {
