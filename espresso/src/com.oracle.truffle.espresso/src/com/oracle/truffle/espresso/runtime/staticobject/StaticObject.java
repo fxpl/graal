@@ -75,7 +75,7 @@ public class StaticObject implements TruffleObject, Cloneable {
     private EspressoLock lockOrForeignMarker;
 
     // The sync states of the object monitor and all the volatile fields
-    // Initialised lazily toa void creating one for shared a objects not used for sync actions
+    // Initialised lazily to avoid creating one for shared a object not used for sync actions
     private volatile ObjectSyncState objectSyncState;
 
     private boolean eligibleForVersioning;
