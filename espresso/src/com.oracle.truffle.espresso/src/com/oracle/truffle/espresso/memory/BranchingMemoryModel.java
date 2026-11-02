@@ -93,7 +93,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     public BranchingMemoryModel(EspressoContext context) {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
-        VersioningStats.arm();
+        VersioningStats.arm("branching");
     }
 
     @Override
@@ -114,7 +114,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // register that when the thread object is cleaned away, we also drop
         // the reference count of the terminalHead.
         // The Commit itself will be GC'd but we need to not lose transitive refCounts
-        cleaner.register(thread, () -> { if (state.commit != null) state.commit.decRef(); });
+        cleaner.register(thread, () -> state.set(null));
         return state;
     }
 
@@ -126,6 +126,8 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public void activate() {
         active = true;
+        // this thread goes on to run main, which never passes through onThreadStart
+        currentView().activate();
     }
 
     private BranchingView currentView() {
@@ -190,7 +192,8 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onThreadStart() {
-        // start has nothing to do, the parent put the commit in the thread sync state slot
+        // the parent put the commit in the thread sync state slot, so the view only needs activating
+        currentView().activate();
     }
 
     @Override

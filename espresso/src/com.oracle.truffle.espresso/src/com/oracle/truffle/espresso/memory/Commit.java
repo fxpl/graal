@@ -40,7 +40,8 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
  * {@code changes} are empty), and any number once {@link #absorbAncestors} has compressed exclusive
  * ancestors into it.
  *
- * <p>Reference counted: heads, tips and child commits each hold a reference. A commit with a count
+ * <p>Reference counted: sync states (through {@link SyncState#set}) and child commits each hold a
+ * reference. A commit with a count
  * of 1 is exclusive to its one referrer and may be rewritten: {@link #extend} folds new writes into
  * an exclusive head, and {@link #absorbAncestors} pulls exclusive ancestors into a commit. A count
  * reaching 0 releases the commit's parents in turn ({@link #decRef}).
@@ -112,6 +113,11 @@ public class Commit {
 
     public Set<Commit> parents() {
         return parents;
+    }
+
+    /** This commit's changes to object {@code number}, or null if it did not change it. */
+    ObjectChanges changesTo(ObjectNumber number) {
+        return changes.get(number);
     }
 
     public int generation() {

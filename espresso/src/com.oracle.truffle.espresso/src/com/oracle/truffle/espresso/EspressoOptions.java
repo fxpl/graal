@@ -388,50 +388,6 @@ public final class EspressoOptions {
                     usageSyntax = "<path>") //
     public static final OptionKey<String> ScheduleFile = new OptionKey<>("");
 
-    /**
-     * History-collapsing (reclamation) policy. <b>Applies to {@code MemoryModel=linear} only</b>
-     * (ignored under {@code shared} and {@code branching}) — linear chains a version per write, so its
-     * history grows unboundedly and needs reclaiming; the branching backings do not (the dag shares an
-     * immutable commit graph; the epoch backing keeps only latest-per-location tables, bounded by the
-     * working set), so there is no version history for this to collapse. {@code OFF} keeps all history.
-     * <ul>
-     * <li>{@code THRESHOLD} reclaims every version older than the <em>furthest-behind live thread</em>
-     *     (the threshold {@code T = min} over live threads of their base) — cheap, but a thread parked
-     *     at a low base pins {@code [T, head]}, the interior no one reads.</li>
-     * <li>{@code SQUASH} uses the <em>full set</em> of live bases: per location it keeps only the
-     *     version each base resolves to, plus the head — reclaiming the interior {@code THRESHOLD}
-     *     cannot, at the cost of scanning versions against the base set.</li>
-     * </ul>
-     */
-    public enum MemoryModelCollapseMode {
-        OFF,
-        THRESHOLD,
-        SQUASH
-    }
-
-    private static final OptionType<MemoryModelCollapseMode> MEMORY_MODEL_COLLAPSE_OPTION_TYPE = new OptionType<>("MemoryModelCollapse", new Function<String, MemoryModelCollapseMode>() {
-        @Override
-        public MemoryModelCollapseMode apply(String s) {
-            try {
-                return MemoryModelCollapseMode.valueOf(s.toUpperCase(Locale.ROOT));
-            } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("--java.MemoryModelCollapse: policy can be 'off', 'threshold' or 'squash'.");
-            }
-        }
-    });
-
-    @Option(help = "Applies to: linear only (branching keeps no collapsible version history). History reclamation on a cadence: 'off' (keep all history), 'threshold' (drop versions older than the furthest-behind live thread) or 'squash' (also drop the interior no live base resolves to). Ignored under shared/branching.", //
-                    category = OptionCategory.EXPERT, //
-                    stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "off|threshold|squash") //
-    public static final OptionKey<MemoryModelCollapseMode> MemoryModelCollapse = new OptionKey<>(MemoryModelCollapseMode.OFF, MEMORY_MODEL_COLLAPSE_OPTION_TYPE);
-
-    @Option(help = "Applies to: linear only. Cadence for MemoryModelCollapse: run a collapse once every N committing sync pushes (default 1000). Smaller = tighter memory, more collapse overhead.", //
-                    category = OptionCategory.EXPERT, //
-                    stability = OptionStability.EXPERIMENTAL, //
-                    usageSyntax = "<int>") //
-    public static final OptionKey<Integer> MemoryModelCollapseEvery = new OptionKey<>(1000);
-
     public enum VerifyMode {
         NONE,
         REMOTE, // Verifies all bytecodes not loaded by the bootstrap class loader.

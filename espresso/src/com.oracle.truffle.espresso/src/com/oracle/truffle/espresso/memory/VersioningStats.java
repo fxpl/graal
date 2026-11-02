@@ -34,11 +34,8 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Optional, host-side counters for the memory footprint of the version-controlled models, enabled by
  * the {@code SYNCSHARE_STATS} environment variable. The versioned structures (branching {@link Commit}
- * nodes and the DAG, linear {@link Version} chains, staging maps) live on the Espresso <em>runtime</em>
- * (host) heap, not the guest heap. These counters measure them directly. Without collapsing, "created"
- * counts are also the resident counts; with {@code --java.MemoryModelCollapse=threshold} the
- * {@code collapses}/{@code versionsDropped} counters report what was reclaimed (so resident linear
- * versions {@code ~= gVersions - versionsDropped}).
+ * nodes and the DAG or chain they form, staging maps) live on the Espresso <em>runtime</em>
+ * (host) heap, not the guest heap. These counters measure them directly.
  *
  * <p>When disabled (the default) every hook is a single {@code static final} boolean test that the
  * compiler folds away, so the speed benchmarks are unaffected. A summary is printed to host {@code
@@ -48,7 +45,7 @@ final class VersioningStats {
 
     static final boolean ENABLED = System.getenv("SYNCSHARE_STATS") != null;
 
-    // Branching.
+    // The commit history (both models).
     static final AtomicLong commits = new AtomicLong();        // commitStaging calls that committed something
                                                                 // (folded or not)
     static final AtomicLong committedChanges = new AtomicLong(); // staged writes committed, summed over commits
@@ -70,7 +67,7 @@ final class VersioningStats {
     static final AtomicLong cleanerRegistrations = new AtomicLong(); // objects registered with the purge Cleaner
     static final AtomicLong markedForPurging = new AtomicLong();     // ...of which the GC found dead (Cleaner ran)
     static final AtomicLong readWalks = new AtomicLong();       // reads not in staging that walked the commit history
-    static final AtomicLong readWalkMisses = new AtomicLong();  // ...of which found no committed value (ABSENT)
+    static final AtomicLong readWalkMisses = new AtomicLong();  // ...of which found no committed value (version 0)
     static final AtomicLong readWalkVisited = new AtomicLong(); // commits visited by all walks
     static final AtomicLong readWalkMissVisited = new AtomicLong(); // ...of which by walks that found nothing
     static final AtomicLong eligibleObjects = new AtomicLong();  // objects (not arrays) allocated eligible for versioning
@@ -82,11 +79,8 @@ final class VersioningStats {
     static final AtomicLong workingArrayBuilds = new AtomicLong(); // ...and that had to build it from the history
 
     // Linear.
-    static final AtomicLong gVersions = new AtomicLong();       // Version nodes ever appended to g
-    static final AtomicLong gLocations = new AtomicLong();      // distinct versioned locations in g
-    static final AtomicLong collapses = new AtomicLong();       // collapse() runs (--java.MemoryModelCollapse)
-    static final AtomicLong versionsDropped = new AtomicLong(); // Version nodes reclaimed by collapse
-                                                                // (resident ~= gVersions - versionsDropped)
+    static final AtomicLong pulls = new AtomicLong();           // pulls that moved the base to a newer head
+    static final AtomicLong pulledCommits = new AtomicLong();   // ...commits they walked and installed, summed
 
     // Both.
     static final AtomicLong peakStaging = new AtomicLong();     // largest staging map seen (residency)
@@ -96,13 +90,15 @@ final class VersioningStats {
     private static final Set<SyncState> syncStates = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     private static final AtomicBoolean ARMED = new AtomicBoolean();
+    private static volatile String modelName = ""; // the model that armed the dump, for its heading
 
     private VersioningStats() {
     }
 
     /** Register the shutdown dump once (called by a versioned model's constructor). No-op when disabled. */
-    static void arm() {
+    static void arm(String model) {
         if (ENABLED && ARMED.compareAndSet(false, true)) {
+            modelName = model;
             Runtime.getRuntime().addShutdownHook(new Thread(VersioningStats::dump, "versioning-stats-dump"));
         }
     }
@@ -221,21 +217,14 @@ final class VersioningStats {
         }
     }
 
-    static void onGVersion(int distinctLocations) {
+    static void onPull(int commitsWalked) {
         if (ENABLED) {
-            gVersions.incrementAndGet();
-            observe(gLocations, distinctLocations);
+            pulls.incrementAndGet();
+            pulledCommits.addAndGet(commitsWalked);
         }
     }
 
-    static void onCollapse(long dropped) {
-        if (ENABLED) {
-            collapses.incrementAndGet();
-            versionsDropped.addAndGet(dropped);
-        }
-    }
-
-    static void observeStaging(int size) {
+    static void observeStaging(long size) {
         if (ENABLED) {
             observe(peakStaging, size);
         }
@@ -282,7 +271,7 @@ final class VersioningStats {
         StringBuilder sb = new StringBuilder("[versioning-stats]");
         if (commits.get() > 0 || merges.get() > 0 || folds.get() > 0 || cleanerRegistrations.get() > 0) {
             long hitWalks = readWalks.get() - readWalkMisses.get();
-            sb.append(" branching")
+            sb.append(' ').append(modelName)
                             .append("\n  commits:  commits=").append(commits)
                             .append(" committedChanges=").append(committedChanges)
                             .append(" committedArrays=").append(committedArrays)
@@ -306,23 +295,18 @@ final class VersioningStats {
                             .append(" visited=").append(readWalkVisited)
                             .append(" missVisited=").append(readWalkMissVisited)
                             .append(" avgHitWalk=").append(hitWalks == 0 ? 0 : (readWalkVisited.get() - readWalkMissVisited.get()) / hitWalks)
-                            .append(" avgMissWalk=").append(readWalkMisses.get() == 0 ? 0 : readWalkMissVisited.get() / readWalkMisses.get())
-                            .append("\n  sharing:  objects versioned/eligible=").append(versionedObjects).append('/').append(eligibleObjects)
+                            .append(" avgMissWalk=").append(readWalkMisses.get() == 0 ? 0 : readWalkMissVisited.get() / readWalkMisses.get());
+            if (pulls.get() > 0) {
+                sb.append("\n  pulls:    pulls=").append(pulls)
+                                .append(" commits=").append(pulledCommits)
+                                .append(" avgCommits=").append(pulledCommits.get() / pulls.get());
+            }
+            sb.append("\n  sharing:  objects versioned/eligible=").append(versionedObjects).append('/').append(eligibleObjects)
                             .append(" arrays versioned/eligible=").append(versionedArrays).append('/').append(eligibleArrays)
                             .append("\n  working:  fieldHits=").append(workingFieldHits)
                             .append(" arrayHits=").append(workingArrayHits)
                             .append(" arrayBuilds=").append(workingArrayBuilds)
                             .append("\n  sync:    ").append(syncStateSummary());
-        }
-        if (gVersions.get() > 0) {
-            sb.append(" linear")
-                            .append("\n  g:        versions=").append(gVersions)
-                            .append(" locations=").append(gLocations);
-            if (collapses.get() > 0) {
-                sb.append("\n  collapse: collapses=").append(collapses)
-                                .append(" versionsDropped=").append(versionsDropped)
-                                .append(" resident~=").append(gVersions.get() - versionsDropped.get());
-            }
         }
         sb.append("\n  staging:  peak=").append(peakStaging);
         System.err.println(sb);

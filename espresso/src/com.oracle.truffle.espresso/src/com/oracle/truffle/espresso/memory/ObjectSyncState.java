@@ -43,9 +43,8 @@ public final class ObjectSyncState {
   }
 
   private static void release(SyncState s) {
-      if (s != null && s.commit != null) {
-          s.commit.decRef();
-          s.commit = null;
+      if (s != null) {
+          s.set(null);
       }
   }
 

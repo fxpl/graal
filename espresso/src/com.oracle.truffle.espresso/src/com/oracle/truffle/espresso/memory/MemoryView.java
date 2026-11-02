@@ -26,7 +26,7 @@ package com.oracle.truffle.espresso.memory;
  * A guest thread's state under the active Sync-as-Share model, created by that model
  * ({@link MemoryModel#newThreadView()}) and carried by the thread. Opaque outside the model: everything
  * about it, including a conflict waiting to be raised, is asked of the {@link MemoryModel} that made
- * it, which alone knows its concrete type ({@link BranchingView}, {@link LinearLocalView}).
+ * it, which alone knows its concrete type ({@link BranchingView}, {@link LinearView}).
  */
 public interface MemoryView {
 }

@@ -406,8 +406,8 @@ public final class InterpreterToVM extends ContextAccessImpl {
             contendedMonitorEnter(obj, meta, lock, context);
         }
         if (context.isVersionedMemoryEnabled() && Versioning.isSynchronisingOnSharedObject(obj)) {
-            // Sync-as-Share: lock = pull. After acquiring, import updates published to g by the previous
-            // holder's unlock and conflict-check this thread's staged writes. Folds away under shared;
+            // Sync-as-Share: lock = pull. After acquiring, bring in the previous holder's writes and
+            // conflict-check this thread's staged writes. Folds away under shared;
             // off during JDK bootstrap.
             context.getMemoryModel().onMonitorEnter(obj);
         }
@@ -452,8 +452,8 @@ public final class InterpreterToVM extends ContextAccessImpl {
         // detection) and, for the driver, controls order before the release takes effect.
         meta.getContext().seam(SyncOp.MONITOR_EXIT, obj);
         if (meta.getContext().isVersionedMemoryEnabled() && Versioning.isSynchronisingOnSharedObject(obj)) {
-            // Sync-as-Share: unlock = push. Publish this thread's view to g while still holding the
-            // lock (may raise a conflict). Folds away under shared; off during JDK bootstrap.
+            // Sync-as-Share: unlock = push. Push this thread's writes while still holding the lock (may
+            // raise a conflict). Folds away under shared; off during JDK bootstrap.
             meta.getContext().getMemoryModel().onMonitorExit(obj);
         }
         meta.getContext().getLanguage().getThreadLocalState().unblockContinuationSuspension();

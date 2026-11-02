@@ -37,21 +37,11 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * constant that is {@code false} under {@code --java.MemoryModel=shared}, so the entire hook folds
  * away and the compiled code is identical to stock Espresso.
  *
- * <p>The Linear version-controlled memory model (paper: Sync-as-Share, &sect;3.1/&sect;4.3) is
- * introduced at milestone M2 and will extend this interface with the ordinary field/array access
- * operations and the synchronisation actions of Table 1 (lock/unlock, spawn/join, start/end,
- * volatile read/write). M1 only establishes the seam and proves the {@code shared} control has zero
- * overhead.
+ * <p>The versioned models, {@link LinearMemoryModel} and {@link BranchingMemoryModel} (paper:
+ * Sync-as-Share), implement the ordinary field and array accesses and the synchronisation actions of
+ * Table 1 (lock/unlock, spawn/join, start/end, volatile read/write, class init).
  */
 public interface MemoryModel {
-
-    /**
-     * Sentinel returned by {@link #readField} when a location has no versioned value visible to the
-     * calling thread. The caller then reads through to the real heap (the pre-main heap is the
-     * implicit initial committed version). Distinct from every real value: boxed primitives and
-     * {@code StaticObject} (incl. {@code StaticObject.NULL}) are never {@code == ABSENT}.
-     */
-    Object ABSENT = new Object();
 
     /**
      * Whether this model changes shared-memory semantics. {@code false} for the stock
@@ -167,16 +157,16 @@ public interface MemoryModel {
      */
     void onMonitorEnter(StaticObject lock);
 
-    /** Monitor release. Linear: push. Branching: republish the holder's tip to {@code lock}'s state. */
+    /** Monitor release. Linear: push to the global history. Branching: push the holder's head to {@code lock}'s state. */
     void onMonitorExit(StaticObject lock);
 
     /**
      * Volatile read (the paper's {@code VolatileRead} rule). A volatile field is an <em>un-versioned</em>
      * cell {@code (value, commit)} kept beside the locks, not in the versioned heap: the value is a plain
      * slot, the commit carries the happens-before of the ordinary writes published alongside it. A read
-     * <em>acquires</em> — it pulls (Branching: merges the cell's commit; Linear: pulls {@code g}), which
-     * may raise a conflict on those ordinary writes — then returns the cell's value (or {@link #ABSENT}
-     * if never written, so the caller reads the heap default). A read publishes nothing.
+     * <em>acquires</em> — it pulls (Branching: merges the cell's commit; Linear: pulls the global history), which
+     * may raise a conflict on those ordinary writes — then returns the cell's value. A read publishes
+     * nothing.
      */
     Object onVolatileRead(StaticObject holder, Field field);
 
@@ -248,7 +238,7 @@ public interface MemoryModel {
      * The number of writes the calling thread's most recent acquire ({@link #onMonitorEnter} or
      * {@link #onThreadStart}) made visible to it: the total of the released writes of every release that
      * acquire brought in. At thread start that is everything the parent could see (branching) or
-     * everything in g (linear).
+     * everything in the global history (linear).
      * Read by the schedule explorer right after the acquire, for its {@code ACQUIRED(n)} tag. Returns
      * {@code 0} for {@link SharedMemoryModel} and whenever the calling thread has no view yet.
      */

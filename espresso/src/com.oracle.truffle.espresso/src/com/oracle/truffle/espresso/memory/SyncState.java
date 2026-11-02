@@ -23,12 +23,13 @@
 package com.oracle.truffle.espresso.memory;
 
 /**
- * The branching model's state for one synchronisation object (a lock, a volatile field, a class's
- * initialisation, or a thread being spawned): the commit last pushed to it, {@code null} until the
- * first push. A pull merges this commit into the acting thread; a push replaces it with the thread's
- * head. The commit is reference counted on the object's behalf. Accessed under the lock for locks, and
- * under {@code synchronized} on this object for volatiles and class init. (Linear keeps no per-object
- * state: communication is the single global {@code g}.)
+ * The state for one synchronisation object (a lock, a volatile field, a class's initialisation, a
+ * thread, or linear's global history): a commit, {@code null} until the first push. In branching a pull
+ * merges this commit into the acting thread and a push replaces it with the thread's head; a thread's
+ * own state holds its head. In linear every pull and push goes through the single global state, whose
+ * commit is the head of the chain, and a thread's own state holds the commit it is on. The commit is
+ * reference counted on the state's behalf, through {@link #set}. Accessed under the lock for locks, and
+ * under {@code synchronized} on this object otherwise.
  */
 public final class SyncState {
 
@@ -36,7 +37,8 @@ public final class SyncState {
         THREAD,
         CLASS_INIT,
         LOCK,
-        VOLATILE
+        VOLATILE,
+        GLOBAL
     }
 
     Commit commit;
@@ -45,5 +47,25 @@ public final class SyncState {
     public SyncState(Kind kind) {
         this.kind = kind;
         VersioningStats.onSyncStateCreated(this);
+    }
+
+    /**
+     * Point this state at {@code c} (or at nothing), taking this state's reference to it and releasing
+     * the one it held. The new reference is taken before the old one is released, so moving to a
+     * commit that the old one keeps alive never drops it to zero; setting the commit it already holds
+     * does nothing.
+     */
+    void set(Commit c) {
+        Commit old = commit;
+        if (c == old) {
+            return;
+        }
+        if (c != null) {
+            c.incRef();
+        }
+        commit = c;
+        if (old != null) {
+            old.decRef();
+        }
     }
 }

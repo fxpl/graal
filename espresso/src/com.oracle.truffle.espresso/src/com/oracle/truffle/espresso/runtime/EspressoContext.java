@@ -452,8 +452,7 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
 
             long initStartTimeNanos = System.nanoTime();
 
-            // Select the memory model (Sync-as-Share). SHARED is the stock identity; LINEAR arrives
-            // at milestone M2. The per-thread views and version history are not wired yet.
+            // Select the memory model (Sync-as-Share). SHARED is the stock identity.
             switch (getLanguage().getMemoryModelMode()) {
                 case SHARED:
                     this.memoryModel = SharedMemoryModel.INSTANCE;

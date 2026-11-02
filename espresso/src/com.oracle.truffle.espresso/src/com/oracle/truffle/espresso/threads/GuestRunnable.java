@@ -61,7 +61,8 @@ final class GuestRunnable implements Runnable {
             context.registerCurrentThread(thread);
             context.getVM().attachThread(Thread.currentThread());
             try {
-                // Sync-as-Share: thread start = pull g into this thread's view (cannot conflict).
+                // Sync-as-Share: thread start activates this thread's view (and, in linear, pulls; it
+                // cannot conflict). Must come before the thread runs any guest code.
                 if (context.isVersionedMemoryEnabled()) {
                     context.getMemoryModel().onThreadStart();
                 }

@@ -22,126 +22,33 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.lang.ref.Cleaner;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.oracle.truffle.espresso.EspressoOptions;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
-import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-// FieldLocation is in this package.
 
-/**
- * The Linear version-controlled memory model (paper &sect;3.1/&sect;4.3), ported from the {@code
- * gitmem} prototype's {@code linear::LinearMemoryModel}. All synchronisation actions communicate
- * through a single global history {@link GlobalHistory} {@code g}: {@code start}/{@code lock}
- * pull; {@code end}/{@code unlock} push. Ordinary reads/writes operate on the calling thread's
- * {@link LinearLocalView}. A conflict (an unseen update to a location this thread also changed)
- * surfaces at the synchronisation point as a guest exception.
- *
- * <p>Scope (M2): instance + static fields, monitor lock/unlock, thread start/end. Arrays, volatiles,
- * and spawn/join are M3. The single global history {@code g} is a {@link GlobalVersionStore}.
- */
 public final class LinearMemoryModel implements MemoryModel {
 
-    private final GlobalHistory global;
+    private final SyncState global = new SyncState(SyncState.Kind.GLOBAL);
+
     private final EspressoContext context;
     private volatile boolean active = false;
-    // Per-volatile-field lock making a volatile read's (pull, get-value) and a volatile write's
-    // (pull, set-value, push) atomic per field — the paper's pull-push is one action. Without it a
-    // reader could see a new volatile value while its pull missed the ordinary writes published with it
-    // (the publication window). The value itself is un-versioned (the physical slot); this lock only
-    // couples the value with the g pull/push. Keyed by FieldLocation.
-    private final Map<FieldLocation, Object> volatileLocks = new ConcurrentHashMap<>();
 
-    private Object volatileLock(FieldLocation loc) {
-        return volatileLocks.computeIfAbsent(loc, k -> new Object());
+    private final AtomicLong deadObjectCount;
+    private final Cleaner cleaner = Cleaner.create();
+
+    @Override
+    public Cleaner getCleaner() {
+        return cleaner;
     }
-
-    // History collapsing (--java.MemoryModelCollapse). When not OFF, every live thread's view is
-    // registered here so the collapse trigger can compute the threshold T = min over live bases; and
-    // a collapse runs once every {@code collapseEvery} sync pushes. All of this is skipped entirely
-    // (no registry, no counter) under OFF, so the default path is unchanged.
-    private final EspressoOptions.MemoryModelCollapseMode collapseMode;
-    private final int collapseEvery;
-    private final Set<LinearLocalView> liveViews;
-    private final AtomicLong pushes = new AtomicLong();
-    private static final boolean COLLAPSE_DEBUG = System.getenv("SYNCSHARE_COLLAPSE_DEBUG") != null;
 
     public LinearMemoryModel(EspressoContext context) {
         this.context = context;
-        this.global = new GlobalVersionStore();
-        this.collapseMode = context.getLanguage().getMemoryModelCollapseMode();
-        this.collapseEvery = Math.max(1, context.getLanguage().getMemoryModelCollapseEvery());
-        this.liveViews = collapseMode == EspressoOptions.MemoryModelCollapseMode.OFF ? null : ConcurrentHashMap.newKeySet();
-        VersioningStats.arm();
-    }
-
-    private boolean collapsing() {
-        return collapseMode != EspressoOptions.MemoryModelCollapseMode.OFF;
-    }
-
-    /**
-     * On a cadence of {@link #collapseEvery} sync pushes, reclaim history. Both policies read live
-     * bases lock-free, which is safe: a base only advances, so a stale-low read is conservative
-     * (retains more, never less). Threads at base 0 are excluded — having observed no commit, every
-     * read resolves to ABSENT (heap read-through) regardless of {@code g}, so they pin no version.
-     * (Guest runtimes park idle daemon threads — Reference Handler, Finalizer, Cleaner — at base 0;
-     * without this they would clamp reclamation to genesis.)
-     *
-     * <ul>
-     *   <li>{@code THRESHOLD}: collapse below {@code T = min} live base — drops the settled tail.</li>
-     *   <li>{@code SQUASH}: pass the full live-base set — also drops the interior no base resolves to
-     *       (the case a parked-low thread defeats under {@code THRESHOLD}).</li>
-     * </ul>
-     */
-    private void maybeCollapse() {
-        if (!collapsing() || (pushes.incrementAndGet() % collapseEvery) != 0) {
-            return;
-        }
-        if (collapseMode == EspressoOptions.MemoryModelCollapseMode.SQUASH) {
-            long[] bases = liveBasesPastGenesis();
-            if (COLLAPSE_DEBUG) {
-                System.err.println("[collapse-debug] squash liveViews=" + liveViews.size() + " bases=" + bases.length + " head=" + global.currentCounter());
-            }
-            if (bases.length > 0) {
-                global.squash(bases);
-            }
-            return;
-        }
-        long threshold = Long.MAX_VALUE;
-        for (LinearLocalView v : liveViews) {
-            long b = v.base();
-            if (b > 0 && b < threshold) {
-                threshold = b;
-            }
-        }
-        if (COLLAPSE_DEBUG) {
-            System.err.println("[collapse-debug] threshold=" + threshold + " liveViews=" + liveViews.size() + " head=" + global.currentCounter());
-        }
-        if (threshold != Long.MAX_VALUE) {   // at least one live thread past genesis
-            global.collapse(threshold);
-        }
-    }
-
-    /** Distinct-not-required snapshot of live thread bases {@code > 0}, for {@code SQUASH}. */
-    private long[] liveBasesPastGenesis() {
-        java.util.ArrayList<Long> bases = new java.util.ArrayList<>();
-        for (LinearLocalView v : liveViews) {
-            long b = v.base();
-            if (b > 0) {
-                bases.add(b);
-            }
-        }
-        long[] out = new long[bases.size()];
-        for (int i = 0; i < out.length; i++) {
-            out[i] = bases.get(i);
-        }
-        return out;
+        this.deadObjectCount = new AtomicLong(0);
+        VersioningStats.arm("linear");
     }
 
     @Override
@@ -151,11 +58,25 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        LinearLocalView view = new LinearLocalView();
-        if (collapsing()) {
-            liveViews.add(view);
+        return new LinearView(this::bindThreadSyncState, global, deadObjectCount);
+    }
+
+    private SyncState newThreadSyncState(StaticObject thread) {
+        SyncState state = new SyncState(SyncState.Kind.THREAD);
+        context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);
+        cleaner.register(thread, () -> state.set(null));
+        return state;
+    }
+
+    private SyncState bindThreadSyncState() {
+        StaticObject thread = context.getCurrentPlatformThread();
+        assert thread != null : "binding a view before its thread is registered";
+
+        Object existing = context.getMeta().java_lang_Thread_0syncState.getHiddenObject(thread);
+        if (existing instanceof SyncState s) {
+            return s;
         }
-        return view;
+        return newThreadSyncState(thread);
     }
 
     @Override
@@ -166,206 +87,176 @@ public final class LinearMemoryModel implements MemoryModel {
     @Override
     public void activate() {
         active = true;
+        // this thread goes on to run main, which never passes through onThreadStart
+        currentView().activate();
     }
 
-    private LinearLocalView currentView() {
-        // Safe: under linear the thread-local view was created by this model's newThreadView().
-        return (LinearLocalView) context.getLanguage().getThreadLocalState().getMemoryView();
+    // This is a record so that we don't accidentally capture the StaticObject
+    // if we did that, we could end up keeping a reference to the StaticObject in the cleaner
+    // register set and then the object could never be GC'd
+    record MarkObjectForPurging(ObjectNumber objectNumber, AtomicLong deadObjectCount) implements Runnable {
+        @Override
+        public void run() {
+            objectNumber.setDead();
+            deadObjectCount.incrementAndGet();
+            VersioningStats.onMarkedForPurging();
+        }
+    }
+
+    private void registerForCleaning(StaticObject object) {
+        if (!object.isCleanerRegistered()) {
+            object.markCleanerRegistered();
+            cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), deadObjectCount));
+            VersioningStats.onCleanerRegistered();
+        }
+    }
+
+    private LinearView currentView() {
+        return (LinearView) context.getLanguage().getThreadLocalState().getMemoryView();
     }
 
     @Override
     public int pendingWriteCount() {
         MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
-        return v == null ? 0 : ((LinearLocalView) v).stagingSize();
+        return v == null ? 0 : ((LinearView) v).stagingSize();
     }
 
-    @Override
-    public int acquiredWriteCount() {
-        // A monitor acquire or thread start is exactly one pull, so the last pull's count is the answer.
-        MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
-        return v == null ? 0 : ((LinearLocalView) v).lastPulledWrites();
-    }
-
-    private Object read(FieldLocation loc) {
-        LinearLocalView view = currentView();
-        Object staged = view.getStaged(loc);
-        if (staged != null) {
-            return staged;
+    private void handleConflicts(ConflictingLocations conflicts, LinearView view, String at) {
+        if (conflicts.isEmpty()) {
+            return;
         }
-        // Value visible at this thread's base, or ABSENT. The shared genesis (version-0) cache is consulted
-        // by readField after this (fields only), not here — array materialisation also calls read() and must
-        // not pick up field-genesis values.
-        return global.snapshot(loc, view.base());
-    }
-
-    private void write(FieldLocation loc, Object value) {
-        currentView().stage(loc, value);
-    }
-
-    // Every sync action pushes or pulls through these.
-    private FieldLocation pushG(LinearLocalView view) {
-        return global.push(view);
-    }
-
-    private FieldLocation pullG(LinearLocalView view) {
-        return global.pull(view);
+        // Record a pending conflict, raised as a guest exception at the next safe point (top of the
+        // bytecode loop, past any just-executed monitorexit). We must NOT throw from inside the monitor
+        // op itself: that corrupts the synchronized block's exit machinery. The user code location is
+        // taken now, while the thread is still at the action.
+        view.setPendingConflict(new ConflictReport(conflicts, at, UserCodeLocation.current(context)));
     }
 
     @Override
     public Object readField(StaticObject holder, Field field) {
-        FieldLocation loc = new FieldLocation(holder.getObjectNumber(), field);
-        Object v = read(loc);
-        // Not staged and no committed version: version 0, the field's raw slot
-        return v != MemoryModel.ABSENT ? v : field.getRawValue(holder);
+        if (holder.hasVersionedWrite()) {
+            return currentView().readField(holder, field);
+        }
+        // no thread has written the object, so every field is at version 0, its raw slot
+        return field.getRawValue(holder);
     }
 
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
-        write(new FieldLocation(holder.getObjectNumber(), field), value);
+        currentView().stageField(holder, field, value);
         holder.markHasVersionedWrite();
+        registerForCleaning(holder);
     }
 
     @Override
     public Object arrayForRead(StaticObject array, int from, int to) {
-        throw unsupportedArrayAccess(array);
+        return currentView().arrayForRead(array, from, to);
     }
 
     @Override
     public Object arrayForWrite(StaticObject array, int from, int to) {
-        throw unsupportedArrayAccess(array);
-    }
-
-    private static RuntimeException unsupportedArrayAccess(StaticObject array) {
-        Meta meta = array.getKlass().getMeta();
-        throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
-                        "Sync-as-Share: the linear model does not version arrays (" + array.getKlass().getExternalName() + ")");
+        Object storage = currentView().arrayForWrite(array, from, to);
+        array.markHasVersionedWrite();
+        registerForCleaning(array);
+        return storage;
     }
 
     @Override
     public void onThreadStart() {
-        // Fresh thread with empty staging: pull can never conflict.
-        LinearLocalView view = currentView();
-        FieldLocation conflict = pullG(view);
-        assert conflict == null : "starting thread cannot conflict";
+        LinearView view = currentView();
+        view.activate();
+        ConflictingLocations conflicts = view.pull();
+        assert conflicts.isEmpty() : "starting thread cannot conflict";
     }
 
     @Override
     public void onThreadEnd() {
-        LinearLocalView view = currentView();
-        FieldLocation conflict = pushG(view);
-        if (conflict != null) {
-            // OPEN DESIGN DECISION (worklist: "what a failed thread end does"). Thread end now runs at
-            // the real end of the thread (ThreadAccess.setTerminateStatusAndNotify), where no guest frame
-            // can catch a conflict, and what should happen is not designed yet. Fail loudly until it is.
-            String msg = "Sync-as-Share conflict in a thread's final push, on " + describe(conflict)
+        ConflictingLocations conflicts = currentView().push();
+        if (!conflicts.isEmpty()) {
+            String msg = new ConflictReport(conflicts, "thread end", UserCodeLocation.current(context)).message()
                             + ": UNDESIGNED — what a failed thread end does is an open design decision";
             System.err.println("[sync-as-share] " + msg);
             assert false : msg;
         }
-        if (collapsing()) {
-            // Retire this view before collapsing so the ending thread no longer clamps the threshold.
-            liveViews.remove(view);
-            maybeCollapse();
-        }
+    }
+
+    @Override
+    public void onJoin(StaticObject joined) {
+        // The joined thread pushed everything to the global history at its end, so a join is a pull
+        LinearView view = currentView();
+        handleConflicts(view.pull(), view, "join");
     }
 
     @Override
     public void onSpawn(StaticObject childThread) {
-        // Parent publishes its view so the child (which pulls on start) inherits the parent's writes.
-        // Linear communicates through the single global g, not per-child, so childThread is unused.
-        LinearLocalView view = currentView();
-        handleConflict(pushG(view), view, "spawn");
-        maybeCollapse();
+        LinearView view = currentView();
+        handleConflicts(view.push(), view, "spawn");
     }
 
     @Override
     public void onMonitorEnter(StaticObject lock) {
-        // Linear communicates through the single global g, not per-lock, so the lock object is unused.
-        LinearLocalView view = currentView();
-        handleConflict(pullG(view), view, MemoryModel.monitorSyncLabel(context, lock, true));
+        LinearView view = currentView();
+        handleConflicts(view.pull(), view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
 
     @Override
     public void onMonitorExit(StaticObject lock) {
-        LinearLocalView view = currentView();
-        handleConflict(pushG(view), view, MemoryModel.monitorSyncLabel(context, lock, false));
-        maybeCollapse();
+        LinearView view = currentView();
+        handleConflicts(view.push(), view, MemoryModel.monitorSyncLabel(context, lock, false));
     }
 
     @Override
     public Object onVolatileRead(StaticObject holder, Field field) {
-        // Volatile read (paper VolatileRead): acquire by pulling g, then read the field's un-versioned
-        // value straight from its physical slot. The value is not in g (volatiles are race-free — their
-        // value is not versioned); Linear's single global g is the acquire for every volatile field, so
-        // the pull imports/conflict-checks the reader's ordinary staged writes. The pull happens-before
-        // the read, and every writer's field.set happens-before its push, so g's lock carries the value.
-        LinearLocalView view = currentView();
-        Object value;
-        synchronized (volatileLock(new FieldLocation(holder.getObjectNumber(), field))) {
-            handleConflict(pullG(view), view, "volatile read");
-            value = field.getRawValue(holder);   // atomic with the pull (see volatileLocks)
+        LinearView view = currentView();
+        SyncState state = holder.volatileSyncState(field);
+        ConflictingLocations conflict;
+        Object value = null;
+        synchronized (state) {
+            conflict = view.pull();
+            if (conflict.isEmpty()) {
+                value = field.getRawValue(holder);
+            }
         }
+        handleConflicts(conflict, view, "volatile read");
         return value;
     }
 
     @Override
     public void onVolatileWrite(StaticObject holder, Field field, Object value) {
-        // Volatile write (paper VolatileWrite): acquire (pull g), set the un-versioned value in the
-        // physical slot, then release (push the ordinary staged writes to g). The value never enters g,
-        // so concurrent volatile writes to the same field are not a data race — last writer wins on the
-        // slot; only the ordinary writes published alongside are conflict-checked, by the pull/push.
-        LinearLocalView view = currentView();
-        synchronized (volatileLock(new FieldLocation(holder.getObjectNumber(), field))) {
-            handleConflict(pullG(view), view, "volatile write (acquire)");
-            field.setRawValue(holder, value);   // the value is un-versioned, in the raw slot
-            handleConflict(pushG(view), view, "volatile write (release)");
+        LinearView view = currentView();
+        SyncState state = holder.volatileSyncState(field);
+        ConflictingLocations conflict;
+        synchronized (state) {
+            conflict = view.push();
+            if (conflict.isEmpty()) {
+                field.setRawValue(holder, value);
+            }
         }
-        maybeCollapse();
+        handleConflicts(conflict, view, "volatile write");
     }
 
     @Override
     public void onClassInitialized(ObjectKlass klass) {
-        // Class-init release: push the initializer's staged writes to g.
-        LinearLocalView view = currentView();
-        handleConflict(pullG(view), view, "class init");
-        handleConflict(pushG(view), view, "class init");
-        maybeCollapse();
+        // Class-init release: a push to the global history, which pulls first and is atomic under the
+        // global lock, so it needs no lock of the class's own
+        LinearView view = currentView();
+        handleConflicts(view.push(), view, "class init");
     }
 
     @Override
     public void onClassInitUse(ObjectKlass klass) {
-        // Class-init acquire: pull g, no push. Linear's single g carries every class's init.
-        LinearLocalView view = currentView();
-        handleConflict(pullG(view), view, "class init");
-    }
-
-    private void handleConflict(FieldLocation conflict, LinearLocalView view, String at) {
-        if (conflict == null) {
-            return;
-        }
-        // Record a pending conflict; it is raised as a guest exception at the next safe point (the top
-        // of the bytecode loop, past any just-executed monitorexit). (A thread's final push does not come
-        // here: see onThreadEnd.) We must NOT throw from inside the monitor op itself: that corrupts
-        // the synchronized block's exit machinery (the implicit exception-path monitorexit re-runs).
-        // `at` names the synchronization point that caught it, plus the guest site, for diagnosis.
-        ConflictingLocations locations = new ConflictingLocations(Map.of(conflict.holder(), Set.of(conflict.field())), Map.of());
-        view.setPendingConflict(new ConflictReport(locations, at, UserCodeLocation.current(context)));
-        // Recover the view so it stays consistent if the conflict is caught and execution continues.
-        view.clearStaging();
-        view.advanceBase(global.currentCounter());
+        // Class-init acquire: a pull from the global history, which carries every class's init
+        LinearView view = currentView();
+        handleConflicts(view.pull(), view, "class init");
     }
 
     @Override
     public boolean hasPendingConflict(MemoryView view) {
-        return ((LinearLocalView) view).hasPendingConflict();
+        return ((LinearView) view).hasPendingConflict();
     }
 
     @Override
     public ConflictReport takePendingConflict(MemoryView view) {
-        return ((LinearLocalView) view).takePendingConflict();
-    }
-
-    private static String describe(FieldLocation loc) {
-        return loc.field().getDeclaringKlass().getName() + "." + loc.field().getName();
+        return ((LinearView) view).takePendingConflict();
     }
 }

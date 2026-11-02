@@ -65,6 +65,15 @@ public final class BranchingView implements MemoryView {
 
     private ConflictReport pendingConflict; // found by a synchronisation action, raised at the next safe point
 
+    // Set when the thread starts (or, for the thread that runs main, when versioning is turned on).
+    // A read before then would see version 0 regardless of what the thread inherits, so accesses
+    // assert it.
+    private boolean activated;
+
+    void activate() {
+        activated = true;
+    }
+
     // A count shared between views for the number of objects purged,
     // and the number we saw at the last purge
     private final AtomicLong deadObjectCount;
@@ -97,16 +106,7 @@ public final class BranchingView implements MemoryView {
     }
 
     private void setHead(Commit c) {
-        // we must increment before decrementing, otherwise in the case that
-        // head == c, we would make the refcount 0 briefly which would represent
-        // an unreferenced node
-        if (c != null) {
-            c.incRef();
-        }
-        if (state().commit != null) {
-            state().commit.decRef();
-        }
-        state().commit = c;
+        state().set(c);
     }
 
     boolean stagingEmpty() {
@@ -158,6 +158,7 @@ public final class BranchingView implements MemoryView {
     }
 
     void stageField(StaticObject holder, Field field, Object value) {
+        assert activated : "a write through a view before its thread started";
         WorkingObject w = workingObject(holder);
         w.values.put(field, value);
         if (w.written.add(field)) {
@@ -171,6 +172,7 @@ public final class BranchingView implements MemoryView {
 
     /** The value this view sees: its working value, else the committed value, else version 0 (the raw slot). */
     Object readField(StaticObject holder, Field field) {
+        assert activated : "a read through a view before its thread started";
         WorkingObject w = workingObject(holder);
         Object value = w.values.get(field);
         if (value != null) {
@@ -186,11 +188,6 @@ public final class BranchingView implements MemoryView {
         }
         w.values.put(field, value);
         return value;
-    }
-
-    // The value commit c wrote to field of object number, or null if c did not write it
-    private static Object getValueWrittenBy(Commit c, ObjectNumber number, Field field) {
-        return c.changes().get(number) instanceof FieldChanges f ? f.get(field) : null;
     }
 
     /** The newest committed value of the field under the head, else null. The head must be set. */
@@ -218,7 +215,7 @@ public final class BranchingView implements MemoryView {
             // parents before changes: a concurrent absorb swaps changes then parents, so new parents
             // guarantee the new changes are seen too
             Set<Commit> parents = current.parents();
-            found = getValueWrittenBy(current, number, field);
+            found = current.changesTo(number) instanceof FieldChanges f ? f.get(field) : null;
             if (found != null) {
                 break;
             }
@@ -297,14 +294,6 @@ public final class BranchingView implements MemoryView {
         if (state().commit != null) {
             state().commit.compressUpwards();
         }
-    }
-
-    /**
-     * Fork: start this (fresh) view at another branch's tip. Called on the child at start with the tip
-     * the parent captured at spawn (spawn: child adopts parent).
-     */
-    void adopt(Commit forkPoint) {
-        setHead(forkPoint);
     }
 
     private enum CommitColour { MINE, THEIRS, BOTH; };
@@ -489,17 +478,11 @@ public final class BranchingView implements MemoryView {
 
     // commit, compress and push the changes to the 'to' location
     void push(SyncState to) {
-        if (to.commit != null) {
-            to.commit.decRef();
-        }
-
+        // let go of to's reference first: if to held our head, the head may then be exclusive to us
+        // and the commit can fold into it
+        to.set(null);
         commit();
-
-        if (state().commit != null) {
-            state().commit.incRef();
-        }
-
-        to.commit = state().commit;
+        to.set(state().commit);
     }
 
     // Walk back to the root and find the ordered writes to the array reachable
@@ -548,7 +531,7 @@ public final class BranchingView implements MemoryView {
 
         // Apply each commit's writes in that order, so the last writer of each index wins.
         for (Commit c : order) {
-            if (c.changes().get(number) instanceof ArrayChanges changes) {
+            if (c.changesTo(number) instanceof ArrayChanges changes) {
                 changes.applyTo(storage);
             }
         }
@@ -557,6 +540,7 @@ public final class BranchingView implements MemoryView {
     }
 
     public Object arrayForRead(StaticObject array, int from, int to) {
+        assert activated : "a read through a view before its thread started";
         WorkingArray working = workingArrays.get(array.getObjectNumber());
         if (working != null) {
             VersioningStats.onWorkingArrayHit();
@@ -570,6 +554,7 @@ public final class BranchingView implements MemoryView {
     }
 
     public Object arrayForWrite(StaticObject array, int from, int to) {
+        assert activated : "a write through a view before its thread started";
         WorkingArray working = workingArrays.get(array.getObjectNumber());
         if (working == null) {
             working = createArrayFromHistory(array);
