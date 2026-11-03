@@ -173,10 +173,11 @@ public final class LinearMemoryModel implements MemoryModel {
     public void onThreadEnd() {
         ConflictingLocations conflicts = currentView().push();
         if (!conflicts.isEmpty()) {
-            String msg = new ConflictReport(conflicts, "thread end", UserCodeLocation.current(context)).message()
-                            + ": UNDESIGNED — what a failed thread end does is an open design decision";
-            System.err.println("[sync-as-share] " + msg);
-            assert false : msg;
+            // A dying thread cannot act on a conflict, so it is left on the thread for every joiner to
+            // raise; the conflicting writes never reach the global history. Set before the thread
+            // terminates, so before any joiner is woken.
+            ConflictReport report = new ConflictReport(conflicts, "thread end", UserCodeLocation.current(context));
+            context.getMeta().java_lang_Thread_0threadEndConflict.setHiddenObject(context.getCurrentPlatformThread(), report, true);
         }
     }
 
@@ -185,6 +186,12 @@ public final class LinearMemoryModel implements MemoryModel {
         // The joined thread pushed everything to the global history at its end, so a join is a pull
         LinearView view = currentView();
         handleConflicts(view.pull(), view, "join");
+
+        // unless its push conflicted, then the joiner takes responsibility for the conflict
+        Object threadEndConflict = context.getMeta().java_lang_Thread_0threadEndConflict.getHiddenObject(joined, true);
+        if (threadEndConflict instanceof ConflictReport report) {
+            view.setPendingConflict(report);
+        }
     }
 
     @Override
@@ -213,9 +220,7 @@ public final class LinearMemoryModel implements MemoryModel {
         Object value = null;
         synchronized (state) {
             conflict = view.pull();
-            if (conflict.isEmpty()) {
-                value = field.getRawValue(holder);
-            }
+            value = field.getRawValue(holder);
         }
         handleConflicts(conflict, view, "volatile read");
         return value;

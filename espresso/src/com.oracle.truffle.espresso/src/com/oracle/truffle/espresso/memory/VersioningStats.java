@@ -22,28 +22,37 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.StringJoiner;
 import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Optional, host-side counters for the memory footprint of the version-controlled models, enabled by
- * the {@code SYNCSHARE_STATS} environment variable. The versioned structures (branching {@link Commit}
- * nodes and the DAG or chain they form, staging maps) live on the Espresso <em>runtime</em>
- * (host) heap, not the guest heap. These counters measure them directly.
+ * the {@code SYNCSHARE_STATS} or {@code SYNCSHARE_STATS_JSON} environment variable. The versioned
+ * structures (branching {@link Commit} nodes and the DAG or chain they form, staging maps) live on the
+ * Espresso <em>runtime</em> (host) heap, not the guest heap. These counters measure them directly.
  *
  * <p>When disabled (the default) every hook is a single {@code static final} boolean test that the
- * compiler folds away, so the speed benchmarks are unaffected. A summary is printed to host {@code
- * stderr} at JVM shutdown (armed once by whichever versioned model is constructed).
+ * compiler folds away, so the speed benchmarks are unaffected. At JVM shutdown (armed once by whichever
+ * versioned model is constructed) a summary is printed to host {@code stderr} if {@code SYNCSHARE_STATS}
+ * is set, and the raw counters are written as JSON to the file {@code SYNCSHARE_STATS_JSON} names.
  */
 final class VersioningStats {
 
-    static final boolean ENABLED = System.getenv("SYNCSHARE_STATS") != null;
+    private static final boolean TEXT = System.getenv("SYNCSHARE_STATS") != null;
+    private static final String JSON_PATH = System.getenv("SYNCSHARE_STATS_JSON");
+    static final boolean ENABLED = TEXT || JSON_PATH != null;
 
     // The commit history (both models).
     static final AtomicLong commits = new AtomicLong();        // commitStaging calls that committed something
@@ -239,7 +248,7 @@ final class VersioningStats {
 
     // For each kind of sync state still alive: how many, how many hold a commit, and how many distinct
     // commits those are; then the distinct commits pinned across all kinds.
-    private static String syncStateSummary() {
+    private static Map<String, Long> syncStateCounts() {
         // clear sync states of objects that have died, so "live" counts only those still reachable
         System.gc();
         Map<SyncState.Kind, int[]> counts = new EnumMap<>(SyncState.Kind.class);
@@ -256,10 +265,15 @@ final class VersioningStats {
                 }
             }
         }
-        StringBuilder sb = new StringBuilder();
-        counts.forEach((kind, n) -> sb.append(' ').append(kind.name().toLowerCase())
-                        .append("=").append(n[0]).append('/').append(n[1]).append('/').append(held.getOrDefault(kind, Set.of()).size()));
-        return sb.append(" pinnedCommits=").append(pinned.size()).append(" (live/holding/distinct)").toString();
+        Map<String, Long> sync = new LinkedHashMap<>();
+        counts.forEach((kind, n) -> {
+            String name = kind.name().toLowerCase();
+            sync.put(name + ".live", (long) n[0]);
+            sync.put(name + ".holding", (long) n[1]);
+            sync.put(name + ".distinct", (long) held.getOrDefault(kind, Set.of()).size());
+        });
+        sync.put("pinnedCommits", (long) pinned.size());
+        return sync;
     }
 
     /** Commit nodes ever created: every commit that did not fold, plus every merge commit. */
@@ -267,48 +281,99 @@ final class VersioningStats {
         return commits.get() - folds.get() + merges.get();
     }
 
+    private static Map<String, Long> section(Map<String, Map<String, Long>> sections, String name) {
+        return sections.computeIfAbsent(name, n -> new LinkedHashMap<>());
+    }
+
     private static void dump() {
-        StringBuilder sb = new StringBuilder("[versioning-stats]");
+        // The raw counters by section, in print order: both the text summary and the JSON are printed
+        // from this, so they cannot drift apart
+        Map<String, Map<String, Long>> sections = new LinkedHashMap<>();
+        // Values derived from the counters: text only, so averages over runs are taken of the counters
+        Map<String, Map<String, Long>> derived = new HashMap<>();
+
         if (commits.get() > 0 || merges.get() > 0 || folds.get() > 0 || cleanerRegistrations.get() > 0) {
+            Map<String, Long> c = section(sections, "commits");
+            c.put("commits", commits.get());
+            c.put("committedChanges", committedChanges.get());
+            c.put("committedArrays", committedArrays.get());
+            c.put("committedArrayElements", committedArrayElements.get());
+            c.put("merges", merges.get());
+            c.put("folds", folds.get());
+
+            Map<String, Long> n = section(sections, "nodes");
+            n.put("created", nodesCreated());
+            n.put("absorbed", absorbed.get());
+            n.put("released", released.get());
+            section(derived, "nodes").put("live", nodesCreated() - absorbed.get() - released.get());
+
+            Map<String, Long> d = section(sections, "dead");
+            d.put("cleanerRegistrations", cleanerRegistrations.get());
+            d.put("markedForPurging", markedForPurging.get());
+            d.put("purgedFields", purgedFields.get());
+            d.put("purgedArrays", purgedArrays.get());
+            d.put("purgeRuns", purgeRuns.get());
+            d.put("drainedStagedFields", drainedStagedFields.get());
+            d.put("drainedArrays", drainedArrays.get());
+            d.put("drainedArrayElements", drainedArrayElements.get());
+
+            Map<String, Long> r = section(sections, "reads");
+            r.put("walks", readWalks.get());
+            r.put("misses", readWalkMisses.get());
+            r.put("visited", readWalkVisited.get());
+            r.put("missVisited", readWalkMissVisited.get());
             long hitWalks = readWalks.get() - readWalkMisses.get();
-            sb.append(' ').append(modelName)
-                            .append("\n  commits:  commits=").append(commits)
-                            .append(" committedChanges=").append(committedChanges)
-                            .append(" committedArrays=").append(committedArrays)
-                            .append(" committedArrayElements=").append(committedArrayElements)
-                            .append(" merges=").append(merges)
-                            .append(" folds=").append(folds)
-                            .append("\n  nodes:    created=").append(nodesCreated())
-                            .append(" absorbed=").append(absorbed)
-                            .append(" released=").append(released)
-                            .append(" live=").append(nodesCreated() - absorbed.get() - released.get())
-                            .append("\n  dead:     cleanerRegistrations=").append(cleanerRegistrations)
-                            .append(" markedForPurging=").append(markedForPurging)
-                            .append(" purgedFields=").append(purgedFields)
-                            .append(" purgedArrays=").append(purgedArrays)
-                            .append(" purgeRuns=").append(purgeRuns)
-                            .append(" drainedStagedFields=").append(drainedStagedFields)
-                            .append(" drainedArrays=").append(drainedArrays)
-                            .append(" drainedArrayElements=").append(drainedArrayElements)
-                            .append("\n  reads:    walks=").append(readWalks)
-                            .append(" misses=").append(readWalkMisses)
-                            .append(" visited=").append(readWalkVisited)
-                            .append(" missVisited=").append(readWalkMissVisited)
-                            .append(" avgHitWalk=").append(hitWalks == 0 ? 0 : (readWalkVisited.get() - readWalkMissVisited.get()) / hitWalks)
-                            .append(" avgMissWalk=").append(readWalkMisses.get() == 0 ? 0 : readWalkMissVisited.get() / readWalkMisses.get());
+            section(derived, "reads").put("avgHitWalk", hitWalks == 0 ? 0 : (readWalkVisited.get() - readWalkMissVisited.get()) / hitWalks);
+            section(derived, "reads").put("avgMissWalk", readWalkMisses.get() == 0 ? 0 : readWalkMissVisited.get() / readWalkMisses.get());
+
             if (pulls.get() > 0) {
-                sb.append("\n  pulls:    pulls=").append(pulls)
-                                .append(" commits=").append(pulledCommits)
-                                .append(" avgCommits=").append(pulledCommits.get() / pulls.get());
+                Map<String, Long> p = section(sections, "pulls");
+                p.put("pulls", pulls.get());
+                p.put("commits", pulledCommits.get());
+                section(derived, "pulls").put("avgCommits", pulledCommits.get() / pulls.get());
             }
-            sb.append("\n  sharing:  objects versioned/eligible=").append(versionedObjects).append('/').append(eligibleObjects)
-                            .append(" arrays versioned/eligible=").append(versionedArrays).append('/').append(eligibleArrays)
-                            .append("\n  working:  fieldHits=").append(workingFieldHits)
-                            .append(" arrayHits=").append(workingArrayHits)
-                            .append(" arrayBuilds=").append(workingArrayBuilds)
-                            .append("\n  sync:    ").append(syncStateSummary());
+
+            Map<String, Long> s = section(sections, "sharing");
+            s.put("objects.versioned", versionedObjects.get());
+            s.put("objects.eligible", eligibleObjects.get());
+            s.put("arrays.versioned", versionedArrays.get());
+            s.put("arrays.eligible", eligibleArrays.get());
+
+            Map<String, Long> w = section(sections, "working");
+            w.put("fieldHits", workingFieldHits.get());
+            w.put("arrayHits", workingArrayHits.get());
+            w.put("arrayBuilds", workingArrayBuilds.get());
+
+            sections.put("sync", syncStateCounts());
         }
-        sb.append("\n  staging:  peak=").append(peakStaging);
-        System.err.println(sb);
+        section(sections, "staging").put("peak", peakStaging.get());
+
+        if (TEXT) {
+            StringBuilder sb = new StringBuilder("[versioning-stats] ").append(modelName);
+            sections.forEach((name, counters) -> {
+                sb.append("\n  ").append(String.format("%-9s", name + ":"));
+                counters.forEach((k, v) -> sb.append(' ').append(k).append('=').append(v));
+                derived.getOrDefault(name, Map.of()).forEach((k, v) -> sb.append(' ').append(k).append('=').append(v));
+            });
+            System.err.println(sb);
+        }
+        if (JSON_PATH != null) {
+            try {
+                Files.writeString(Path.of(JSON_PATH), toJson(sections));
+            } catch (IOException e) {
+                System.err.println("[versioning-stats] could not write " + JSON_PATH + ": " + e);
+            }
+        }
+    }
+
+    // Keys are our own identifiers and values are numbers, so nothing needs escaping
+    private static String toJson(Map<String, Map<String, Long>> sections) {
+        StringBuilder sb = new StringBuilder("{\n  \"model\": \"").append(modelName).append('"');
+        sections.forEach((name, counters) -> {
+            StringJoiner fields = new StringJoiner(", ", "{", "}");
+            counters.forEach((k, v) -> fields.add("\"" + k + "\": " + v));
+            sb.append(",\n  \"").append(name).append("\": ").append(fields);
+        });
+        return sb.append("\n}\n").toString();
     }
 }

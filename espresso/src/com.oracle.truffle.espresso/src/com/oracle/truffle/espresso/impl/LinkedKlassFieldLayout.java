@@ -228,6 +228,7 @@ final class LinkedKlassFieldLayout {
                                         new HiddenField(Names.HIDDEN_parkLock, Types.java_lang_Object, VersionRange.ALL, ACC_FINAL),
                                         new HiddenField(Names.HIDDEN_scopedValueCache),
                                         new HiddenField(Names.HIDDEN_syncState),
+                                        new HiddenField(Names.HIDDEN_threadEndConflict),
 
                                         // Only used for j.l.management bookkeeping.
                                         new HiddenField(Names.HIDDEN_pendingMonitor),

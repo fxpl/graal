@@ -1025,6 +1025,7 @@ public class EspressoSymbols {
         public static final Symbol<Name> HIDDEN_parkLock = SYMBOLS.putName("0parkLock");
         public static final Symbol<Name> HIDDEN_hostThread = SYMBOLS.putName("0hostThread");
         public static final Symbol<Name> HIDDEN_syncState = SYMBOLS.putName("0syncState");
+        public static final Symbol<Name> HIDDEN_threadEndConflict = SYMBOLS.putName("0threadEndConflict");
         public static final Symbol<Name> HIDDEN_espressoManaged = SYMBOLS.putName("0espressoManaged");
         public static final Symbol<Name> HIDDEN_toNativeLock = SYMBOLS.putName("0toNativeLock");
         public static final Symbol<Name> HIDDEN_interrupted = SYMBOLS.putName("0interrupted");
