@@ -30,6 +30,9 @@ package com.oracle.truffle.espresso.memory;
  * commit is the head of the chain, and a thread's own state holds the commit it is on. The commit is
  * reference counted on the state's behalf, through {@link #set}. Accessed under the lock for locks, and
  * under {@code synchronized} on this object otherwise.
+ *
+ * <p>With {@code --java.BranchingAncestry=clocks}, branching also keeps a {@link VectorClock} over the
+ * commit's history here ({@link VectorClockBranchingView}); otherwise {@code clock} stays null.
  */
 public final class SyncState {
 
@@ -43,6 +46,7 @@ public final class SyncState {
 
     Commit commit;
     final Kind kind;
+    VectorClock clock; // branching with clocks only; null until its first commit, read and written by VectorClockBranchingView
 
     public SyncState(Kind kind) {
         this.kind = kind;

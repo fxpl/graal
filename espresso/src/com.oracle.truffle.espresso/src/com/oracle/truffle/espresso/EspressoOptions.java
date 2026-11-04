@@ -324,6 +324,34 @@ public final class EspressoOptions {
     public static final OptionKey<MemoryModelMode> MemoryModel = new OptionKey<>(MemoryModelMode.SHARED, MEMORY_MODEL_OPTION_TYPE);
 
     /**
+     * How the Branching model answers "is this commit already in that history?" when it merges.
+     * {@code GENERATIONS} walks both histories down from the two heads in generation order (git's
+     * merge-base colouring). {@code CLOCKS} keeps a vector clock on every sync state and answers it with
+     * one comparison per commit. Same semantics; a different trade of walk time against clock memory.
+     */
+    public enum BranchingAncestryMode {
+        GENERATIONS,
+        CLOCKS
+    }
+
+    private static final OptionType<BranchingAncestryMode> BRANCHING_ANCESTRY_OPTION_TYPE = new OptionType<>("BranchingAncestry", new Function<String, BranchingAncestryMode>() {
+        @Override
+        public BranchingAncestryMode apply(String s) {
+            try {
+                return BranchingAncestryMode.valueOf(s.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("--java.BranchingAncestry: can be 'generations' or 'clocks'.");
+            }
+        }
+    });
+
+    @Option(help = "How the Branching memory model finds each side's own commits when it merges: 'generations' (walk both histories in generation order) or 'clocks' (a vector clock on every sync state). Only used with --java.MemoryModel=branching.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "generations|clocks") //
+    public static final OptionKey<BranchingAncestryMode> BranchingAncestry = new OptionKey<>(BranchingAncestryMode.GENERATIONS, BRANCHING_ANCESTRY_OPTION_TYPE);
+
+    /**
      * Schedule exploration mode. Independent of {@link #MemoryModel}: the scheduler observes (and, in
      * later slices, controls) the order threads pass through synchronization seams, whereas the memory
      * model decides visibility. {@code TRACE} logs every seam as it fires (observation only, no change

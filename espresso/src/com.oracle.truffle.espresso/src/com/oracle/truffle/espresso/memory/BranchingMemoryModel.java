@@ -23,8 +23,10 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.oracle.truffle.espresso.EspressoOptions;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
@@ -90,10 +92,15 @@ public final class BranchingMemoryModel implements MemoryModel {
         }
     }
 
+    // --java.BranchingAncestry=clocks: every view is a VectorClockBranchingView, which keeps a vector
+    // clock on each sync state and uses it to find each side's own commits when it merges
+    private final boolean clocks;
+
     public BranchingMemoryModel(EspressoContext context) {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
-        VersioningStats.arm("branching");
+        this.clocks = context.getEnv().getOptions().get(EspressoOptions.BranchingAncestry) == EspressoOptions.BranchingAncestryMode.CLOCKS;
+        VersioningStats.arm(clocks ? "branching (clocks)" : "branching");
     }
 
     @Override
@@ -101,7 +108,13 @@ public final class BranchingMemoryModel implements MemoryModel {
         return true;
     }
 
+    // each clock view's slot in the vector clocks
+    private final AtomicInteger nextViewIndex = new AtomicInteger();
+
     public MemoryView newThreadView() {
+        if (clocks) {
+            return new VectorClockBranchingView(this::bindThreadSyncState, deadObjectCount, nextViewIndex.getAndIncrement());
+        }
         return new BranchingView(this::bindThreadSyncState, deadObjectCount);
     }
 

@@ -51,8 +51,14 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  *
  * <p>Not thread-safe, and does not need to be: a view is owned by one guest thread. Commits are
  * immutable {@link Commit} nodes shared across views (safe publication via final fields).
+ *
+ * <p>Finding each side's own commits when merging is the one thing that differs between ways of
+ * answering "is this commit in that history?". This class walks both histories in generation order;
+ * {@link VectorClockBranchingView} overrides the package-private hooks ({@link #nextCommit},
+ * {@link #mergeCommit}, {@link #divergence}, {@link #tookIn}, {@link #pushedTo}) to answer it with
+ * vector clocks.
  */
-public final class BranchingView implements MemoryView {
+public class BranchingView implements MemoryView {
 
     // This thread's branch, shared with its Thread object. Null until first use: the view can be created
     // during VM bootstrap, before the Thread exists. Never read directly, always through state().
@@ -95,7 +101,7 @@ public final class BranchingView implements MemoryView {
     }
 
     /** This thread's sync state, bound on first use. */
-    private SyncState state() {
+    SyncState state() {
         SyncState s = unboundOrState;
         if (s == null) {
             s = bindState.get();
@@ -292,7 +298,28 @@ public final class BranchingView implements MemoryView {
         VersioningStats.observeStaging(fields + arrayElements);
         VersioningStats.onCommit(fields, arrays, arrayElements);
 
-        setHead(state().commit == null ? Commit.first(changes) : state().commit.extend(changes));
+        setHead(nextCommit(state().commit, changes));
+    }
+
+    /**
+     * The commit that records {@code changes} on top of {@code head} ({@code null} before the first
+     * commit): a new commit, or {@code head} itself when the changes fold into it.
+     */
+    Commit nextCommit(Commit head, Map<ObjectNumber, ObjectChanges> changes) {
+        return head == null ? Commit.first(changes) : head.extend(changes);
+    }
+
+    /** A merge commit of this view's head {@code mine} and {@code theirs}. */
+    Commit mergeCommit(Commit mine, Commit theirs) {
+        return Commit.merge(mine, theirs);
+    }
+
+    /** Called once this view's head has taken in {@code from}'s history: adopted, fast-forwarded or merged. */
+    void tookIn(SyncState from) {
+    }
+
+    /** Called once a push has pointed {@code to} at this view's head. */
+    void pushedTo(SyncState to) {
     }
 
     /** Shallow compression from this thread's head (no-op if it has no head yet). */
@@ -305,18 +332,20 @@ public final class BranchingView implements MemoryView {
     private enum CommitColour { MINE, THEIRS, BOTH; };
 
     /**
-     * Merge the branch tip {@code otherHead} into this branch. Returns a set of locations written
-     * by both branches (empty means none). Staging must be empty — every sync action (lock
-     * acquire, join, volatile read/write) commits first.
+     * Merge {@code from}'s commit into this branch. Returns a set of locations written by both
+     * branches (empty means none). Staging must be empty — every sync action (lock acquire, join,
+     * volatile read/write) commits first.
      */
-    ConflictingLocations merge(Commit theirHead) {
+    ConflictingLocations merge(SyncState from) {
         assert stagingEmpty() : "merging with uncommitted writes";
         Commit myHead = state().commit;
+        Commit theirHead = from.commit;
         if (myHead == null) {
             // either pickup the other commit as head (there is nothing to merge)
             // or the genuinely is no operation to do here
             if (theirHead != null) {
                 setHead(theirHead);
+                tookIn(from);
                 // our working objects and arrays were read from version 0 alone, so may be stale against
                 // the adopted history; with no head we have never committed, so none has written marks
                 workingObjects.clear();
@@ -337,7 +366,22 @@ public final class BranchingView implements MemoryView {
 
         List<Commit> mineOnly = new ArrayList<>();
         List<Commit> theirsOnly = new ArrayList<>();
+        divergence(from, myHead, theirHead, mineOnly, theirsOnly);
 
+        if (theirsOnly.isEmpty()) {
+            // they are an ancestor of us so nothing to do
+            return ConflictingLocations.NONE;
+        }
+
+        return mergeDiverged(from, theirHead, mineOnly, theirsOnly);
+    }
+
+    /**
+     * Fill {@code mineOnly} with the commits in {@code myHead}'s history that are not in {@code
+     * theirHead}'s, and {@code theirsOnly} with the reverse, each newest first (by generation).
+     * {@code from} is the sync state holding {@code theirHead}.
+     */
+    void divergence(SyncState from, Commit myHead, Commit theirHead, List<Commit> mineOnly, List<Commit> theirsOnly) {
         Queue<Commit> heads = new PriorityQueue<>((c1, c2) ->
             Integer.compare(c2.generation(), c1.generation())
         );
@@ -385,12 +429,11 @@ public final class BranchingView implements MemoryView {
             }
         }
         lastMergeWalkSize = colours.size();
+    }
 
-        if (theirsOnly.isEmpty()) {
-            // they are an ancestor of us so nothing to do
-            return ConflictingLocations.NONE;
-        }
-
+    // The merge once each side's own commits are known: check for conflicts, install their writes, then
+    // fast-forward or make a merge commit
+    private ConflictingLocations mergeDiverged(SyncState from, Commit theirHead, List<Commit> mineOnly, List<Commit> theirsOnly) {
         Map<ObjectNumber, Set<Field>> mineFieldsWritten = new HashMap<>();
         Map<ObjectNumber, BitSet> mineArrayWritten = new HashMap<>();
         for (Commit c : mineOnly) {
@@ -454,6 +497,7 @@ public final class BranchingView implements MemoryView {
         if (mineOnly.isEmpty()) {
             // we are some ancestor of theirs, so just fast forward
             setHead(theirHead);
+            tookIn(from);
 
             // At this point, we have also moved our head, so try to compress
             // the history as we dropped a ref to part way through the
@@ -463,16 +507,17 @@ public final class BranchingView implements MemoryView {
         }
 
         // create the merge of the parents
-        Commit mergeCommit = Commit.merge(state().commit, theirHead);
+        Commit mergeCommit = mergeCommit(state().commit, theirHead);
         VersioningStats.onMerge();
         setHead(mergeCommit);
+        tookIn(from);
         return ConflictingLocations.NONE;
     }
 
     // pull from another commit and report any conflicting locations
     ConflictingLocations pull(SyncState from) {
         commitStaging();
-        return merge(from.commit);
+        return merge(from);
     }
 
     void commit() {
@@ -489,6 +534,7 @@ public final class BranchingView implements MemoryView {
         to.set(null);
         commit();
         to.set(state().commit);
+        pushedTo(to);
     }
 
     // Walk back to the root and find the ordered writes to the array reachable

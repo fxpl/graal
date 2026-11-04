@@ -64,11 +64,16 @@ public class Commit {
     // ancestors are always strictly lower in generation.
     private final int generation;
 
+    // The thread (view) that made this commit, and its number in that thread's chain of commits: what a
+    // vector clock is checked against (VectorClock.covers). Only branching with clocks reads them.
+    private final int thread;
+    private final int tick;
+
     private volatile int refCount;
     private static final AtomicIntegerFieldUpdater<Commit> REF_COUNT =
                 AtomicIntegerFieldUpdater.newUpdater(Commit.class, "refCount");
 
-    private Commit(Map<ObjectNumber, ObjectChanges> changes, Set<Commit> parents) {
+    private Commit(Map<ObjectNumber, ObjectChanges> changes, Set<Commit> parents, int thread, int tick) {
         this.changes = new HashMap<>(changes);
         this.parents = Set.copyOf(parents);
 
@@ -79,16 +84,36 @@ public class Commit {
         }
 
         this.generation = generation + 1;
+        this.thread = thread;
+        this.tick = tick;
     }
 
     /** A thread's first commit: no parents. (One-parent commits come from {@link #extend}.) */
     static Commit first(Map<ObjectNumber, ObjectChanges> changes) {
-        return new Commit(changes, Set.of());
+        return first(changes, 0, 0);
+    }
+
+    /** As {@link #first(Map)}, stamped for vector clocks: made by {@code thread} as number {@code tick} in its chain. */
+    static Commit first(Map<ObjectNumber, ObjectChanges> changes, int thread, int tick) {
+        return new Commit(changes, Set.of(), thread, tick);
     }
 
     /** A merge commit of {@code a} and {@code b}: no writes of its own, two parents. */
     static Commit merge(Commit a, Commit b) {
-        return new Commit(Map.of(), Set.of(a, b));
+        return merge(a, b, 0, 0);
+    }
+
+    /** As {@link #merge(Commit, Commit)}, stamped for vector clocks: made by {@code thread} as number {@code tick} in its chain. */
+    static Commit merge(Commit a, Commit b, int thread, int tick) {
+        return new Commit(Map.of(), Set.of(a, b), thread, tick);
+    }
+
+    int thread() {
+        return thread;
+    }
+
+    int tick() {
+        return tick;
     }
 
     // Identity equality: a Commit is a NODE in the DAG -- two distinct node objects are distinct even
@@ -176,13 +201,19 @@ public class Commit {
     }
 
     Commit extend(Map<ObjectNumber, ObjectChanges> newChanges) {
+        return extend(newChanges, 0, 0);
+    }
+
+    /** As {@link #extend(Map)}, with a new commit stamped for vector clocks: made by {@code thread} as number {@code tick}. */
+    Commit extend(Map<ObjectNumber, ObjectChanges> newChanges, int thread, int tick) {
         if (refCount == 1) {
-            // only the caller's head references this commit so adopt the changes
+            // only the caller's head references this commit so adopt the changes (its stamp can stay, as
+            // no other thread has it in its history; the caller's clock only needs to cover it)
             adoptChanges(newChanges);
             VersioningStats.onFold();
             return this;
         }
-        return new Commit(newChanges, Set.of(this));
+        return new Commit(newChanges, Set.of(this), thread, tick);
     }
 
     // we build up a new filtered map and swap in place, to avoid other threads
