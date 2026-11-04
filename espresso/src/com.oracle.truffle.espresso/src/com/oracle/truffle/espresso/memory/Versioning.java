@@ -77,7 +77,8 @@ public final class Versioning {
         // EspressoLock in Thread.0toNativeLock, the host Thread in 0hostThread — which are never guest
         // values and never app data. They must stay raw: the hidden reader (getHiddenObjectHelper) is
         // already un-routed, so versioning the write alone would stage a value the reader never sees.
-        if (!modelOn(field.getDeclaringKlass()) || field.isHidden()) {
+        // Fields marked @Unversioned on their Meta handle stay raw too, whoever allocated the object.
+        if (!modelOn(field.getDeclaringKlass()) || field.isHidden() || field.isUnversionable()) {
             return false;
         }
         return field.isStatic() ? !isBootLoadedClass(field.getDeclaringKlass()) : obj.isVersioned();

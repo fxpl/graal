@@ -41,6 +41,7 @@ import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.bet
 import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.higher;
 import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.lower;
 import static com.oracle.truffle.espresso.impl.EspressoClassLoadingException.wrapClassNotFoundGuestException;
+import static com.oracle.truffle.espresso.memory.Unversioned.Reason.VM_STATE;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -75,6 +76,7 @@ import com.oracle.truffle.espresso.impl.ModuleTable;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.PrimitiveKlass;
 import com.oracle.truffle.espresso.impl.jvmci.JVMCIUtils;
+import com.oracle.truffle.espresso.memory.Unversioned;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
@@ -1191,6 +1193,24 @@ public final class Meta extends ContextAccessImpl
         interopDispatch = new InteropKlassesDispatch(this);
 
         tRegexSupport = context.getLanguage().useTRegex() ? new TRegexSupport() : null;
+
+        markUnversionableFields();
+    }
+
+    // Sync-as-Share: flag the field behind every handle annotated @Unversioned, so the model can never
+    // own it. A handle is null when its field does not exist on this JDK.
+    private void markUnversionableFields() {
+        for (java.lang.reflect.Field handle : Meta.class.getDeclaredFields()) {
+            if (handle.isAnnotationPresent(Unversioned.class)) {
+                try {
+                    if (handle.get(this) instanceof Field field) {
+                        field.markUnversionable();
+                    }
+                } catch (IllegalAccessException e) {
+                    throw EspressoError.shouldNotReachHere(e);
+                }
+            }
+        }
     }
 
     private static void initializeEspressoClassInHierarchy(ObjectKlass klass) {
@@ -1598,11 +1618,11 @@ public final class Meta extends ContextAccessImpl
     public final Method java_lang_Throwable_printStackTrace;
     public final Field java_lang_Throwable_0frames;
     public final Field java_lang_Throwable_0exceptionWrapper;
-    public final Field java_lang_Throwable_backtrace;
+    @Unversioned(VM_STATE) public final Field java_lang_Throwable_backtrace;
     public final Field java_lang_Throwable_stackTrace;
     public final Field java_lang_Throwable_detailMessage;
     public final Field java_lang_Throwable_cause;
-    public final Field java_lang_Throwable_depth;
+    @Unversioned(VM_STATE) public final Field java_lang_Throwable_depth;
 
     public final ObjectKlass java_lang_Error;
     public final ObjectKlass java_lang_NoSuchFieldError;
@@ -1693,12 +1713,12 @@ public final class Meta extends ContextAccessImpl
     public final ObjectKlass java_lang_Thread;
     public final ObjectKlass java_lang_Thread$FieldHolder;
     public final Field java_lang_Thread_holder;
-    public final Field java_lang_Thread_threadStatus;
-    public final Field java_lang_Thread$FieldHolder_threadStatus;
+    @Unversioned(VM_STATE) public final Field java_lang_Thread_threadStatus;
+    @Unversioned(VM_STATE) public final Field java_lang_Thread$FieldHolder_threadStatus;
     public final Field java_lang_Thread_threadGroup;
     public final Field java_lang_Thread$FieldHolder_group;
     public final Field java_lang_Thread_tid;
-    public final Field java_lang_Thread_eetop;
+    @Unversioned(VM_STATE) public final Field java_lang_Thread_eetop;
     public final ObjectKlass java_lang_Thread$Constants;
     public final Field java_lang_Thread$Constants_VTHREAD_GROUP;
     public final Field java_lang_Thread_contextClassLoader;
@@ -1713,7 +1733,7 @@ public final class Meta extends ContextAccessImpl
     public final Field java_lang_Thread_0hostThread;
     public final Field java_lang_Thread_0espressoManaged;
     public final Field java_lang_Thread_0toNativeLock;
-    public final Field java_lang_Thread_0interrupted;
+    @Unversioned(VM_STATE) public final Field java_lang_Thread_0interrupted;
     public final Field java_lang_Thread_0interruptedEvent;
     public final Field java_lang_Thread_0unparkSignals;
     public final Field java_lang_Thread_0parkLock;
@@ -1827,7 +1847,7 @@ public final class Meta extends ContextAccessImpl
     public final Method java_lang_ref_Finalizer_register;
     public final ObjectKlass java_lang_ref_Reference;
     public final Field java_lang_ref_Reference_referent;
-    public final Field java_lang_ref_Reference_discovered;
+    @Unversioned(VM_STATE) public final Field java_lang_ref_Reference_discovered;
     public final Field java_lang_ref_Reference_pending;
     public final Field java_lang_ref_Reference_next;
     public final Field java_lang_ref_Reference_queue;

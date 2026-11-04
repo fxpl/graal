@@ -60,8 +60,8 @@ public final class BranchingView implements MemoryView {
     private final Supplier<SyncState> bindState;
     private final Map<ObjectNumber, WorkingObject> workingObjects = new HashMap<>(); // versioned objects this view has accessed, as this view sees them
     private final Map<ObjectNumber, WorkingObject> writtenObjects = new HashMap<>(); // ...of which written since the last commit
-    private int stagedFieldCount; // written fields, summed over writtenObjects (only used for versioning stats)
     private final Map<ObjectNumber, WorkingArray> workingArrays = new HashMap<>(); // versioned arrays this view has accessed, as this view sees them
+    private final Map<ObjectNumber, WorkingArray> writtenArrays = new HashMap<>(); // ...of which written since the last commit
 
     private ConflictReport pendingConflict; // found by a synchronisation action, raised at the next safe point
 
@@ -110,11 +110,18 @@ public final class BranchingView implements MemoryView {
     }
 
     boolean stagingEmpty() {
-        return writtenObjects.isEmpty();
+        return writtenObjects.isEmpty() && writtenArrays.isEmpty();
     }
 
     int stagingSize() {
-        return stagedFieldCount;
+        int writes = 0;
+        for (WorkingObject w : writtenObjects.values()) {
+            writes += w.written.size();
+        }
+        for (WorkingArray a : writtenArrays.values()) {
+            writes += a.written.cardinality();
+        }
+        return writes;
     }
 
     // We reduce the staging size by removing references to static
@@ -130,12 +137,12 @@ public final class BranchingView implements MemoryView {
             trackedObjects.remove(number);
             WorkingArray array = workingArrays.remove(number);
             if (array != null) {
+                writtenArrays.remove(number);
                 VersioningStats.onDrainArray(array.written.cardinality());
             }
             workingObjects.remove(number);
             WorkingObject written = writtenObjects.remove(number);
             if (written != null) {
-                stagedFieldCount -= written.written.size();
                 VersioningStats.onDrainStagedFields(written.written.size());
             }
         }
@@ -162,12 +169,10 @@ public final class BranchingView implements MemoryView {
         WorkingObject w = workingObject(holder);
         w.values.put(field, value);
         if (w.written.add(field)) {
-            stagedFieldCount++;
             writtenObjects.put(holder.getObjectNumber(), w);
         }
 
         emptyDeadQueue();
-        VersioningStats.observeStaging(stagedFieldCount);
     }
 
     /** The value this view sees: its working value, else the committed value, else version 0 (the raw slot). */
@@ -261,30 +266,31 @@ public final class BranchingView implements MemoryView {
         // The written fields of each object, plus the written elements of each array, whose written marks
         // are cleared; the working values stay, as they are now what the head says
         Map<ObjectNumber, ObjectChanges> changes = new HashMap<>();
+        int fields = 0;
         for (Map.Entry<ObjectNumber, WorkingObject> e : writtenObjects.entrySet()) {
             changes.put(e.getKey(), FieldChanges.of(e.getValue()));
+            fields += e.getValue().written.size();
             e.getValue().written.clear();
         }
         writtenObjects.clear();
         long arrayElements = 0;
         int arrays = 0;
-        for (Map.Entry<ObjectNumber, WorkingArray> e : workingArrays.entrySet()) {
-            WorkingArray w = e.getValue();
-            if (!w.written.isEmpty()) {
-                ArrayChanges a = ArrayChanges.of(w);   // copies the bits and values
-                changes.put(e.getKey(), a);
-                arrayElements += a.writeCount();
-                arrays++;
-                w.written.clear();
-            }
+        for (Map.Entry<ObjectNumber, WorkingArray> e : writtenArrays.entrySet()) {
+            ArrayChanges a = ArrayChanges.of(e.getValue());   // copies the bits and values
+            changes.put(e.getKey(), a);
+            arrayElements += a.writeCount();
+            arrays++;
+            e.getValue().written.clear();
         }
+        writtenArrays.clear();
 
         if (changes.isEmpty()) {
             return;
         }
 
-        VersioningStats.onCommit(stagedFieldCount, arrays, arrayElements);
-        stagedFieldCount = 0;
+        // staging only grows between commits, so its size now is its peak since the last one
+        VersioningStats.observeStaging(fields + arrayElements);
+        VersioningStats.onCommit(fields, arrays, arrayElements);
 
         setHead(state().commit == null ? Commit.first(changes) : state().commit.extend(changes));
     }
@@ -304,7 +310,7 @@ public final class BranchingView implements MemoryView {
      * acquire, join, volatile read/write) commits first.
      */
     ConflictingLocations merge(Commit theirHead) {
-        assert writtenObjects.isEmpty();
+        assert stagingEmpty() : "merging with uncommitted writes";
         Commit myHead = state().commit;
         if (myHead == null) {
             // either pickup the other commit as head (there is nothing to merge)
@@ -565,6 +571,7 @@ public final class BranchingView implements MemoryView {
         }
 
         working.markWrittenRange(from, to);
+        writtenArrays.put(array.getObjectNumber(), working);
         return working.storage;
     }
 

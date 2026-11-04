@@ -115,6 +115,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     @CompilationFinal private Symbol<ModifiedUTF8> genericSignature;
 
     private boolean removedByRedefinition;
+    // Sync-as-Share: the model can never own this field (see Unversioned), set once as Meta is built
+    private boolean unversionable;
 
     public Field(ObjectKlass.KlassVersion holder, LinkedField linkedField, RuntimeConstantPool pool) {
         this.linkedField = linkedField;
@@ -137,6 +139,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
 
     public final boolean isRemoved() {
         return removedByRedefinition;
+    }
+
+    public void markUnversionable() {
+        unversionable = true;
+    }
+
+    public final boolean isUnversionable() {
+        return unversionable;
     }
 
     public final boolean needsReResolution() {
