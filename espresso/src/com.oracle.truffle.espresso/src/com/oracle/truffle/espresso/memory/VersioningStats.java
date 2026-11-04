@@ -276,6 +276,32 @@ final class VersioningStats {
         return sync;
     }
 
+    // The vector clocks the live sync states hold (branching with clocks): how many, their entries in
+    // total, and the widest. Each entry is an int, so entries * 4 bytes is their payload. Run after
+    // syncStateCounts, whose GC has cleared the states of dead objects.
+    private static Map<String, Long> clockCounts() {
+        long clocks = 0;
+        long entries = 0;
+        long widest = 0;
+        synchronized (syncStates) {
+            for (SyncState s : syncStates) {
+                VectorClock clock = s.clock;
+                if (clock != null) {
+                    clocks++;
+                    entries += clock.width();
+                    widest = Math.max(widest, clock.width());
+                }
+            }
+        }
+        Map<String, Long> counts = new LinkedHashMap<>();
+        if (clocks > 0) {
+            counts.put("live", clocks);
+            counts.put("entries", entries);
+            counts.put("widest", widest);
+        }
+        return counts;
+    }
+
     /** Commit nodes ever created: every commit that did not fold, plus every merge commit. */
     private static long nodesCreated() {
         return commits.get() - folds.get() + merges.get();
@@ -345,6 +371,10 @@ final class VersioningStats {
             w.put("arrayBuilds", workingArrayBuilds.get());
 
             sections.put("sync", syncStateCounts());
+            Map<String, Long> clocks = clockCounts();
+            if (!clocks.isEmpty()) {
+                sections.put("clocks", clocks);
+            }
         }
         section(sections, "staging").put("peak", peakStaging.get());
 
