@@ -247,9 +247,9 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public Object onVolatileRead(StaticObject holder, Field field) {
-        // Volatile read (paper VolatileRead): pull from the field's sync state, then read the
-        // un-versioned value straight from the physical slot. No push — a read adds no history. Atomic
-        // per field (synchronised on the sync state) so value and commit are read together, consistent
+        // Volatile read (paper VolatileRead): pull from the field's sync state, then read the value
+        // through the view, like any versioned value. No push — a read adds no history. Atomic per
+        // field (synchronised on the sync state) so value and commit are read together, consistent
         // against a concurrent volatile write to the same field.
         BranchingView view = currentView();
         SyncState state = holder.volatileSyncState(field);
@@ -257,7 +257,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         Object value;
         synchronized (state) {
             conflict = view.pull(state);
-            value = field.getRawValue(holder);   // the value is un-versioned, in the raw slot
+            value = readField(holder, field);
         }
         handleConflicts(conflict, view, "volatile read");
         return value;
@@ -265,18 +265,17 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onVolatileWrite(StaticObject holder, Field field, Object value) {
-        // Volatile write (paper VolatileWrite): pull from the field's sync state, set the un-versioned
-        // value in the physical slot, then push to the sync state. The value never enters a commit, so
-        // concurrent volatile writes to the same field are not a data race (last writer wins on the
-        // slot); only the ordinary writes carried on the commit are conflict-checked, at the merge.
-        // Atomic per field.
+        // Volatile write (paper VolatileWrite): stage the value like any write, then release it to the
+        // field's sync state. The release merges what the state already holds (a push alone would drop
+        // it), and staging first means a volatile write unordered with ours is a conflict there: the
+        // JLS counts two volatile writes without happens-before as a data race. Atomic per field.
         BranchingView view = currentView();
         SyncState state = holder.volatileSyncState(field);
         ConflictingLocations conflicts;
         synchronized (state) {
+            writeField(holder, field, value);
             conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
-                field.setRawValue(holder, value);   // the value is un-versioned, in the raw slot
                 view.push(state);
             }
         }

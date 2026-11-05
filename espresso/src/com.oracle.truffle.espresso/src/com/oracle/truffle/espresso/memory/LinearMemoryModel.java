@@ -220,9 +220,10 @@ public final class LinearMemoryModel implements MemoryModel {
         SyncState state = holder.volatileSyncState(field);
         ConflictingLocations conflict;
         Object value = null;
+        // pull, then read the value through the view, like any versioned value
         synchronized (state) {
             conflict = view.pull();
-            value = field.getRawValue(holder);
+            value = readField(holder, field);
         }
         handleConflicts(conflict, view, "volatile read");
         return value;
@@ -233,11 +234,11 @@ public final class LinearMemoryModel implements MemoryModel {
         LinearView view = currentView();
         SyncState state = holder.volatileSyncState(field);
         ConflictingLocations conflict;
+        // stage the value like any write, then push it; the push pulls first, so a volatile write
+        // unordered with ours conflicts (the JLS counts it as a data race)
         synchronized (state) {
+            writeField(holder, field, value);
             conflict = view.push();
-            if (conflict.isEmpty()) {
-                field.setRawValue(holder, value);
-            }
         }
         handleConflicts(conflict, view, "volatile write");
     }
