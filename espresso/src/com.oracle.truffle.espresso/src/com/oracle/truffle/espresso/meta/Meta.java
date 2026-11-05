@@ -1206,7 +1206,7 @@ public final class Meta extends ContextAccessImpl
             if (handle.isAnnotationPresent(Unversioned.class)) {
                 try {
                     if (handle.get(this) instanceof Field field) {
-                        field.markUnversionable();
+                        field.markUnversionable(handle.getAnnotation(Unversioned.class).value());
                     }
                 } catch (IllegalAccessException e) {
                     throw EspressoError.shouldNotReachHere(e);
@@ -1389,8 +1389,8 @@ public final class Meta extends ContextAccessImpl
     public final Field java_lang_Class_0klass;
     public final Field java_lang_Class_0protectedDomain;
     public final Field java_lang_Class_0signers;
-    public final Field java_lang_Class_module;
-    public final Field java_lang_Class_classLoader;
+    @Unversioned(IMMUTABLE) public final Field java_lang_Class_module;
+    @Unversioned(IMMUTABLE) public final Field java_lang_Class_classLoader;
     public final Field java_lang_Class_modifiers;
     public final Field java_lang_Class_primitive;
     public final Field sun_reflect_ConstantPool_constantPoolOop;

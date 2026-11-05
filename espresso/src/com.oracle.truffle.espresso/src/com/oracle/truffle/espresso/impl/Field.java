@@ -66,6 +66,7 @@ import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.memory.MemoryModel;
+import com.oracle.truffle.espresso.memory.Unversioned;
 import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.runtime.staticobject.FieldStorageObject;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
@@ -116,14 +117,17 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
 
     private boolean removedByRedefinition;
     // Sync-as-Share: the model never owns this field, and it never makes what it holds shared. VM state:
-    // every hidden field (VM-injected storage), and the guest fields Meta marks @Unversioned
+    // every hidden field (VM-injected storage), every field of the runtime's implementation (jdk.internal,
+    // sun), and the guest fields Meta marks @Unversioned
     private boolean unversionable;
+    // why Meta marked it @Unversioned; null for a hidden field
+    private Unversioned.Reason unversionedReason;
 
     public Field(ObjectKlass.KlassVersion holder, LinkedField linkedField, RuntimeConstantPool pool) {
         this.linkedField = linkedField;
         this.holder = holder;
         this.pool = pool;
-        this.unversionable = linkedField.isHidden();
+        this.unversionable = linkedField.isHidden() || Versioning.isRuntimeInternal(holder.getKlass());
     }
 
     @Override
@@ -143,8 +147,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         return removedByRedefinition;
     }
 
-    public void markUnversionable() {
+    public void markUnversionable(Unversioned.Reason reason) {
         unversionable = true;
+        unversionedReason = reason;
     }
 
     public final boolean isUnversionable() {
@@ -157,6 +162,33 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         if (!unversionable) {
             Versioning.onStore(obj, value);
         }
+    }
+
+    // Sync-as-Share: an @Unversioned(IMMUTABLE) field is written once, as its object is initialised, so a
+    // write to it must find its slot still at the default. Checked only once versioning is on: during
+    // bootstrap the VM patches some (Class.module) a second time.
+    private boolean isWriteAllowed(StaticObject obj) {
+        if (unversionedReason != Unversioned.Reason.IMMUTABLE || !Versioning.isModelActive(obj.getKlass())) {
+            return true;
+        }
+        Object current = getRawValue(obj);
+        // @formatter:off
+        switch (getKind()) {
+            case Boolean: return !(boolean) current;
+            case Byte: return (byte) current == 0;
+            case Short: return (short) current == 0;
+            case Char: return (char) current == 0;
+            case Int: return (int) current == 0;
+            case Float: return Float.floatToRawIntBits((float) current) == 0;
+            case Long: return (long) current == 0;
+            case Double: return Double.doubleToRawLongBits((double) current) == 0;
+            // a fresh object's reference slots hold host null until the allocator sets them to NULL
+            case Object: return current == null || StaticObject.isNull((StaticObject) current);
+            default:
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw EspressoError.shouldNotReachHere();
+        }
+        // @formatter:on
     }
 
     public final boolean needsReResolution() {
@@ -576,6 +608,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
             checkSetValueValidity(value);
         }
 
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         onStore(obj, value);
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
@@ -725,6 +758,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -780,6 +814,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -835,6 +870,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -890,6 +926,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -945,6 +982,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -1000,6 +1038,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -1066,6 +1105,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
         // Sync-as-Share: as setObjectHelper.
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -1132,6 +1172,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
+        assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);

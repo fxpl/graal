@@ -63,6 +63,17 @@ public final class Versioning {
         return klass.getLanguage().isVersionedMemorySelected() && klass.getContext().getMemoryModel().isActive();
     }
 
+    /**
+     * Is {@code klass} part of the runtime's implementation, in a {@code jdk.internal} or {@code sun}
+     * package? Programs cannot keep their data there, and its objects link unrelated users together (a
+     * cleaner's list of every registered resource), so the model owns none of its fields. Asked by
+     * package alone, as fields are built before {@link #isJdkClass} can ask a loader.
+     */
+    public static boolean isRuntimeInternal(Klass klass) {
+        String pkg = klass.getRuntimePackage().toString();
+        return pkg.equals("jdk/internal") || pkg.startsWith("jdk/internal/") || pkg.equals("sun") || pkg.startsWith("sun/");
+    }
+
     /** Is {@code klass} part of the JDK: defined by the boot or the platform class loader? */
     public static boolean isJdkClass(Klass klass) {
         StaticObject loader = klass.getDefiningClassLoader();
