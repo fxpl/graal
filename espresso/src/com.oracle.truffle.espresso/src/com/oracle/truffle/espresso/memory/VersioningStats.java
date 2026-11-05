@@ -80,7 +80,9 @@ final class VersioningStats {
     static final AtomicLong readWalkVisited = new AtomicLong(); // commits visited by all walks
     static final AtomicLong readWalkMissVisited = new AtomicLong(); // ...of which by walks that found nothing
     static final AtomicLong sharedObjects = new AtomicLong();    // objects (not arrays) marked shared by a store or a thread start
-    static final AtomicLong sharedArrays = new AtomicLong();     // arrays marked shared (statics and class mirrors are not counted)
+    static final AtomicLong sharedArrays = new AtomicLong();     // arrays marked shared (objects built before versioning, statics and class mirrors are not counted)
+    static final AtomicLong versionedObjects = new AtomicLong(); // objects (not arrays) marked versioned, the program's data
+    static final AtomicLong versionedArrays = new AtomicLong();  // arrays marked versioned
     static final AtomicLong workingFieldHits = new AtomicLong(); // field reads answered by a view's working value (no walk)
     static final AtomicLong workingArrayHits = new AtomicLong(); // array accesses that found the view's working copy
     static final AtomicLong workingArrayBuilds = new AtomicLong(); // ...and that had to build it from the history
@@ -197,6 +199,12 @@ final class VersioningStats {
     static void onShared(boolean array) {
         if (ENABLED) {
             (array ? sharedArrays : sharedObjects).incrementAndGet();
+        }
+    }
+
+    static void onVersioned(boolean array) {
+        if (ENABLED) {
+            (array ? versionedArrays : versionedObjects).incrementAndGet();
         }
     }
 
@@ -326,8 +334,10 @@ final class VersioningStats {
             }
 
             Map<String, Long> s = section(sections, "sharing");
-            s.put("objects", sharedObjects.get());
-            s.put("arrays", sharedArrays.get());
+            s.put("objects.shared", sharedObjects.get());
+            s.put("objects.versioned", versionedObjects.get());
+            s.put("arrays.shared", sharedArrays.get());
+            s.put("arrays.versioned", versionedArrays.get());
 
             Map<String, Long> w = section(sections, "working");
             w.put("fieldHits", workingFieldHits.get());

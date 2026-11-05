@@ -87,7 +87,7 @@ public final class LinearMemoryModel implements MemoryModel {
     @Override
     public void activate() {
         active = true;
-        // this thread goes on to run main, which never passes through onThreadStart
+        // this thread goes on to run main, which never passes through onThreadBegin
         currentView().activate();
     }
 
@@ -162,7 +162,7 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
-    public void onThreadStart() {
+    public void onThreadBegin() {
         LinearView view = currentView();
         view.activate();
         ConflictingLocations conflicts = view.pull();
@@ -196,6 +196,8 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public void onSpawn(StaticObject childThread) {
+        // first mark what the child can now reach, so the push carries it
+        Versioning.onSpawn(childThread);
         LinearView view = currentView();
         handleConflicts(view.push(), view, "spawn");
     }

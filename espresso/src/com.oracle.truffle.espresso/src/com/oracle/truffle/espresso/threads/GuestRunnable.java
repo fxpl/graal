@@ -64,7 +64,7 @@ final class GuestRunnable implements Runnable {
                 // Sync-as-Share: thread start activates this thread's view (and, in linear, pulls; it
                 // cannot conflict). Must come before the thread runs any guest code.
                 if (context.isVersionedMemoryEnabled()) {
-                    context.getMemoryModel().onThreadStart();
+                    context.getMemoryModel().onThreadBegin();
                 }
                 context.seam(SyncOp.THREAD_START, thread);
                 // Execute the payload

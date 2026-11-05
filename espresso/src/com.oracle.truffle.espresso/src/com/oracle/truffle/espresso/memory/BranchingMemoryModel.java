@@ -126,7 +126,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public void activate() {
         active = true;
-        // this thread goes on to run main, which never passes through onThreadStart
+        // this thread goes on to run main, which never passes through onThreadBegin
         currentView().activate();
     }
 
@@ -191,7 +191,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     // --- Synchronisation actions (Table 1). May report a conflict at the merge. ---
 
     @Override
-    public void onThreadStart() {
+    public void onThreadBegin() {
         // the parent put the commit in the thread sync state slot, so the view only needs activating
         currentView().activate();
     }
@@ -222,7 +222,8 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public void onSpawn(StaticObject childThread) {
         // Fork: the parent pushes to the child, which pulls it at start. Runs on the parent, before the
-        // child begins.
+        // child begins. First mark what the child can now reach, so the push carries it.
+        Versioning.onSpawn(childThread);
         BranchingView view = currentView();
         SyncState childState = newThreadSyncState(childThread);
         view.push(childState);

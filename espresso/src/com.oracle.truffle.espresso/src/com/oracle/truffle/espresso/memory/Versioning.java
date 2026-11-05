@@ -32,48 +32,79 @@ import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
- * Whether the Sync-as-Share model owns a location, from two properties: an object is
- * {@linkplain StaticObject#isShared() shared} once more than one thread may reach it, and a field is
- * {@linkplain Field#isUnversionable() unversionable} when it is VM state (every hidden field, and the
- * guest fields marked {@link Unversioned}). The model versions a shared object's fields that are not
- * VM state, and counts synchronisation on shared objects; everything else is the ordinary heap.
- *
- * <p>An object becomes shared when it is stored somewhere shared (a class's statics are shared from
- * creation), and when a thread starts (the {@code Thread} object). Sharing spreads to everything reachable
- * through fields that are not VM state. Every question is answered whole: callers add no checks of their
- * own.
+ * Whether the Sync-as-Share model owns a location, from three properties.
+ * <ul>
+ * <li>An object is {@linkplain StaticObject#isShared() shared} when another thread can reach it: it is
+ * reachable from a root (a class's statics, a started thread). Synchronisation on a shared object is the
+ * program's synchronisation.</li>
+ * <li>An object is {@linkplain StaticObject#isVersioned() versioned} when its data is the program's: it
+ * became reachable through the program's state (an application class's statics, a started thread's task,
+ * or an object already versioned). The model versions its fields.</li>
+ * <li>A field is {@linkplain Field#isUnversionable() unversionable} when the VM writes it behind the
+ * program's back (every hidden field, and the fields marked {@link Unversioned}): it is never versioned,
+ * and it does not make what it refers to shared or versioned.</li>
+ * </ul>
+ * Every object that exists when the model is turned on was built during VM startup and hangs off a root,
+ * so it starts shared; it is the JDK's, so it is not versioned. Sharing and versioning then spread along
+ * stores, through fields that are not unversionable. Every question is answered whole: callers add no
+ * checks of their own.
  */
 public final class Versioning {
 
     private Versioning() {
     }
 
-    // Is a versioned model selected (a compilation constant, so under shared every check here folds away)
-    // and active (not during VM bootstrap)? Reached through a class the caller already has: a language or
-    // context lookup by thread is a thread-local read, too slow for every access.
-    private static boolean isModelActive(Klass klass) {
+    /**
+     * Is a versioned model selected (a compilation constant, so under shared every check here folds away)
+     * and active (not during VM bootstrap)? Reached through a class the caller already has: a language or
+     * context lookup by thread is a thread-local read, too slow for every access.
+     */
+    public static boolean isModelActive(Klass klass) {
         return klass.getLanguage().isVersionedMemorySelected() && klass.getContext().getMemoryModel().isActive();
     }
 
-    /**
-     * Does the model own {@code obj}: its instance fields, or for an array its elements, and
-     * synchronisation on it? Exactly when it is shared.
-     */
+    /** Is {@code klass} part of the JDK: defined by the boot or the platform class loader? */
+    public static boolean isJdkClass(Klass klass) {
+        StaticObject loader = klass.getDefiningClassLoader();
+        if (StaticObject.isNull(loader)) {
+            return true;
+        }
+        ObjectKlass platform = klass.getMeta().jdk_internal_loader_ClassLoaders$PlatformClassLoader;
+        return platform != null && loader.getKlass() == platform;
+    }
+
+    /** Is synchronisation on {@code obj} the program's? When another thread can reach it. */
     public static boolean isShared(StaticObject obj) {
         return isModelActive(obj.getKlass()) && obj.isShared();
     }
 
-    /**
-     * Does the model own {@code field} of {@code obj} (for a static, {@code obj} is the class's statics)?
-     * When {@code obj} is shared and the field is not VM state. Volatile fields are owned too: the model
-     * gives them their synchronisation, and keeps their value in the raw slot.
-     */
-    public static boolean versionsField(StaticObject obj, Field field) {
-        return !field.isUnversionable() && isShared(obj);
+    /** Does the model own {@code obj}'s data: its instance fields, or for an array its elements? */
+    public static boolean isVersioned(StaticObject obj) {
+        return isModelActive(obj.getKlass()) && obj.isVersioned();
     }
 
-    /** Mark {@code root} shared, and everything reachable from it through fields that are not VM state. */
+    /**
+     * Does the model own {@code field} of {@code obj} (for a static, {@code obj} is the class's statics)?
+     * When {@code obj} is versioned and the field is not VM or JDK state. Volatile fields are owned too:
+     * the model gives them their synchronisation, and keeps their value in the raw slot.
+     */
+    public static boolean versionsField(StaticObject obj, Field field) {
+        return !field.isUnversionable() && isVersioned(obj);
+    }
+
+    /** Mark {@code root} shared, and everything reachable from it through fields that are not unversionable. */
     public static void markShared(StaticObject root) {
+        mark(root, false);
+    }
+
+    /** Mark {@code root} versioned (and so shared), and everything reachable from it likewise. */
+    public static void markVersioned(StaticObject root) {
+        mark(root, true);
+    }
+
+    // The walk behind both: a versioning walk continues through objects that are shared but not yet
+    // versioned, a sharing walk stops at any shared object
+    private static void mark(StaticObject root, boolean versioned) {
         if (StaticObject.isNull(root) || !isModelActive(root.getKlass())) {
             return;
         }
@@ -81,11 +112,17 @@ public final class Versioning {
         pending.push(root);
         while (!pending.isEmpty()) {
             StaticObject o = pending.pop();
-            if (StaticObject.isNull(o) || o.isShared()) {
+            if (StaticObject.isNull(o) || (versioned ? o.isVersioned() : o.isShared())) {
                 continue;
             }
-            o.setShared();
-            VersioningStats.onShared(o.isArray());
+            if (!o.isShared()) {
+                o.setShared();
+                VersioningStats.onShared(o.isArray());
+            }
+            if (versioned) {
+                o.setVersioned();
+                VersioningStats.onVersioned(o.isArray());
+            }
 
             Klass klass = o.getKlass();
             if (klass.isArray()) {
@@ -105,13 +142,13 @@ public final class Versioning {
     }
 
     /**
-     * {@code value} was stored into {@code target} (a field that is not VM state, or an element): if
-     * {@code target} is shared, so now is {@code value}. {@code value} is as the accessor received it;
-     * only a guest object can become shared.
+     * {@code value} was stored into {@code target} (a field that is not unversionable, or an element): if
+     * {@code target} is versioned, so now is {@code value}; if it is only shared, {@code value} is shared.
+     * {@code value} is as the accessor received it; only a guest object is marked.
      */
     public static void onStore(StaticObject target, Object value) {
         if (value instanceof StaticObject o && isShared(target)) {
-            markShared(o);
+            mark(o, target.isVersioned());
         }
     }
 
@@ -120,8 +157,47 @@ public final class Versioning {
         if (!isShared(target)) {
             return;
         }
+        boolean versioned = target.isVersioned();
         for (int i = from; i < to; i++) {
-            markShared(values[i]);            // returns at once for null or already shared values
+            mark(values[i], versioned);            // returns at once for null or already marked values
         }
+    }
+
+    /** The parent is starting {@code thread}: the child can now reach it, and what the program hands it. */
+    public static void onSpawn(StaticObject thread) {
+        Klass klass = thread.getKlass();
+        if (!isModelActive(klass)) {
+            return;
+        }
+        markShared(thread);
+        // a program's Thread subclass: its own fields are program data
+        if (!isJdkClass(klass)) {
+            thread.setVersioned();
+            VersioningStats.onVersioned(false);
+            for (Field f : ((ObjectKlass) klass).getFieldTable()) {
+                // only fields the program declares, not the JDK's (holder, group, ...)
+                if (!f.getKind().isPrimitive() && !f.isUnversionable() && !f.isRemoved() && !isJdkClass(f.getDeclaringKlass())) {
+                    markVersioned((StaticObject) f.getRawValue(thread));
+                }
+            }
+        }
+        // the Runnable the program hands the child
+        markVersioned(task(thread));
+    }
+
+    // the thread's Runnable: FieldHolder.task (JDK 19+), Thread.target before
+    private static StaticObject task(StaticObject thread) {
+        StaticObject holder = rawReference(thread, "holder");
+        return StaticObject.isNull(holder) ? rawReference(thread, "target") : rawReference(holder, "task");
+    }
+
+    // obj's reference field by name, read raw; Meta has no handle for these
+    private static StaticObject rawReference(StaticObject obj, String name) {
+        for (Field f : ((ObjectKlass) obj.getKlass()).getFieldTable()) {
+            if (!f.getKind().isPrimitive() && f.getName().toString().equals(name)) {
+                return (StaticObject) f.getRawValue(obj);
+            }
+        }
+        return StaticObject.NULL;
     }
 }

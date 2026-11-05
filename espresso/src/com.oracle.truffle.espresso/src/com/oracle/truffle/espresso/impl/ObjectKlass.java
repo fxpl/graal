@@ -86,6 +86,7 @@ import com.oracle.truffle.espresso.descriptors.EspressoSymbols.Names;
 import com.oracle.truffle.espresso.impl.ModuleTable.ModuleEntry;
 import com.oracle.truffle.espresso.impl.PackageTable.PackageEntry;
 import com.oracle.truffle.espresso.memory.SyncState;
+import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.redefinition.ChangePacket;
@@ -318,8 +319,12 @@ public final class ObjectKlass extends Klass implements AttributedElement {
         StaticObject result = this.statics;
         if (result == null) {
             result = getAllocator().createStatics(this);
-            // Sync-as-Share: every thread can reach a class's statics
+            // Sync-as-Share: every thread can reach a class's statics. An application class's statics are
+            // the program's data; a JDK class's are the JDK's, which it keeps consistent itself
             result.setShared();
+            if (!Versioning.isJdkClass(this)) {
+                result.setVersioned();
+            }
             this.statics = result;
         }
         return result;

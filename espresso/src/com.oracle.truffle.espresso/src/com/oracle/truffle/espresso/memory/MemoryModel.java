@@ -130,7 +130,8 @@ public interface MemoryModel {
 
     // --- Synchronisation actions (Table 1). May report a conflict. ---
 
-    void onThreadStart();
+    /** The child's first action, on the child, before its code runs (the parent's half is {@link #onSpawn}). */
+    void onThreadBegin();
 
     void onThreadEnd();
 
@@ -236,7 +237,7 @@ public interface MemoryModel {
 
     /**
      * The number of writes the calling thread's most recent acquire ({@link #onMonitorEnter} or
-     * {@link #onThreadStart}) made visible to it: the total of the released writes of every release that
+     * {@link #onThreadBegin}) made visible to it: the total of the released writes of every release that
      * acquire brought in. At thread start that is everything the parent could see (branching) or
      * everything in the global history (linear).
      * Read by the schedule explorer right after the acquire, for its {@code ACQUIRED(n)} tag. Returns
