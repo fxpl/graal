@@ -377,7 +377,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         int length = wrapper.length(language);
         if (Integer.compareUnsigned(index, length) < 0) {
             if (StaticObject.isNull(value) || instanceOf(value, ((ArrayKlass) wrapper.getKlass()).getComponentType())) {
-                Versioning.versionValueIfTargetShared(wrapper, value);
+                Versioning.onStore(wrapper, value);
                 wrapper.<StaticObject[]> getArrayForWrite(language, index)[index] = value;
                 return;
             } // else throw ArrayStoreException
@@ -405,7 +405,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         if (!monitorTryLock(lock)) {
             contendedMonitorEnter(obj, meta, lock, context);
         }
-        if (context.isVersionedMemoryEnabled() && Versioning.isSynchronisingOnSharedObject(obj)) {
+        if (context.isVersionedMemoryEnabled() && Versioning.isShared(obj)) {
             // Sync-as-Share: lock = pull. After acquiring, bring in the previous holder's writes and
             // conflict-check this thread's staged writes. Folds away under shared;
             // off during JDK bootstrap.
@@ -451,7 +451,7 @@ public final class InterpreterToVM extends ContextAccessImpl {
         // Seam fires before the publish so it observes the staging about to be pushed (flow-commit
         // detection) and, for the driver, controls order before the release takes effect.
         meta.getContext().seam(SyncOp.MONITOR_EXIT, obj);
-        if (meta.getContext().isVersionedMemoryEnabled() && Versioning.isSynchronisingOnSharedObject(obj)) {
+        if (meta.getContext().isVersionedMemoryEnabled() && Versioning.isShared(obj)) {
             // Sync-as-Share: unlock = push. Push this thread's writes while still holding the lock (may
             // raise a conflict). Folds away under shared; off during JDK bootstrap.
             meta.getContext().getMemoryModel().onMonitorExit(obj);

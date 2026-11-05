@@ -337,7 +337,6 @@ import com.oracle.truffle.espresso.impl.Method.MethodVersion;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.memory.MemoryModel;
 import com.oracle.truffle.espresso.memory.MemoryView;
-import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.helper.EspressoReferenceArrayStoreNode;
@@ -1757,18 +1756,18 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
     private StaticObject newReferenceObject(Klass klass) {
         assert !klass.isPrimitive() : "Verifier guarantee";
         GuestAllocator.AllocationChecks.checkCanAllocateNewReference(getMethod().getMeta(), klass, true, this);
-        return Versioning.markIfEligible(getAllocator().createNew((ObjectKlass) klass), getMethod());
+        return getAllocator().createNew((ObjectKlass) klass);
     }
 
     private StaticObject newPrimitiveArray(byte jvmPrimitiveType, int length) {
         Meta meta = getMethod().getMeta();
         GuestAllocator.AllocationChecks.checkCanAllocateArray(meta, length, this);
-        return Versioning.markIfEligible(getAllocator().createNewPrimitiveArray(meta, jvmPrimitiveType, length), getMethod());
+        return getAllocator().createNewPrimitiveArray(meta, jvmPrimitiveType, length);
     }
 
     private StaticObject newReferenceArray(Klass componentType, int length) {
         GuestAllocator.AllocationChecks.checkCanAllocateArray(getMethod().getMeta(), length, this);
-        return Versioning.markIfEligible(getAllocator().createNewReferenceArray(componentType, length), getMethod());
+        return getAllocator().createNewReferenceArray(componentType, length);
     }
 
     private BaseQuickNode getBaseQuickNode(int curBCI, int top, int statementIndex, BaseQuickNode quickNode) {
@@ -2623,7 +2622,7 @@ public final class BytecodeNode extends AbstractInstrumentableBytecodeNode imple
         }
         Klass component = ((ArrayKlass) klass).getComponentType();
         GuestAllocator.AllocationChecks.checkCanAllocateMultiArray(getMethod().getMeta(), component, dimensions, this);
-        StaticObject value = Versioning.markIfEligible(getAllocator().createNewMultiArray(component, dimensions), getMethod());
+        StaticObject value = getAllocator().createNewMultiArray(component, dimensions);
         putObject(frame, top - allocatedDimensions, value);
         return -allocatedDimensions; // Does not include the created (pushed) array.
     }

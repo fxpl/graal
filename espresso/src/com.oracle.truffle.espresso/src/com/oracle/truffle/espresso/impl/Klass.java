@@ -915,7 +915,11 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
             synchronized (this) {
                 result = this.guestClassMirror;
                 if (result == null) {
-                    this.guestClassMirror = result = getAllocator().createClass(this);
+                    result = getAllocator().createClass(this);
+                    // Sync-as-Share: every thread can reach a class's mirror (synchronized (Foo.class),
+                    // static synchronized methods)
+                    result.setShared();
+                    this.guestClassMirror = result;
                 }
             }
         }

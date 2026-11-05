@@ -317,7 +317,10 @@ public final class ObjectKlass extends Klass implements AttributedElement {
         CompilerAsserts.neverPartOfCompilation();
         StaticObject result = this.statics;
         if (result == null) {
-            this.statics = result = getAllocator().createStatics(this);
+            result = getAllocator().createStatics(this);
+            // Sync-as-Share: every thread can reach a class's statics
+            result.setShared();
+            this.statics = result;
         }
         return result;
     }

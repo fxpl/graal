@@ -318,7 +318,7 @@ public final class Target_java_lang_System {
             try {
                 boundsCheck(meta, src.length(language), srcPos, dest.length(language), destPos, length, profiler);
                 StaticObject[] s = src.getArrayForRead(language, srcPos, srcPos + length);
-                Versioning.versionValuesIfTargetShared(dest, s, srcPos, srcPos + length);
+                Versioning.onStoreRange(dest, s, srcPos, srcPos + length);
                 System.arraycopy(s, srcPos, dest.<StaticObject[]> getArrayForWrite(language, destPos, destPos + length), destPos, length);
             } catch (ArrayIndexOutOfBoundsException e) {
                 throw throwOutOfBoundsEx(meta, profiler);
@@ -345,7 +345,7 @@ public final class Target_java_lang_System {
                 if (!StaticObject.isNull(cpy) && !copyTypeCheck.executeTypeCheck(destType, cpy.getKlass())) {
                     throw throwArrayStoreEx(meta, profiler);
                 }
-                Versioning.versionValueIfTargetShared(dest, cpy);
+                Versioning.onStore(dest, cpy);
                 dest.<StaticObject[]> getArrayForWrite(language, destPos + i)[destPos + i] = cpy;
             }
         }

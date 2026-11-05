@@ -115,13 +115,15 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     @CompilationFinal private Symbol<ModifiedUTF8> genericSignature;
 
     private boolean removedByRedefinition;
-    // Sync-as-Share: the model can never own this field (see Unversioned), set once as Meta is built
+    // Sync-as-Share: the model never owns this field, and it never makes what it holds shared. VM state:
+    // every hidden field (VM-injected storage), and the guest fields Meta marks @Unversioned
     private boolean unversionable;
 
     public Field(ObjectKlass.KlassVersion holder, LinkedField linkedField, RuntimeConstantPool pool) {
         this.linkedField = linkedField;
         this.holder = holder;
         this.pool = pool;
+        this.unversionable = linkedField.isHidden();
     }
 
     @Override
@@ -147,6 +149,14 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
 
     public final boolean isUnversionable() {
         return unversionable;
+    }
+
+    // Sync-as-Share: a reference stored through this field shares what it refers to if obj is shared,
+    // unless the field is VM state
+    private void onStore(StaticObject obj, Object value) {
+        if (!unversionable) {
+            Versioning.onStore(obj, value);
+        }
     }
 
     public final boolean needsReResolution() {
@@ -566,7 +576,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
             checkSetValueValidity(value);
         }
 
-        Versioning.versionValueIfTargetShared(obj, value);
+        onStore(obj, value);
         if (Versioning.versionsField(obj, this)) {
             if (isVolatile()) {
                 memoryModel().onVolatileWrite(obj, this, value);
@@ -621,7 +631,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        Versioning.versionValueIfTargetShared(obj, value);
+        onStore(obj, value);
         return (StaticObject) linkedField.getAndSetObject(obj, value);
     }
 
@@ -629,7 +639,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        Versioning.versionValueIfTargetShared(obj, after);
+        onStore(obj, after);
         return linkedField.compareAndSwapObject(obj, before, after);
     }
 
@@ -637,7 +647,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        Versioning.versionValueIfTargetShared(obj, after);
+        onStore(obj, after);
         return (StaticObject) linkedField.compareAndExchangeObject(obj, before, after);
     }
 

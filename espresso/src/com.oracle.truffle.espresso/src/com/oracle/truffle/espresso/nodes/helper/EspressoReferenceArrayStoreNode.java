@@ -55,7 +55,7 @@ public final class EspressoReferenceArrayStoreNode extends EspressoNode {
             enterArrayStoreEx();
             throw meta.throwException(meta.java_lang_ArrayStoreException);
         }
-        Versioning.versionValueIfTargetShared(array, value);
+        Versioning.onStore(array, value);
         (array.<StaticObject[]> getArrayForWrite(language, index))[index] = value;
     }
 

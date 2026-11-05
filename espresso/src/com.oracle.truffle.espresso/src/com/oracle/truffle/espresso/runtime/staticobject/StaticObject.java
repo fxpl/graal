@@ -78,8 +78,9 @@ public class StaticObject implements TruffleObject, Cloneable {
     // Initialised lazily to avoid creating one for shared a object not used for sync actions
     private volatile ObjectSyncState objectSyncState;
 
-    private boolean eligibleForVersioning;
-    private boolean versioned;
+    // Sync-as-Share: more than one thread may reach this object (it was stored somewhere shared, or is a
+    // class's statics), so the model versions its fields and counts synchronisation on it
+    private boolean shared;
 
     // Ideally the objectNumber would be final, but cloned objects copy the object number
     // and the number needs to be reset. The issue is that we are a JVM on a JVM, so Espresso
@@ -200,20 +201,12 @@ public class StaticObject implements TruffleObject, Cloneable {
         return !isForeignObject();
     }
 
-    public final boolean isEligibleForVersioning() {
-        return eligibleForVersioning;
+    public final boolean isShared() {
+        return shared;
     }
 
-    public final void markEligibleForVersioning() {
-        eligibleForVersioning = true;
-    }
-
-    public final boolean isVersioned() {
-        return versioned;
-    }
-
-    public final void markVersioned() {
-        versioned = true;
+    public final void setShared() {
+        shared = true;
     }
 
     public final ObjectSyncState getObjectSyncState() {
@@ -375,7 +368,7 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     private Object getArray(EspressoLanguage language) {
         Object physical = getRawArray(language);
-        if (Versioning.versionsObject(this)) {
+        if (Versioning.isShared(this)) {
             throw EspressoError.shouldNotReachHere("Sync-as-Share: versioned array " + getKlass().getExternalName() + " reached without an access barrier");
         }
         return physical;
@@ -404,7 +397,7 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     @SuppressWarnings("unchecked")
     public final <T> T getArrayForRead(EspressoLanguage language, int from, int to) {
-        if (Versioning.versionsObject(this)) {
+        if (Versioning.isShared(this)) {
             return (T) EspressoContext.get(null).getMemoryModel().arrayForRead(this, from, to);
         }
         return (T) getRawArray(language);
@@ -420,7 +413,7 @@ public class StaticObject implements TruffleObject, Cloneable {
      */
     @SuppressWarnings("unchecked")
     public final <T> T getArrayForWrite(EspressoLanguage language, int from, int to) {
-        if (Versioning.versionsObject(this)) {
+        if (Versioning.isShared(this)) {
             return (T) EspressoContext.get(null).getMemoryModel().arrayForWrite(this, from, to);
         }
         return (T) getRawArray(language);
@@ -590,6 +583,7 @@ public class StaticObject implements TruffleObject, Cloneable {
         this.objectNumber = objectNumber;
         this.hasVersionedWrite = false;
         this.isCleanerRegistered = false;
+        this.shared = false; // a fresh copy, which nothing else can reach yet
     }
 
     public boolean hasVersionedWrite() {

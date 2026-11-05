@@ -146,7 +146,8 @@ public final class Target_java_lang_Thread {
                 // start) inherits the parent's pre-spawn writes. Runs on the parent, before the child
                 // starts. No-op/folded under shared; off during JDK bootstrap.
                 if (context.isVersionedMemoryEnabled()) {
-                    Versioning.versionReachableFrom(self);
+                    // the parent and the child can both reach the Thread, and what it refers to
+                    Versioning.markShared(self);
                     context.getMemoryModel().onSpawn(self);
                 }
                 hostThread.start();
