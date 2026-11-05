@@ -23,7 +23,9 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
+import java.lang.reflect.Array;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
@@ -280,6 +282,82 @@ public final class BranchingMemoryModel implements MemoryModel {
             }
         }
         handleConflicts(conflicts, view, "volatile write");
+    }
+
+    @Override
+    public boolean onCompareAndSet(StaticObject holder, Field field, int expected, int value) {
+        return compareAndSet(holder.volatileSyncState(field), () -> (int) readField(holder, field) == expected, () -> writeField(holder, field, value));
+    }
+
+    @Override
+    public boolean onCompareAndSet(StaticObject holder, Field field, long expected, long value) {
+        return compareAndSet(holder.volatileSyncState(field), () -> (long) readField(holder, field) == expected, () -> writeField(holder, field, value));
+    }
+
+    @Override
+    public boolean onCompareAndSet(StaticObject holder, Field field, StaticObject expected, StaticObject value) {
+        return compareAndSet(holder.volatileSyncState(field), () -> readField(holder, field) == expected, () -> writeField(holder, field, value));
+    }
+
+    // pull, test, then write and push, all atomic on the location's sync state; the read comes first, so
+    // the write is informed by the last one. matches reads the location after the pull, typed by the caller.
+    private boolean compareAndSet(SyncState state, BooleanSupplier matches, Runnable write) {
+        BranchingView view = currentView();
+        ConflictingLocations conflicts;
+        boolean swapped;
+        synchronized (state) {
+            conflicts = view.pull(state);
+            swapped = matches.getAsBoolean();
+            if (swapped && conflicts.isEmpty()) {
+                write.run();
+                view.push(state);
+            }
+        }
+        handleConflicts(conflicts, view, "compare-and-set");
+        return swapped;
+    }
+
+    @Override
+    public Object onVolatileArrayRead(StaticObject array, int index) {
+        // As onVolatileRead, on the one sync state all the array's elements share. Unlike arrayForRead and
+        // arrayForWrite, which are barriers: they only declare an access and hand the storage to the
+        // caller, who does the access itself (host code reading or writing the array). A volatile access
+        // is a hook the caller hands over whole, so the model does the element access here, inside the
+        // sync state's lock, through the view's storage.
+        BranchingView view = currentView();
+        SyncState state = array.volatileArraySyncState();
+        ConflictingLocations conflict;
+        Object value;
+        synchronized (state) {
+            conflict = view.pull(state);
+            value = Array.get(arrayForRead(array, index), index);
+        }
+        handleConflicts(conflict, view, "volatile read");
+        return value;
+    }
+
+    @Override
+    public void onVolatileArrayWrite(StaticObject array, int index, Object value) {
+        // as onVolatileWrite, on the one sync state all the array's elements share
+        BranchingView view = currentView();
+        SyncState state = array.volatileArraySyncState();
+        ConflictingLocations conflicts;
+        synchronized (state) {
+            // the model does the element write itself, through the barrier (see onVolatileArrayRead)
+            Array.set(arrayForWrite(array, index), index, value);
+            conflicts = view.pull(state);
+            if (conflicts.isEmpty()) {
+                view.push(state);
+            }
+        }
+        handleConflicts(conflicts, view, "volatile write");
+    }
+
+    @Override
+    public boolean onArrayCompareAndSet(StaticObject array, int index, StaticObject expected, StaticObject value) {
+        // the model does the element access itself (see onVolatileArrayRead)
+        return compareAndSet(array.volatileArraySyncState(), () -> Array.get(arrayForRead(array, index), index) == expected,
+                        () -> Array.set(arrayForWrite(array, index), index, value));
     }
 
     @Override

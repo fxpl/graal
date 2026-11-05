@@ -32,6 +32,8 @@ public final class ObjectSyncState {
 
   final SyncState lock = new SyncState(SyncState.Kind.LOCK);
   final ConcurrentHashMap<Field, SyncState> volatiles = new ConcurrentHashMap<>();
+  // an array's volatile and atomic accesses: one state shared by all its elements
+  final SyncState volatileArray = new SyncState(SyncState.Kind.VOLATILE);
 
   private ObjectSyncState() {}
 
@@ -50,6 +52,7 @@ public final class ObjectSyncState {
 
   private void releaseSyncStates() {
       release(lock);
+      release(volatileArray);
       volatiles.values().forEach(ObjectSyncState::release);
   }
 
@@ -60,6 +63,10 @@ public final class ObjectSyncState {
   public SyncState getVolatileSyncState(Field f) {
       // only run the construction of a new SyncState if there is nothing there
       return volatiles.computeIfAbsent(f, k -> new SyncState(SyncState.Kind.VOLATILE));
+  }
+
+  public SyncState getVolatileArraySyncState() {
+      return volatileArray;
   }
 
 }

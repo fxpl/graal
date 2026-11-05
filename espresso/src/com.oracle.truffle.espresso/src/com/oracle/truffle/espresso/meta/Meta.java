@@ -41,6 +41,8 @@ import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.bet
 import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.higher;
 import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.lower;
 import static com.oracle.truffle.espresso.impl.EspressoClassLoadingException.wrapClassNotFoundGuestException;
+import static com.oracle.truffle.espresso.memory.Unversioned.Reason.BENIGN_RACE;
+import static com.oracle.truffle.espresso.memory.Unversioned.Reason.IMMUTABLE;
 import static com.oracle.truffle.espresso.memory.Unversioned.Reason.VM_STATE;
 
 import java.util.Arrays;
@@ -1456,9 +1458,9 @@ public final class Meta extends ContextAccessImpl
     public final Field java_lang_Long_value;
 
     // Guest String.
-    public final Field java_lang_String_value;
-    public final Field java_lang_String_hash;
-    public final Field java_lang_String_coder;
+    @Unversioned(IMMUTABLE) public final Field java_lang_String_value;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_String_hash;
+    @Unversioned(IMMUTABLE) public final Field java_lang_String_coder;
     public final Field java_lang_String_COMPACT_STRINGS;
     public final Method java_lang_String_hashCode;
     public final Method java_lang_String_length;

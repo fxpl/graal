@@ -181,6 +181,38 @@ public interface MemoryModel {
     void onVolatileWrite(StaticObject holder, Field field, Object value);
 
     /**
+     * Compare-and-set of a versioned field of {@code holder}, atomic on the field's volatile sync state:
+     * pull, then if the field read through the view is {@code expected}, stage {@code value} and push.
+     * The read comes before the write, so each compare-and-set is informed by the last and two never
+     * conflict. A failed one is a volatile read.
+     */
+    boolean onCompareAndSet(StaticObject holder, Field field, int expected, int value);
+
+    /** {@link #onCompareAndSet(StaticObject, Field, int, int)} for a {@code long} field. */
+    boolean onCompareAndSet(StaticObject holder, Field field, long expected, long value);
+
+    /** {@link #onCompareAndSet(StaticObject, Field, int, int)} for a reference field, compared by identity. */
+    boolean onCompareAndSet(StaticObject holder, Field field, StaticObject expected, StaticObject value);
+
+    /**
+     * A volatile read of element {@code index} of the versioned {@code array}, as {@link #onVolatileRead}
+     * on the array's one volatile sync state, which all its elements share. The value is boxed for
+     * primitives.
+     */
+    Object onVolatileArrayRead(StaticObject array, int index);
+
+    /** A volatile write of element {@code index} of the versioned {@code array}, as {@link #onVolatileWrite}. */
+    void onVolatileArrayWrite(StaticObject array, int index, Object value);
+
+    /**
+     * Compare-and-set of element {@code index} of the versioned reference {@code array}, atomic on the
+     * array's volatile sync state: pull, then if the element read through the view is {@code expected}
+     * (by identity), stage {@code value} and push. The read comes before the write, so each
+     * compare-and-set is informed by the last and two never conflict. A failed one is a volatile read.
+     */
+    boolean onArrayCompareAndSet(StaticObject array, int index, StaticObject expected, StaticObject value);
+
+    /**
      * Class-init release (JLS §12.4.2): {@code <clinit>} of {@code klass} has completed, so push the
      * initializer's writes to the class's init state. Happens once per class.
      */

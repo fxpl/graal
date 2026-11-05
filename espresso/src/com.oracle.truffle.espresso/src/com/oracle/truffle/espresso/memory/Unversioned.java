@@ -50,6 +50,11 @@ public @interface Unversioned {
          */
         VM_STATE,
         /** The JDK races on it by design ({@code String.hash}), so the race is not the program's. */
-        BENIGN_RACE
+        BENIGN_RACE,
+        /**
+         * Never written once its object's constructor returns ({@code String.value}), so there is no
+         * history to keep, and host code that reads it directly sees what every thread sees.
+         */
+        IMMUTABLE
     }
 }

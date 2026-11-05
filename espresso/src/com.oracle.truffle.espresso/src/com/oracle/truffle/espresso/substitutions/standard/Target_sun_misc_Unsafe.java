@@ -398,19 +398,6 @@ public final class Target_sun_misc_Unsafe {
             return null;
         }
         assert field != null;
-        // Sync-as-Share: under any versioned model, reflective/Unsafe access to a versioned location
-        // would bypass the calling thread's view and read/write the frozen physical heap (version 0),
-        // silently diverging from the model. Rather than return stale data, fail loudly -- undesigned
-        // territory. The same decision as every other field access (Versioning.versionsField), so Unsafe
-        // on the runtime's own objects is unaffected and only versioned data (or an app static) trips it.
-        // Inactive throughout bootstrap.
-        if (Versioning.versionsField(holder, field)) {
-            throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedOperationException,
-                            "Sync-as-Share (--java.MemoryModel=" + meta.getContext().getLanguage().getMemoryModelMode().name().toLowerCase() +
-                                            "): reflective/Unsafe access to versioned field " +
-                                            field.getDeclaringKlass().getExternalName() + "." + field.getName() +
-                                            " is not defined by the memory model");
-        }
         return field;
     }
 
@@ -594,6 +581,18 @@ public final class Target_sun_misc_Unsafe {
         if (offset > maxIndex - accessSize) {
             throw new IllegalArrayAccessException("arrayOffset is beyond array length");
         }
+    }
+
+    /**
+     * Sync-as-Share: the index of the element at {@code offset} in the guest array {@code o}, for a
+     * versioned array's accesses, which the model takes by element.
+     */
+    private static int arrayIndex(@JavaType(Object.class) StaticObject o, long offset) {
+        // offset = baseOffset + index * indexScale
+        Klass klass = o.getKlass();
+        int indexScale = arrayIndexScale(klass);
+        assert (offset - arrayBaseOffset(klass)) % indexScale == 0 : "an access that does not start at an element";
+        return (int) ((offset - arrayBaseOffset(klass)) / indexScale);
     }
 
     /**
@@ -1847,6 +1846,11 @@ public final class Target_sun_misc_Unsafe {
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
             Versioning.onStore(holder, value);
+            if (Versioning.isVersioned(holder)) {
+                // a release, taken as a full volatile write
+                getContext().getMemoryModel().onVolatileArrayWrite(holder, arrayIndex(holder, offset), value);
+                return;
+            }
             UnsafeAccess.get().putOrderedObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
         }
 
@@ -1855,6 +1859,11 @@ public final class Target_sun_misc_Unsafe {
                         @JavaType(Object.class) StaticObject value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
             Versioning.onStore(holder, value);
+            if (Versioning.isVersioned(holder)) {
+                // a release, taken as a full volatile write
+                getContext().getMemoryModel().onVolatileArrayWrite(holder, arrayIndex(holder, offset), value);
+                return;
+            }
             UnsafeAccess.get().putOrderedObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
         }
 
@@ -2544,6 +2553,9 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
+            if (Versioning.isVersioned(holder)) {
+                return (StaticObject) getContext().getMemoryModel().onVolatileArrayRead(holder, arrayIndex(holder, offset));
+            }
             return (StaticObject) UnsafeAccess.get().getObjectVolatile(unwrapNullOrArray(getLanguage(), holder), offset);
         }
 
@@ -2552,6 +2564,9 @@ public final class Target_sun_misc_Unsafe {
         StaticObject doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder,
                         long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
+            if (Versioning.isVersioned(holder)) {
+                return (StaticObject) getContext().getMemoryModel().onVolatileArrayRead(holder, arrayIndex(holder, offset));
+            }
             return (StaticObject) UnsafeAccess.get().getObjectVolatile(unwrapNullOrArray(getLanguage(), holder), offset);
         }
 
@@ -3239,6 +3254,10 @@ public final class Target_sun_misc_Unsafe {
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
             Versioning.onStore(holder, value);
+            if (Versioning.isVersioned(holder)) {
+                getContext().getMemoryModel().onVolatileArrayWrite(holder, arrayIndex(holder, offset), value);
+                return;
+            }
             UnsafeAccess.get().putObjectVolatile(unwrapArray(getLanguage(), holder), offset, value);
         }
 
@@ -3248,6 +3267,10 @@ public final class Target_sun_misc_Unsafe {
                         @JavaType(Object.class) StaticObject value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
             Versioning.onStore(holder, value);
+            if (Versioning.isVersioned(holder)) {
+                getContext().getMemoryModel().onVolatileArrayWrite(holder, arrayIndex(holder, offset), value);
+                return;
+            }
             UnsafeAccess.get().putObjectVolatile(unwrapArray(getLanguage(), holder), offset, value);
         }
 
@@ -3719,6 +3742,9 @@ public final class Target_sun_misc_Unsafe {
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
             Versioning.onStore(holder, after);
+            if (Versioning.isVersioned(holder)) {
+                return getContext().getMemoryModel().onArrayCompareAndSet(holder, arrayIndex(holder, offset), before, after);
+            }
             return UnsafeAccess.get().compareAndSwapObject(unwrapArray(getLanguage(), holder), offset, before, after);
         }
 
@@ -3727,6 +3753,9 @@ public final class Target_sun_misc_Unsafe {
                         @JavaType(Object.class) StaticObject before, @JavaType(Object.class) StaticObject after,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
             Versioning.onStore(holder, after);
+            if (Versioning.isVersioned(holder)) {
+                return getContext().getMemoryModel().onArrayCompareAndSet(holder, arrayIndex(holder, offset), before, after);
+            }
             return UnsafeAccess.get().compareAndSwapObject(unwrapArray(getLanguage(), holder), offset, before, after);
         }
 

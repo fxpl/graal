@@ -640,6 +640,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         onStore(obj, after);
+        if (Versioning.versionsField(obj, this)) {
+            return memoryModel().onCompareAndSet(obj, this, (StaticObject) before, (StaticObject) after);
+        }
         return linkedField.compareAndSwapObject(obj, before, after);
     }
 
@@ -1022,6 +1025,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public boolean compareAndSwapInt(StaticObject obj, int before, int after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
+        }
         return linkedField.compareAndSwapInt(obj, before, after);
     }
 
@@ -1087,6 +1093,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
+        if (Versioning.versionsField(obj, this)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
+        }
         return linkedField.compareAndSwapLong(obj, before, after);
     }
 

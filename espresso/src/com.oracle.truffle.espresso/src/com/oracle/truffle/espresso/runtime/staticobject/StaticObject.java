@@ -254,6 +254,11 @@ public class StaticObject implements TruffleObject, Cloneable {
         return getObjectSyncState().getVolatileSyncState(field);
     }
 
+    public final SyncState volatileArraySyncState() {
+        assert isArray();
+        return getObjectSyncState().getVolatileArraySyncState();
+    }
+
     public final Object rawForeignObject(EspressoLanguage language) {
         assert isForeignObject();
         return language.getForeignProperty().getObject(this);
