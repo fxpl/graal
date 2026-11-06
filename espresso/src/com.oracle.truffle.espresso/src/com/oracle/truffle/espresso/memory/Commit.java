@@ -205,58 +205,91 @@ public class Commit {
         changes = filtered;
     }
 
-    private synchronized boolean absorbAncestors() {
-        Set<Commit> newParents = new HashSet<>();
-        Map<ObjectNumber, ObjectChanges> absorbed = new HashMap<>();
+    private static int incAndGetReachCount(Commit p, Map<Commit, Integer> reachedCount) {
+        return reachedCount.merge(p, 1, Integer::sum);
+    }
 
-        int adoptedCount = 0;
-        Deque<Commit> ancestors = new ArrayDeque<>(parents);
-        while (!ancestors.isEmpty()) {
-            Commit ancestor = ancestors.pop();
-            if (ancestor.getRefCount() == 1) {
-                ancestors.addAll(ancestor.parents());
-                // ancestors are reached newest first, so what is already absorbed wins over this one
-                ancestor.changes().forEach((number, older) ->
-                    absorbed.merge(number, older, (newer, o) -> newer.createFoldWithOlder(o)));
-                adoptedCount++;
-            } else if (!newParents.add(ancestor)) {
-                // two edges collapse into one
-                if (ancestor.decRef() == 1) {
-                    //     g
-                    //   /   \
-                    // p1     p2
-                    //   \   /
-                    //     c
-                    // absorbing p1 and p2 leaves two edges into g from c
-                    // collapsing them drops g to 1, so g is now exclusively
-                    // referenced from c and goes back on the deque to be
-                    // absorbed
-                    newParents.remove(ancestor);
-                    ancestors.push(ancestor);
+    // This is a little hairy, so here is the rough idea:
+    // for every ancestor, we can absorb the ancestor into this node
+    // if from this node we can account for all the references to that
+    // ancestor (essentially there is subgraph with a dominator)
+    // absorb into commit T:
+    //   for every ancestor, count the edges reaching it from T or from what T has absorbed
+    //
+    //   start: one edge from T into each of T's parents
+    //   repeat:
+    //     pick an ancestor A whose count equals its refCount
+    //         (every reference to A comes from inside the region)
+    //     absorb A into T
+    //     add one edge from A into each of A's parents
+    //   until no ancestor's count equals its refCount
+    //
+    //   T's changes   = T's own, over everything absorbed, newest over oldest
+    //   T's parents   = the ancestors still counted but not absorbed (the boundary)
+    //   each boundary commit: its k edges from the region become one edge from T,
+    //                         so drop its count by k - 1
+    private synchronized boolean absorbAncestors() {
+        Map<Commit, Integer> reachedCount = new HashMap<>();
+        Deque<Commit> ready = new ArrayDeque<>();      // commits where every reference is account for
+        List<Commit> absorbedInOrder = new ArrayList<>();
+
+        for (Commit p : parents) {
+            if (incAndGetReachCount(p, reachedCount) == p.getRefCount()) {
+                ready.push(p);
+            }
+        }
+
+        // Find all of the ancestors which we can account for the references
+        // Store them in an ordered queue so that we can replay them and
+        // get the correct outcome for the resulting node
+        while(!ready.isEmpty()) {
+            Commit ancestor = ready.pop();
+            reachedCount.remove(ancestor);
+            absorbedInOrder.add(ancestor);
+
+            for (Commit p : ancestor.parents()) {
+                if (incAndGetReachCount(p, reachedCount) == p.getRefCount()) {
+                    ready.push(p);
                 }
             }
         }
 
-        if (adoptedCount == 0) {
+        if (absorbedInOrder.isEmpty()) {
             return false;
         }
 
+        // Create a new map for the change set of the node, applying the commits changes in order
+        Map<ObjectNumber, ObjectChanges> absorbed = new HashMap<>();
+        for (Commit ancestor : absorbedInOrder) {
+            ancestor.changes().forEach((number, older) ->
+                absorbed.merge(number, older, (newer, o) -> newer.createFoldWithOlder(o)));
+        }
         // this commit's own writes win over the absorbed ones
         changes.forEach((number, own) ->
             absorbed.merge(number, own, (older, o) -> o.createFoldWithOlder(older)));
-        changes = absorbed;
-        parents = Set.copyOf(newParents); // immutable and compact sets
-        VersioningStats.onAbsorb(adoptedCount);
 
+        // Now we need to remove as many incoming references as we accounted for
+        for (Map.Entry<Commit, Integer> b : reachedCount.entrySet()) {
+            for (int i = 1; i < b.getValue(); i++) {
+                b.getKey().decRef();
+            }
+        }
+
+        changes = absorbed;
+        parents = Set.copyOf(reachedCount.keySet());
+        VersioningStats.onAbsorb(absorbedInOrder.size());
         return true;
     }
 
+    private static final Object ABSORB = new Object();
     public boolean tryAbsorbAncestors() {
         // nothing is ours alone: no allocation, no lock
         if (parents.stream().noneMatch(p -> p.getRefCount() == 1)) {
             return false;
         }
-        return absorbAncestors();   // the current synchronized body
+        synchronized(ABSORB) {
+            return absorbAncestors();
+        }
     }
 
 
