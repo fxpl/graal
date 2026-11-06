@@ -50,7 +50,7 @@ public final class LinearMemoryModel implements MemoryModel {
     public LinearMemoryModel(EspressoContext context) {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
-        VersioningStats.arm("linear");
+        VersioningStats.arm("linear", cleaner);
     }
 
     @Override
@@ -65,6 +65,7 @@ public final class LinearMemoryModel implements MemoryModel {
 
     private SyncState newThreadSyncState(StaticObject thread) {
         SyncState state = new SyncState(SyncState.Kind.THREAD);
+        VersioningStats.describeThread(state, thread);
         context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);
         cleaner.register(thread, () -> state.set(null));
         return state;

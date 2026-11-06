@@ -74,6 +74,16 @@ public final class Versioning {
         return pkg.equals("jdk/internal") || pkg.startsWith("jdk/internal/") || pkg.equals("sun") || pkg.startsWith("sun/");
     }
 
+    /** An object was allocated while versioning is on, for the stats' count of what the model could own. */
+    public static void onAllocated(boolean array) {
+        VersioningStats.onAllocated(array);
+    }
+
+    /** {@code state} is {@code klass}'s initialisation state, named so the stats' graph dump can say so. */
+    public static void describeClassInit(SyncState state, Klass klass) {
+        VersioningStats.describeClass(state, klass);
+    }
+
     /** Is {@code klass} part of the JDK: defined by the boot or the platform class loader? */
     public static boolean isJdkClass(Klass klass) {
         StaticObject loader = klass.getDefiningClassLoader();

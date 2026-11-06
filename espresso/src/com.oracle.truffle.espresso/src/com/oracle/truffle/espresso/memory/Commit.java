@@ -205,7 +205,7 @@ public class Commit {
         changes = filtered;
     }
 
-    public synchronized boolean absorbAncestors() {
+    private synchronized boolean absorbAncestors() {
         Set<Commit> newParents = new HashSet<>();
         Map<ObjectNumber, ObjectChanges> absorbed = new HashMap<>();
 
@@ -251,6 +251,15 @@ public class Commit {
         return true;
     }
 
+    public boolean tryAbsorbAncestors() {
+        // nothing is ours alone: no allocation, no lock
+        if (parents.stream().noneMatch(p -> p.getRefCount() == 1)) {
+            return false;
+        }
+        return absorbAncestors();   // the current synchronized body
+    }
+
+
     // We assume we are in a conflict free DAG
     public void compressUpwards() {
         Deque<Commit> compressTails = new ArrayDeque<>();
@@ -263,7 +272,7 @@ public class Commit {
                 continue;
             }
 
-            if (tail.absorbAncestors()) {
+            if (tail.tryAbsorbAncestors()) {
                 // Only continue if we succeeded in compressing anything, there may be
                 // stuff higher in the DAG but we leave that for a deeper compression task
                 compressTails.addAll(tail.parents());

@@ -23,19 +23,31 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.io.IOException;
+import java.lang.ref.Cleaner;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.WeakHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+
+import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.Klass;
+import com.oracle.truffle.espresso.meta.Meta;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * Optional, host-side counters for the memory footprint of the version-controlled models, enabled by
@@ -47,12 +59,15 @@ import java.util.concurrent.atomic.AtomicLong;
  * compiler folds away, so the speed benchmarks are unaffected. At JVM shutdown (armed once by whichever
  * versioned model is constructed) a summary is printed to host {@code stderr} if {@code SYNCSHARE_STATS}
  * is set, and the raw counters are written as JSON to the file {@code SYNCSHARE_STATS_JSON} names.
+ * {@code SYNCSHARE_GRAPH} names a file for the live commit graph itself: every commit with its parents
+ * and reference count, and every sync state holding one, named by what it belongs to.
  */
 final class VersioningStats {
 
     private static final boolean TEXT = System.getenv("SYNCSHARE_STATS") != null;
     private static final String JSON_PATH = System.getenv("SYNCSHARE_STATS_JSON");
-    static final boolean ENABLED = TEXT || JSON_PATH != null;
+    private static final String GRAPH_PATH = System.getenv("SYNCSHARE_GRAPH");
+    static final boolean ENABLED = TEXT || JSON_PATH != null || GRAPH_PATH != null;
 
     // The commit history (both models).
     static final AtomicLong commits = new AtomicLong();        // commitStaging calls that committed something
@@ -83,6 +98,8 @@ final class VersioningStats {
     static final AtomicLong sharedArrays = new AtomicLong();     // arrays marked shared (objects built before versioning, statics and class mirrors are not counted)
     static final AtomicLong versionedObjects = new AtomicLong(); // objects (not arrays) marked versioned, the program's data
     static final AtomicLong versionedArrays = new AtomicLong();  // arrays marked versioned
+    static final AtomicLong allocatedObjects = new AtomicLong(); // objects (not arrays) allocated while versioning is on
+    static final AtomicLong allocatedArrays = new AtomicLong();  // arrays allocated while versioning is on
     static final AtomicLong workingFieldHits = new AtomicLong(); // field reads answered by a view's working value (no walk)
     static final AtomicLong workingArrayHits = new AtomicLong(); // array accesses that found the view's working copy
     static final AtomicLong workingArrayBuilds = new AtomicLong(); // ...and that had to build it from the history
@@ -94,20 +111,23 @@ final class VersioningStats {
     // Both.
     static final AtomicLong peakStaging = new AtomicLong();     // largest staging map seen (residency)
 
-    // Every sync state still reachable, so the dump can count them by kind and the commits they pin.
-    // Weak: a sync state whose object died drops out on its own.
-    private static final Set<SyncState> syncStates = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+    // Every sync state still reachable, so the dump can count them by kind and the commits they pin, with
+    // what it belongs to (null until described: linear's global state never is). Weak: a sync state whose
+    // object died drops out on its own. The descriptions are strings, so they keep no owner alive.
+    private static final Map<SyncState, String> syncStates = Collections.synchronizedMap(new WeakHashMap<>());
 
     private static final AtomicBoolean ARMED = new AtomicBoolean();
     private static volatile String modelName = ""; // the model that armed the dump, for its heading
+    private static volatile Cleaner cleaner;        // the model's, which releases dead owners' sync states
 
     private VersioningStats() {
     }
 
     /** Register the shutdown dump once (called by a versioned model's constructor). No-op when disabled. */
-    static void arm(String model) {
+    static void arm(String model, Cleaner modelCleaner) {
         if (ENABLED && ARMED.compareAndSet(false, true)) {
             modelName = model;
+            cleaner = modelCleaner;
             Runtime.getRuntime().addShutdownHook(new Thread(VersioningStats::dump, "versioning-stats-dump"));
         }
     }
@@ -192,7 +212,40 @@ final class VersioningStats {
 
     static void onSyncStateCreated(SyncState state) {
         if (ENABLED) {
-            syncStates.add(state);
+            syncStates.put(state, null);
+        }
+    }
+
+    /** {@code state} is a lock or volatile state of {@code owner}: named by its class and identity. */
+    static void describeObject(SyncState state, StaticObject owner) {
+        if (ENABLED) {
+            syncStates.put(state, owner.getKlass().getExternalName() + "@" + Integer.toHexString(System.identityHashCode(owner)));
+        }
+    }
+
+    /** {@code state} is {@code field}'s volatile state on the object {@code lock} is the lock state of. */
+    static void describeField(SyncState state, SyncState lock, Field field) {
+        if (ENABLED) {
+            syncStates.put(state, syncStates.get(lock) + "." + field.getNameAsString());
+        }
+    }
+
+    /** {@code state} is {@code klass}'s initialisation state. */
+    static void describeClass(SyncState state, Klass klass) {
+        if (ENABLED) {
+            syncStates.put(state, klass.getExternalName());
+        }
+    }
+
+    /**
+     * {@code state} is {@code thread}'s own state: named by the thread's name when its view was bound.
+     * The name is read from its raw slot: {@code Thread.name} is volatile, and a modelled read would pull,
+     * binding this same state again.
+     */
+    static void describeThread(SyncState state, StaticObject thread) {
+        if (ENABLED) {
+            Meta meta = thread.getKlass().getMeta();
+            syncStates.put(state, meta.toHostString((StaticObject) meta.java_lang_Thread_name.getRawValue(thread)));
         }
     }
 
@@ -205,6 +258,12 @@ final class VersioningStats {
     static void onVersioned(boolean array) {
         if (ENABLED) {
             (array ? versionedArrays : versionedObjects).incrementAndGet();
+        }
+    }
+
+    static void onAllocated(boolean array) {
+        if (ENABLED) {
+            (array ? allocatedArrays : allocatedObjects).incrementAndGet();
         }
     }
 
@@ -246,16 +305,35 @@ final class VersioningStats {
         }
     }
 
+    // Collect the dead objects and let the model's Cleaner release their sync states' commits, so every
+    // reference left on a commit belongs to something still alive. The Cleaner's queue has no order, so
+    // a sentinel's action running only says that collection's actions are under way: a few rounds settle it.
+    private static void quiesce() {
+        for (int round = 0; round < 3; round++) {
+            CountDownLatch ran = new CountDownLatch(1);
+            if (cleaner != null) {
+                cleaner.register(new Object(), ran::countDown);
+            }
+            System.gc();
+            try {
+                ran.await(1, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
     // For each kind of sync state still alive: how many, how many hold a commit, and how many distinct
     // commits those are; then the distinct commits pinned across all kinds.
     private static Map<String, Long> syncStateCounts() {
         // clear sync states of objects that have died, so "live" counts only those still reachable
-        System.gc();
+        quiesce();
         Map<SyncState.Kind, int[]> counts = new EnumMap<>(SyncState.Kind.class);
         Map<SyncState.Kind, Set<Commit>> held = new EnumMap<>(SyncState.Kind.class);
         Set<Commit> pinned = new HashSet<>();
         synchronized (syncStates) {
-            for (SyncState s : syncStates) {
+            for (SyncState s : syncStates.keySet()) {
                 counts.computeIfAbsent(s.kind, k -> new int[2])[0]++;
                 Commit c = s.commit;
                 if (c != null) {
@@ -274,6 +352,135 @@ final class VersioningStats {
         });
         sync.put("pinnedCommits", (long) pinned.size());
         return sync;
+    }
+
+    /**
+     * The commit graph still reachable from a live sync state, as compression has left it: each commit's
+     * depth (one more than its deepest parent's), the sync states holding it, and how many reachable
+     * commits have it as a parent. Those two are every reference a commit should have, so its ref count
+     * less them is a reference nobody can account for (or, below zero, one released twice).
+     */
+    private record LiveGraph(Map<Commit, Integer> depth, Map<Commit, List<SyncState>> holders, Map<Commit, Integer> children) {
+
+        static LiveGraph walk() {
+            Map<Commit, Integer> depth = new HashMap<>();
+            Map<Commit, List<SyncState>> holders = new HashMap<>();
+            synchronized (syncStates) {
+                for (SyncState s : syncStates.keySet()) {
+                    Commit c = s.commit;
+                    if (c != null) {
+                        measureDepth(c, depth);
+                        holders.computeIfAbsent(c, k -> new ArrayList<>()).add(s);
+                    }
+                }
+            }
+            Map<Commit, Integer> children = new HashMap<>();
+            for (Commit c : depth.keySet()) {
+                for (Commit p : c.parents()) {
+                    children.merge(p, 1, Integer::sum);
+                }
+            }
+            return new LiveGraph(depth, holders, children);
+        }
+
+        int unexplained(Commit c) {
+            return c.getRefCount() - holders.getOrDefault(c, List.of()).size() - children.getOrDefault(c, 0);
+        }
+    }
+
+    // The live graph's shape: how many commits, its depth (the longest path from a commit to a root) and
+    // its width (the most commits at one depth; 1 for a single chain). Also the deepest generation among
+    // them, the length that path had when the commits were created, and the references no holder
+    // accounts for (missing) or that holders account for twice over (extra). Run after syncStateCounts,
+    // which lets the Cleaner release dead states.
+    private static Map<String, Long> liveGraph(LiveGraph live) {
+        Map<Integer, Integer> atDepth = new HashMap<>();
+        long deepest = 0;
+        long generation = 0;
+        long missing = 0;
+        long extra = 0;
+        for (Map.Entry<Commit, Integer> e : live.depth().entrySet()) {
+            atDepth.merge(e.getValue(), 1, Integer::sum);
+            deepest = Math.max(deepest, e.getValue());
+            generation = Math.max(generation, e.getKey().generation());
+            int unexplained = live.unexplained(e.getKey());
+            missing += Math.max(unexplained, 0);
+            extra += Math.max(-unexplained, 0);
+        }
+        Map<String, Long> graph = new LinkedHashMap<>();
+        graph.put("reachable", (long) live.depth().size());
+        graph.put("depth", deepest);
+        graph.put("width", (long) atDepth.values().stream().mapToInt(Integer::intValue).max().orElse(0));
+        graph.put("generation", generation);
+        graph.put("missingRefs", missing);
+        graph.put("extraRefs", extra);
+        return graph;
+    }
+
+    // The live graph for SYNCSHARE_GRAPH: every commit, numbered, with its parents, ref count and what
+    // holds it, each holder as its kind and owner. Owners are names from the guest, so they are escaped.
+    private static String graphJson(LiveGraph live) {
+        Map<Commit, Integer> ids = new HashMap<>();
+        live.depth().keySet().forEach(c -> ids.put(c, ids.size()));
+        StringBuilder sb = new StringBuilder("{\n  \"model\": \"").append(modelName).append("\",\n  \"commits\": [");
+        StringJoiner commitsOut = new StringJoiner(",\n    ", "\n    ", "\n  ");
+        ids.forEach((c, id) -> {
+            StringJoiner parents = new StringJoiner(", ", "[", "]");
+            c.parents().forEach(p -> parents.add(String.valueOf(ids.get(p))));
+            StringJoiner holders = new StringJoiner(", ", "[", "]");
+            for (SyncState s : live.holders().getOrDefault(c, List.of())) {
+                String owner = syncStates.get(s);
+                holders.add("{\"kind\": \"" + s.kind.name().toLowerCase() + "\", \"owner\": " + (owner == null ? "null" : quote(owner)) + "}");
+            }
+            commitsOut.add("{\"id\": " + id + ", \"generation\": " + c.generation() + ", \"depth\": " + live.depth().get(c) +
+                            ", \"refs\": " + c.getRefCount() + ", \"children\": " + live.children().getOrDefault(c, 0) +
+                            ", \"unexplained\": " + live.unexplained(c) + ", \"changed\": " + c.changes().size() +
+                            ", \"parents\": " + parents + ", \"holders\": " + holders + "}");
+        });
+        return sb.append(ids.isEmpty() ? "" : commitsOut.toString()).append("]\n}\n").toString();
+    }
+
+    private static String quote(String s) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (char ch : s.toCharArray()) {
+            if (ch == '"' || ch == '\\') {
+                sb.append('\\').append(ch);
+            } else if (ch < 0x20) {
+                sb.append(String.format("\\u%04x", (int) ch));
+            } else {
+                sb.append(ch);
+            }
+        }
+        return sb.append('"').toString();
+    }
+
+    // Each commit's depth, one more than its deepest parent's (a root's is 1), into depth: a post-order
+    // walk with an explicit stack, as a recursive one would overflow on a long chain
+    private static void measureDepth(Commit from, Map<Commit, Integer> depth) {
+        Deque<Commit> pending = new ArrayDeque<>();
+        pending.push(from);
+        while (!pending.isEmpty()) {
+            Commit c = pending.peek();
+            if (depth.containsKey(c)) {
+                pending.pop();
+                continue;
+            }
+            boolean parentsMeasured = true;
+            for (Commit p : c.parents()) {
+                if (!depth.containsKey(p)) {
+                    pending.push(p);
+                    parentsMeasured = false;
+                }
+            }
+            if (parentsMeasured) {
+                pending.pop();
+                int d = 1;
+                for (Commit p : c.parents()) {
+                    d = Math.max(d, depth.get(p) + 1);
+                }
+                depth.put(c, d);
+            }
+        }
     }
 
     /** Commit nodes ever created: every commit that did not fold, plus every merge commit. */
@@ -338,6 +545,8 @@ final class VersioningStats {
             s.put("objects.versioned", versionedObjects.get());
             s.put("arrays.shared", sharedArrays.get());
             s.put("arrays.versioned", versionedArrays.get());
+            s.put("objects.allocated", allocatedObjects.get());
+            s.put("arrays.allocated", allocatedArrays.get());
 
             Map<String, Long> w = section(sections, "working");
             w.put("fieldHits", workingFieldHits.get());
@@ -345,6 +554,15 @@ final class VersioningStats {
             w.put("arrayBuilds", workingArrayBuilds.get());
 
             sections.put("sync", syncStateCounts());
+            LiveGraph live = LiveGraph.walk();
+            sections.put("graph", liveGraph(live));
+            if (GRAPH_PATH != null) {
+                try {
+                    Files.writeString(Path.of(GRAPH_PATH), graphJson(live));
+                } catch (IOException e) {
+                    System.err.println("[versioning-stats] could not write " + GRAPH_PATH + ": " + e);
+                }
+            }
         }
         section(sections, "staging").put("peak", peakStaging.get());
 

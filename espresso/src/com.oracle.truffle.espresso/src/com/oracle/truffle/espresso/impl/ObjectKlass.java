@@ -248,6 +248,9 @@ public final class ObjectKlass extends Klass implements AttributedElement {
 
         this.syncState = getLanguage().isVersionedMemorySelected() && !StaticObject.isNull(classLoader)
                         ? new SyncState(SyncState.Kind.CLASS_INIT) : null;
+        if (syncState != null) {
+            Versioning.describeClassInit(syncState, this);
+        }
     }
 
     private static boolean isEnumValuesField(LinkedField lkStaticFields) {

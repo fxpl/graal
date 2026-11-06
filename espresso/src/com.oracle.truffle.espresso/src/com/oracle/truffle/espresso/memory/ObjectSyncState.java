@@ -40,6 +40,8 @@ public final class ObjectSyncState {
   /** A fresh holder for {@code owner}; {@code cleaner} releases every commit it holds once {@code owner} dies. */
   public static ObjectSyncState createFor(StaticObject owner, Cleaner cleaner) {
       ObjectSyncState state = new ObjectSyncState();
+      VersioningStats.describeObject(state.lock, owner);
+      VersioningStats.describeObject(state.volatileArray, owner);
       cleaner.register(owner, state::releaseSyncStates);
       return state;
   }
@@ -62,7 +64,11 @@ public final class ObjectSyncState {
 
   public SyncState getVolatileSyncState(Field f) {
       // only run the construction of a new SyncState if there is nothing there
-      return volatiles.computeIfAbsent(f, k -> new SyncState(SyncState.Kind.VOLATILE));
+      return volatiles.computeIfAbsent(f, k -> {
+          SyncState state = new SyncState(SyncState.Kind.VOLATILE);
+          VersioningStats.describeField(state, lock, f);
+          return state;
+      });
   }
 
   public SyncState getVolatileArraySyncState() {

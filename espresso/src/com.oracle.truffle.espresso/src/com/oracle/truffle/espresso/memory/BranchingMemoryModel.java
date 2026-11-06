@@ -95,7 +95,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     public BranchingMemoryModel(EspressoContext context) {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
-        VersioningStats.arm("branching");
+        VersioningStats.arm("branching", cleaner);
     }
 
     @Override
@@ -109,6 +109,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     private SyncState newThreadSyncState(StaticObject thread) {
         SyncState state = new SyncState(SyncState.Kind.THREAD);
+        VersioningStats.describeThread(state, thread);
 
         // store the state on the thread object itself
         context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);

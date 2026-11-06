@@ -217,6 +217,8 @@ public final class BranchingView implements MemoryView {
         Object found = null;
         Commit current = state().commit;
         while (current != null) {
+            current.tryAbsorbAncestors();
+
             // parents before changes: a concurrent absorb swaps changes then parents, so new parents
             // guarantee the new changes are seen too
             Set<Commit> parents = current.parents();
@@ -352,6 +354,7 @@ public final class BranchingView implements MemoryView {
         int nonBoth = 2;
         while (nonBoth > 0) {
             Commit head = heads.remove();
+            head.tryAbsorbAncestors();
             CommitColour colour = colours.get(head);
 
             // We've now visited everything below this node,
@@ -486,6 +489,7 @@ public final class BranchingView implements MemoryView {
     void push(SyncState to) {
         // let go of to's reference first: if to held our head, the head may then be exclusive to us
         // and the commit can fold into it
+        Commit old = to.commit;
         to.set(null);
         commit();
         to.set(state().commit);

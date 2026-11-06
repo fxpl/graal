@@ -109,6 +109,9 @@ public class StaticObject implements TruffleObject, Cloneable {
         this.hasVersionedWrite = false;
         this.isCleanerRegistered = false;
         this.shared = builtBeforeVersioning(klass);
+        if (!shared) {
+            Versioning.onAllocated(klass.isArray());
+        }
     }
 
     // Sync-as-Share: an object built while the model is off is part of the heap VM startup made, which
@@ -609,6 +612,9 @@ public class StaticObject implements TruffleObject, Cloneable {
         // a fresh copy, which nothing else can reach yet (unless the model is still off)
         this.shared = builtBeforeVersioning(getKlass());
         this.versioned = false;
+        if (!shared) {
+            Versioning.onAllocated(getKlass().isArray());
+        }
     }
 
     public boolean hasVersionedWrite() {
