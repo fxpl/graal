@@ -315,11 +315,10 @@ public final class LinearView implements MemoryView {
             return new ConflictingLocations(fieldConflicts, arrayConflicts);
         }
 
-        // Move our base to the head, then drop the pin: our state's reference now keeps it alive
-        baseState.set(head);
-        head.decRef();
         VersioningStats.onPull(history.size());
 
+        // Apply while our base is still held: it bounds compression, so nothing at or below it can be
+        // absorbed into a commit in history, whose changes would then differ from those checked above
         for (Commit c : history.reversed()) {
             c.changes().forEach((number, changes) -> {
                 if (changes instanceof FieldChanges f) {
@@ -335,6 +334,10 @@ public final class LinearView implements MemoryView {
                 }
             });
         }
+
+        // Move our base to the head, then drop the pin: our state's reference now keeps it alive
+        baseState.set(head);
+        head.decRef();
 
         head.compressUpwards();
 
