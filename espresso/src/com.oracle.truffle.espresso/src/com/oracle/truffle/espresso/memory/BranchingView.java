@@ -294,7 +294,12 @@ public final class BranchingView implements MemoryView {
         VersioningStats.observeStaging(fields + arrayElements);
         VersioningStats.onCommit(fields, arrays, arrayElements);
 
-        setHead(state().commit == null ? Commit.first(changes) : state().commit.extend(changes));
+        Commit head = state().commit;
+        Commit next = head == null ? Commit.first(changes) : head.extend(changes);
+        if (next != head) {
+            VersioningStats.describeCommit(next, state(), false);
+        }
+        setHead(next);
     }
 
     /** Shallow compression from this thread's head (no-op if it has no head yet). */
@@ -468,6 +473,7 @@ public final class BranchingView implements MemoryView {
         // create the merge of the parents
         Commit mergeCommit = Commit.merge(state().commit, theirHead);
         VersioningStats.onMerge();
+        VersioningStats.describeCommit(mergeCommit, state(), true);
         setHead(mergeCommit);
         return ConflictingLocations.NONE;
     }
@@ -493,6 +499,11 @@ public final class BranchingView implements MemoryView {
         to.set(null);
         commit();
         to.set(state().commit);
+
+        // when we let go of a commit, we may now enable a lot more compressions
+        if (old != null && old.getRefCount() > 0) {
+            old.tryAbsorbAncestors();
+        }
     }
 
     // Walk back to the root and find the ordered writes to the array reachable

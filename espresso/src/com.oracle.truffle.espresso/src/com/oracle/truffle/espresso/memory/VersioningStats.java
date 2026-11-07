@@ -116,6 +116,11 @@ final class VersioningStats {
     // object died drops out on its own. The descriptions are strings, so they keep no owner alive.
     private static final Map<SyncState, String> syncStates = Collections.synchronizedMap(new WeakHashMap<>());
 
+    // Which thread made each commit node, and how many commits that thread had made by then ("main #12"),
+    // for the graph dump. Weak, like syncStates: a released commit drops out.
+    private static final Map<Commit, String> commitsMade = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final ThreadLocal<int[]> threadCommits = ThreadLocal.withInitial(() -> new int[1]);
+
     private static final AtomicBoolean ARMED = new AtomicBoolean();
     private static volatile String modelName = ""; // the model that armed the dump, for its heading
     private static volatile Cleaner cleaner;        // the model's, which releases dead owners' sync states
@@ -134,6 +139,7 @@ final class VersioningStats {
 
     static void onCommit(int fieldChanges, int arrays, long arrayElements) {
         if (ENABLED) {
+            threadCommits.get()[0]++;
             commits.incrementAndGet();
             committedChanges.addAndGet(fieldChanges);
             committedArrays.addAndGet(arrays);
@@ -246,6 +252,16 @@ final class VersioningStats {
         if (ENABLED) {
             Meta meta = thread.getKlass().getMeta();
             syncStates.put(state, meta.toHostString((StaticObject) meta.java_lang_Thread_name.getRawValue(thread)));
+        }
+    }
+
+    /**
+     * {@code commit} is a new node made by the thread whose state is {@code thread}: labelled with the
+     * thread's name and its commit count, "main #12", or "main #12 merge" for a merge made after it.
+     */
+    static void describeCommit(Commit commit, SyncState thread, boolean merge) {
+        if (ENABLED) {
+            commitsMade.put(commit, syncStates.get(thread) + " #" + threadCommits.get()[0] + (merge ? " merge" : ""));
         }
     }
 
@@ -432,7 +448,9 @@ final class VersioningStats {
                 String owner = syncStates.get(s);
                 holders.add("{\"kind\": \"" + s.kind.name().toLowerCase() + "\", \"owner\": " + (owner == null ? "null" : quote(owner)) + "}");
             }
-            commitsOut.add("{\"id\": " + id + ", \"generation\": " + c.generation() + ", \"depth\": " + live.depth().get(c) +
+            String made = commitsMade.get(c);
+            commitsOut.add("{\"id\": " + id + ", \"made\": " + (made == null ? "null" : quote(made)) +
+                            ", \"generation\": " + c.generation() + ", \"depth\": " + live.depth().get(c) +
                             ", \"refs\": " + c.getRefCount() + ", \"children\": " + live.children().getOrDefault(c, 0) +
                             ", \"unexplained\": " + live.unexplained(c) + ", \"changed\": " + c.changes().size() +
                             ", \"parents\": " + parents + ", \"holders\": " + holders + "}");

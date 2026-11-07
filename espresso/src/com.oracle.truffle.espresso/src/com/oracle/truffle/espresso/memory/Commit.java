@@ -281,10 +281,11 @@ public class Commit {
         return true;
     }
 
+    private final boolean shouldAbsorb = false;
     private static final Object ABSORB = new Object();
     public boolean tryAbsorbAncestors() {
         // nothing is ours alone: no allocation, no lock
-        if (parents.stream().noneMatch(p -> p.getRefCount() == 1)) {
+        if (!shouldAbsorb || parents.stream().noneMatch(p -> p.getRefCount() == 1)) {
             return false;
         }
         synchronized(ABSORB) {
