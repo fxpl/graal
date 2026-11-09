@@ -24,6 +24,7 @@ package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
 import java.lang.reflect.Array;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 
@@ -41,6 +42,9 @@ public final class LinearMemoryModel implements MemoryModel {
 
     private final AtomicLong deadObjectCount;
     private final Cleaner cleaner = Cleaner.create();
+
+    // the id the next thread's committer stamps its commits with
+    private final AtomicInteger nextThreadId = new AtomicInteger();
 
     @Override
     public Cleaner getCleaner() {
@@ -60,7 +64,7 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        return new LinearView(this::bindThreadSyncState, global, deadObjectCount);
+        return new LinearView(this::bindThreadSyncState, global, deadObjectCount, new Commit.Committer(nextThreadId.getAndIncrement()));
     }
 
     private SyncState newThreadSyncState(StaticObject thread) {

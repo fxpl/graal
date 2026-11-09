@@ -52,7 +52,6 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
  * other.
  */
 public class Commit {
-
     // when we eliminate old commits, we will swap in place to avoid a racy read
     // so the changes need to be volatile
     private volatile Map<ObjectNumber, ObjectChanges> changes;
@@ -68,7 +67,24 @@ public class Commit {
     private static final AtomicIntegerFieldUpdater<Commit> REF_COUNT =
                 AtomicIntegerFieldUpdater.newUpdater(Commit.class, "refCount");
 
-    private Commit(Map<ObjectNumber, ObjectChanges> changes, Set<Commit> parents) {
+    /** Which thread made a commit, and how many commits that thread had made before it. */
+    record Epoch(int thread, int sequence) {
+        boolean isComparableTo(Epoch e) {
+            return thread == e.thread;
+        }
+
+        boolean isEarlierOrSame(Epoch e) {
+            assert isComparableTo(e) : "meaningless comparison of two epochs";
+            return sequence <= e.sequence;
+        }
+    }
+
+    // Who last wrote into this commit: set when it is made, and again when a thread folds into it, so it
+    // always names the thread whose writes it last took
+    private volatile Epoch epoch;
+
+    private Commit(Epoch epoch, Map<ObjectNumber, ObjectChanges> changes, Set<Commit> parents) {
+        this.epoch = epoch;
         this.changes = new HashMap<>(changes);
         this.parents = Set.copyOf(parents);
 
@@ -81,14 +97,50 @@ public class Commit {
         this.generation = generation + 1;
     }
 
-    /** A thread's first commit: no parents. (One-parent commits come from {@link #extend}.) */
-    static Commit first(Map<ObjectNumber, ObjectChanges> changes) {
-        return new Commit(changes, Set.of());
-    }
+    /**
+     * The only way a thread makes or folds into a commit. Each view owns one, told its thread's id once, and
+     * every commit it makes or folds into is stamped with that id and the thread's next sequence number. A
+     * commit therefore names the thread that last wrote into it, never the thread whose commit it grew from.
+     * Used only by its owning thread, so the counter needs no synchronisation.
+     */
+    static final class Committer {
 
-    /** A merge commit of {@code a} and {@code b}: no writes of its own, two parents. */
-    static Commit merge(Commit a, Commit b) {
-        return new Commit(Map.of(), Set.of(a, b));
+        private final int thread;
+        private int sequence = 0;
+
+        Committer(int thread) {
+            this.thread = thread;
+        }
+
+        private Epoch nextEpoch() {
+            return new Epoch(thread, sequence++);
+        }
+
+        /** A thread's first commit: no parents. */
+        Commit first(Map<ObjectNumber, ObjectChanges> changes) {
+            return new Commit(nextEpoch(), changes, Set.of());
+        }
+
+        /**
+         * {@code newChanges} on top of {@code head}: folded into it when only the caller references it, else a
+         * new commit with {@code head} as its parent. A fold restamps the commit, as it may have been made by
+         * another thread.
+         */
+        Commit extend(Commit head, Map<ObjectNumber, ObjectChanges> newChanges) {
+            if (head.refCount == 1) {
+                // only the caller's head references this commit so adopt the changes
+                head.adoptChanges(newChanges);
+                head.epoch = nextEpoch();
+                VersioningStats.onFold();
+                return head;
+            }
+            return new Commit(nextEpoch(), newChanges, Set.of(head));
+        }
+
+        /** A merge commit of {@code mine} and {@code theirs}: no writes of its own, two parents. */
+        Commit merge(Commit mine, Commit theirs) {
+            return new Commit(nextEpoch(), Map.of(), Set.of(mine, theirs));
+        }
     }
 
     // Identity equality: a Commit is a NODE in the DAG -- two distinct node objects are distinct even
@@ -96,6 +148,15 @@ public class Commit {
     @Override
     public boolean equals(Object o) {
         return this == o;
+    }
+
+    boolean isComparableTo(Commit o) {
+        return epoch.isComparableTo(o.epoch);
+    }
+
+    boolean isEarlierOrSame(Commit o) {
+        assert isComparableTo(o) : "meaningless comparison of two commits";
+        return epoch.isEarlierOrSame(o.epoch);
     }
 
     @Override
@@ -165,7 +226,7 @@ public class Commit {
     // thread to purge objects without breaking threads that are compacting nodes together
 
     // we want to update the node with new changes during commit compaction
-    public synchronized void adoptChanges(Map<ObjectNumber, ObjectChanges> newChanges) {
+    private synchronized void adoptChanges(Map<ObjectNumber, ObjectChanges> newChanges) {
         assert refCount == 1 : "cannot adopt changes if more than one commit can see this commit";
         newChanges.forEach((number, newer) -> {
             changes.merge(number, newer, (older, n) -> {
@@ -175,15 +236,6 @@ public class Commit {
         });
     }
 
-    Commit extend(Map<ObjectNumber, ObjectChanges> newChanges) {
-        if (refCount == 1) {
-            // only the caller's head references this commit so adopt the changes
-            adoptChanges(newChanges);
-            VersioningStats.onFold();
-            return this;
-        }
-        return new Commit(newChanges, Set.of(this));
-    }
 
     // we build up a new filtered map and swap in place, to avoid other threads
     // potentially seeing a partly filtered map
@@ -281,7 +333,7 @@ public class Commit {
         return true;
     }
 
-    private final boolean shouldAbsorb = false;
+    private final boolean shouldAbsorb = true;
     private static final Object ABSORB = new Object();
     public boolean tryAbsorbAncestors() {
         // nothing is ours alone: no allocation, no lock
@@ -292,7 +344,6 @@ public class Commit {
             return absorbAncestors();
         }
     }
-
 
     // We assume we are in a conflict free DAG
     public void compressUpwards() {

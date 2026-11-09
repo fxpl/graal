@@ -24,6 +24,7 @@ package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
 import java.lang.reflect.Array;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 
@@ -62,6 +63,9 @@ public final class BranchingMemoryModel implements MemoryModel {
 
 
     private final AtomicLong deadObjectCount;
+
+    // the id the next thread's committer stamps its commits with
+    private final AtomicInteger nextThreadId = new AtomicInteger();
 
     // This is a record so that we don't accidentally capture the StaticObject
     // if we did that, we could end up keeping a reference to the StaticObject in the cleaner
@@ -104,7 +108,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     public MemoryView newThreadView() {
-        return new BranchingView(this::bindThreadSyncState, deadObjectCount);
+        return new BranchingView(this::bindThreadSyncState, deadObjectCount, new Commit.Committer(nextThreadId.getAndIncrement()));
     }
 
     private SyncState newThreadSyncState(StaticObject thread) {

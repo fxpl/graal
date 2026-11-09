@@ -43,6 +43,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
@@ -107,6 +108,31 @@ final class VersioningStats {
     // Linear.
     static final AtomicLong pulls = new AtomicLong();           // pulls that moved the base to a newer head
     static final AtomicLong pulledCommits = new AtomicLong();   // ...commits they walked and installed, summed
+
+    // Branching: every merge, by how it ended, and the cost of the walks that coloured the two histories.
+    enum MergeOutcome {
+        ADOPTED,      // no head of our own: took theirs, no walk
+        NOTHING,      // they had no head, no walk
+        SAME,         // the same head, no walk
+        EPOCH_INCLUDED, // one thread made both heads, theirs first: already ours, no walk
+        INCLUDED,     // walked: theirs was already in our history
+        CONFLICT,     // walked: both sides wrote a location
+        FAST_FORWARD, // walked: ours was in their history, so we took their head
+        MERGED        // walked: a merge commit was made
+    }
+    private static final AtomicLongArray mergeOutcomes = new AtomicLongArray(MergeOutcome.values().length);
+    static final AtomicLong mergeVisited = new AtomicLong();    // commits coloured by merge walks, summed
+    static final AtomicLong mergeMineOnly = new AtomicLong();   // ...of which only in our history
+    static final AtomicLong mergeTheirsOnly = new AtomicLong(); // ...of which only in theirs (the rest are in both)
+    static final AtomicLong peakMergeVisited = new AtomicLong(); // most commits coloured by one walk
+    static final AtomicLong mergeWalkNanos = new AtomicLong();  // time in the colouring walks, summed
+    static final AtomicLong mergeNanos = new AtomicLong();      // time in walked merges overall (walk, conflict check, install)
+    // The same walk costs, by outcome, so included walks and real merges can be told apart
+    private static final AtomicLongArray mergeVisitedBy = new AtomicLongArray(MergeOutcome.values().length);
+    private static final AtomicLongArray mergeMineOnlyBy = new AtomicLongArray(MergeOutcome.values().length);
+    private static final AtomicLongArray mergeTheirsOnlyBy = new AtomicLongArray(MergeOutcome.values().length);
+    private static final AtomicLongArray mergePeakVisitedBy = new AtomicLongArray(MergeOutcome.values().length);
+    private static final AtomicLongArray mergeWalkNanosBy = new AtomicLongArray(MergeOutcome.values().length);
 
     // Both.
     static final AtomicLong peakStaging = new AtomicLong();     // largest staging map seen (residency)
@@ -308,6 +334,44 @@ final class VersioningStats {
         }
     }
 
+    /** A merge that ended without walking the histories. */
+    static void onMergeUnwalked(MergeOutcome outcome) {
+        if (ENABLED) {
+            mergeOutcomes.incrementAndGet(outcome.ordinal());
+        }
+    }
+
+    /**
+     * A merge that walked: {@code visited} commits coloured, {@code mineOnly} and {@code theirsOnly} of them
+     * exclusive to one side, {@code walkNanos} in the walk and {@code nanos} in the merge overall.
+     */
+    static void onMergeWalked(MergeOutcome outcome, int visited, int mineOnly, int theirsOnly, long walkNanos, long nanos) {
+        if (ENABLED) {
+            mergeOutcomes.incrementAndGet(outcome.ordinal());
+            mergeVisited.addAndGet(visited);
+            mergeMineOnly.addAndGet(mineOnly);
+            mergeTheirsOnly.addAndGet(theirsOnly);
+            observe(peakMergeVisited, visited);
+            mergeWalkNanos.addAndGet(walkNanos);
+            mergeNanos.addAndGet(nanos);
+
+            int o = outcome.ordinal();
+            mergeVisitedBy.addAndGet(o, visited);
+            mergeMineOnlyBy.addAndGet(o, mineOnly);
+            mergeTheirsOnlyBy.addAndGet(o, theirsOnly);
+            mergeWalkNanosBy.addAndGet(o, walkNanos);
+            long cur;
+            while (visited > (cur = mergePeakVisitedBy.get(o)) && !mergePeakVisitedBy.compareAndSet(o, cur, visited)) {
+                // another thread raised the peak meanwhile: retry against it
+            }
+        }
+    }
+
+    /** A clock reading for timing merges, or 0 when the stats are off so the call costs nothing. */
+    static long now() {
+        return ENABLED ? System.nanoTime() : 0;
+    }
+
     static void observeStaging(long size) {
         if (ENABLED) {
             observe(peakStaging, size);
@@ -501,6 +565,16 @@ final class VersioningStats {
         }
     }
 
+    /** The walk costs of the merges that ended as {@code outcome}, as {@code <key>Visited} and so on. */
+    private static void walkedByOutcome(Map<String, Long> m, MergeOutcome outcome, String key) {
+        int o = outcome.ordinal();
+        m.put(key + "Visited", mergeVisitedBy.get(o));
+        m.put(key + "MineOnly", mergeMineOnlyBy.get(o));
+        m.put(key + "TheirsOnly", mergeTheirsOnlyBy.get(o));
+        m.put(key + "PeakVisited", mergePeakVisitedBy.get(o));
+        m.put(key + "WalkNanos", mergeWalkNanosBy.get(o));
+    }
+
     /** Commit nodes ever created: every commit that did not fold, plus every merge commit. */
     private static long nodesCreated() {
         return commits.get() - folds.get() + merges.get();
@@ -556,6 +630,42 @@ final class VersioningStats {
                 p.put("pulls", pulls.get());
                 p.put("commits", pulledCommits.get());
                 section(derived, "pulls").put("avgCommits", pulledCommits.get() / pulls.get());
+            }
+
+            long walkedMerges = 0;
+            long allMerges = 0;
+            for (MergeOutcome o : MergeOutcome.values()) {
+                long count = mergeOutcomes.get(o.ordinal());
+                allMerges += count;
+                if (o.ordinal() >= MergeOutcome.INCLUDED.ordinal()) {
+                    walkedMerges += count;
+                }
+            }
+            if (allMerges > 0) {
+                Map<String, Long> m = section(sections, "merge");
+                m.put("adopted", mergeOutcomes.get(MergeOutcome.ADOPTED.ordinal()));
+                m.put("nothing", mergeOutcomes.get(MergeOutcome.NOTHING.ordinal()));
+                m.put("same", mergeOutcomes.get(MergeOutcome.SAME.ordinal()));
+                m.put("epochIncluded", mergeOutcomes.get(MergeOutcome.EPOCH_INCLUDED.ordinal()));
+                m.put("included", mergeOutcomes.get(MergeOutcome.INCLUDED.ordinal()));
+                m.put("conflict", mergeOutcomes.get(MergeOutcome.CONFLICT.ordinal()));
+                m.put("fastForward", mergeOutcomes.get(MergeOutcome.FAST_FORWARD.ordinal()));
+                m.put("merged", mergeOutcomes.get(MergeOutcome.MERGED.ordinal()));
+                m.put("visited", mergeVisited.get());
+                m.put("mineOnly", mergeMineOnly.get());
+                m.put("theirsOnly", mergeTheirsOnly.get());
+                m.put("peakVisited", peakMergeVisited.get());
+                m.put("walkNanos", mergeWalkNanos.get());
+                m.put("nanos", mergeNanos.get());
+                walkedByOutcome(m, MergeOutcome.INCLUDED, "included");
+                walkedByOutcome(m, MergeOutcome.FAST_FORWARD, "fastForward");
+                walkedByOutcome(m, MergeOutcome.MERGED, "merged");
+                walkedByOutcome(m, MergeOutcome.CONFLICT, "conflict");
+                if (walkedMerges > 0) {
+                    section(derived, "merge").put("avgVisited", mergeVisited.get() / walkedMerges);
+                    section(derived, "merge").put("avgShared",
+                                    (mergeVisited.get() - mergeMineOnly.get() - mergeTheirsOnly.get()) / walkedMerges);
+                }
             }
 
             Map<String, Long> s = section(sections, "sharing");

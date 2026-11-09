@@ -73,10 +73,14 @@ public final class LinearView implements MemoryView {
         activated = true;
     }
 
-    public LinearView(Supplier<SyncState> bindState, SyncState global, AtomicLong deadObjectCount) {
+    // makes and folds into this thread's commits on the global history, stamping each with this thread
+    private final Commit.Committer committer;
+
+    public LinearView(Supplier<SyncState> bindState, SyncState global, AtomicLong deadObjectCount, Commit.Committer committer) {
         this.bindState = bindState;
         this.deadObjectCount = deadObjectCount;
         this.global = global;
+        this.committer = committer;
     }
 
     /** This thread's sync state, bound on first use. */
@@ -428,7 +432,7 @@ public final class LinearView implements MemoryView {
             // lock. A new commit holds old as its parent, so old stays alive when the global moves on.
             Commit old = global.commit;
             baseState.set(null);
-            newGlobal = old == null ? Commit.first(changes) : old.extend(changes);
+            newGlobal = old == null ? committer.first(changes) : committer.extend(old, changes);
             global.set(newGlobal);      // no-op when it folded
             baseState.set(newGlobal);
         }

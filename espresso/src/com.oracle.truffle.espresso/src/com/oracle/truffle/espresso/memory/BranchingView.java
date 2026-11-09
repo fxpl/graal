@@ -12,7 +12,7 @@
  * version 2 for more details (a copy is included in the LICENSE file that
  * accompanied this code).
  *
- * You should have received a copy of the GNU General Public License version
+ * You have received a copy of the GNU General Public License version
  * 2 along with this work; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  *
@@ -42,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.memory.VersioningStats.MergeOutcome;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
@@ -89,9 +90,13 @@ public final class BranchingView implements MemoryView {
     // commits coloured by the last merge walk, to pre-size the next walk's colour map
     private int lastMergeWalkSize = 16;
 
-    public BranchingView(Supplier<SyncState> bindState, AtomicLong deadObjectCount) {
+    // makes and folds into this thread's commits, stamping each with this thread
+    private final Commit.Committer committer;
+
+    public BranchingView(Supplier<SyncState> bindState, AtomicLong deadObjectCount, Commit.Committer committer) {
         this.bindState = bindState;
         this.deadObjectCount = deadObjectCount;
+        this.committer = committer;
     }
 
     /** This thread's sync state, bound on first use. */
@@ -295,7 +300,7 @@ public final class BranchingView implements MemoryView {
         VersioningStats.onCommit(fields, arrays, arrayElements);
 
         Commit head = state().commit;
-        Commit next = head == null ? Commit.first(changes) : head.extend(changes);
+        Commit next = head == null ? committer.first(changes) : committer.extend(head, changes);
         if (next != head) {
             VersioningStats.describeCommit(next, state(), false);
         }
@@ -318,6 +323,7 @@ public final class BranchingView implements MemoryView {
      */
     ConflictingLocations merge(Commit theirHead) {
         assert stagingEmpty() : "merging with uncommitted writes";
+        long start = VersioningStats.now();
         Commit myHead = state().commit;
         if (myHead == null) {
             // either pickup the other commit as head (there is nothing to merge)
@@ -328,17 +334,30 @@ public final class BranchingView implements MemoryView {
                 // the adopted history; with no head we have never committed, so none has written marks
                 workingObjects.clear();
                 workingArrays.clear();
+                VersioningStats.onMergeUnwalked(MergeOutcome.ADOPTED);
+            } else {
+                VersioningStats.onMergeUnwalked(MergeOutcome.NOTHING);
             }
             return ConflictingLocations.NONE;
         }
 
         if (theirHead == null) {
             // just return as there is nothing to merge
+            VersioningStats.onMergeUnwalked(MergeOutcome.NOTHING);
             return ConflictingLocations.NONE;
         }
 
         if (theirHead == myHead) {
             // no point in doing this
+            VersioningStats.onMergeUnwalked(MergeOutcome.SAME);
+            return ConflictingLocations.NONE;
+        }
+
+        // now check if the two heads can be quickly compared as they were
+        // created one after the other
+        if (myHead.isComparableTo(theirHead) && theirHead.isEarlierOrSame(myHead)) {
+            // they are an ancestor of us so nothing to do
+            VersioningStats.onMergeUnwalked(MergeOutcome.EPOCH_INCLUDED);
             return ConflictingLocations.NONE;
         }
 
@@ -393,9 +412,11 @@ public final class BranchingView implements MemoryView {
             }
         }
         lastMergeWalkSize = colours.size();
+        long walked = VersioningStats.now();
 
         if (theirsOnly.isEmpty()) {
             // they are an ancestor of us so nothing to do
+            recordWalkedMerge(MergeOutcome.INCLUDED, colours.size(), mineOnly, theirsOnly, start, walked);
             return ConflictingLocations.NONE;
         }
 
@@ -437,6 +458,7 @@ public final class BranchingView implements MemoryView {
                 });
             }
             if (!fieldConflicts.isEmpty() || !arrayConflicts.isEmpty()) {
+                recordWalkedMerge(MergeOutcome.CONFLICT, colours.size(), mineOnly, theirsOnly, start, walked);
                 return new ConflictingLocations(fieldConflicts, arrayConflicts);
             }
         }
@@ -467,15 +489,22 @@ public final class BranchingView implements MemoryView {
             // the history as we dropped a ref to part way through the
             // history
             compress();
+            recordWalkedMerge(MergeOutcome.FAST_FORWARD, colours.size(), mineOnly, theirsOnly, start, walked);
             return ConflictingLocations.NONE;
         }
 
         // create the merge of the parents
-        Commit mergeCommit = Commit.merge(state().commit, theirHead);
+        Commit mergeCommit = committer.merge(state().commit, theirHead);
         VersioningStats.onMerge();
         VersioningStats.describeCommit(mergeCommit, state(), true);
         setHead(mergeCommit);
+        recordWalkedMerge(MergeOutcome.MERGED, colours.size(), mineOnly, theirsOnly, start, walked);
         return ConflictingLocations.NONE;
+    }
+
+    private static void recordWalkedMerge(MergeOutcome outcome, int visited, List<Commit> mineOnly, List<Commit> theirsOnly,
+                    long start, long walked) {
+        VersioningStats.onMergeWalked(outcome, visited, mineOnly.size(), theirsOnly.size(), walked - start, VersioningStats.now() - start);
     }
 
     // pull from another commit and report any conflicting locations
