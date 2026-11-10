@@ -456,23 +456,26 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         return getDeclaringKlass().getContext().getMemoryModel();
     }
 
-    // Sync-as-Share: a volatile access to a plain versioned field is a VM path the model does not cover.
-    // Failing here keeps the field's raw slot unchanged, as its version 0.
-    private void checkNotForceVolatile(StaticObject obj, boolean forceVolatile) {
-        if (forceVolatile) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw EspressoError.shouldNotReachHere("Sync-as-Share: volatile access to versioned field " + getName() + " of " + obj.getKlass().getExternalName());
-        }
-    }
-
-    // Sync-as-Share: read a field the model owns: a volatile one with its acquire, a plain one through the
-    // calling thread's view. Boxed for primitives.
+    // Sync-as-Share: read a field the model owns: a volatile access with its acquire, a plain one through
+    // the calling thread's view. A volatile access to a plain field (VM code reading it with
+    // Unsafe.get*Volatile, as the JDK does for Module.enableNativeAccess) is modelled as a volatile access
+    // to that field: the value is still read through the view, after a pull from the field's own volatile
+    // sync state. Boxed for primitives.
     private Object readVersioned(StaticObject obj, boolean forceVolatile) {
-        if (isVolatile()) {
+        if (isVolatile() || forceVolatile) {
             return memoryModel().onVolatileRead(obj, this);
         }
-        checkNotForceVolatile(obj, forceVolatile);
         return memoryModel().readField(obj, this);
+    }
+
+    // Sync-as-Share: write a field the model owns, as readVersioned: a volatile access stages the value and
+    // pushes to the field's volatile sync state, a plain one only stages it.
+    private void writeVersioned(StaticObject obj, Object value, boolean forceVolatile) {
+        if (isVolatile() || forceVolatile) {
+            memoryModel().onVolatileWrite(obj, this, value);
+        } else {
+            memoryModel().writeField(obj, this, value);
+        }
     }
 
     /**
@@ -611,12 +614,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         onStore(obj, value);
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -760,12 +758,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -816,12 +809,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -872,12 +860,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -928,12 +911,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -984,12 +962,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -1040,12 +1013,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -1107,12 +1075,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {
@@ -1174,12 +1137,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         if (Versioning.versionsField(obj, this)) {
-            if (isVolatile()) {
-                memoryModel().onVolatileWrite(obj, this, value);
-            } else {
-                checkNotForceVolatile(obj, forceVolatile);
-                memoryModel().writeField(obj, this, value);
-            }
+            writeVersioned(obj, value, forceVolatile);
             return;
         }
         if (isVolatile() || forceVolatile) {

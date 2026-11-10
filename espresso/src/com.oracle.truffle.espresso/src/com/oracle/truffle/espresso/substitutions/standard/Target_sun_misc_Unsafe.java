@@ -1018,6 +1018,44 @@ public final class Target_sun_misc_Unsafe {
             assert isArray(object);
             return object.unwrap(language);
         }
+
+        /*
+         * Sync-as-Share: the host array a plain Unsafe read of `bytes` bytes at `offset` reads, through the
+         * model's read barrier for the elements those bytes cover (an unaligned getShort on a byte[] covers
+         * two), so a versioned array is read as the calling thread sees it. A null base is a raw address
+         * and passes through. Volatile, compare-and-set and exchange accesses still unwrap, and fail loudly
+         * on a versioned array.
+         */
+        protected static Object arrayForRead(EspressoLanguage language, StaticObject object, long offset, int bytes) {
+            if (StaticObject.isNull(object)) {
+                return null;
+            }
+            assert object.isArray();
+            int[] range = elementRange(language, object, offset, bytes);
+            return object.getArrayForRead(language, range[0], range[1]);
+        }
+
+        /** As {@link #arrayForRead}, through the write barrier, so exactly the elements written are staged. */
+        protected static Object arrayForWrite(EspressoLanguage language, StaticObject object, long offset, int bytes) {
+            if (StaticObject.isNull(object)) {
+                return null;
+            }
+            assert object.isArray();
+            int[] range = elementRange(language, object, offset, bytes);
+            return object.getArrayForWrite(language, range[0], range[1]);
+        }
+
+        // the elements [from, to) that `bytes` bytes at `offset` into the array overlap, clamped to the
+        // array; only the host array's class is read here, for its base offset and index scale
+        private static int[] elementRange(EspressoLanguage language, StaticObject array, long offset, int bytes) {
+            Class<?> hostClass = array.getRawArray(language).getClass();
+            long base = UnsafeAccess.get().arrayBaseOffset(hostClass);
+            long scale = UnsafeAccess.get().arrayIndexScale(hostClass);
+            int length = array.length(language);
+            long from = (offset - base) / scale;
+            long to = (offset + bytes - 1 - base) / scale + 1;
+            return new int[]{(int) Math.max(0, Math.min(from, length)), (int) Math.max(0, Math.min(to, length))};
+        }
     }
 
     // region put*(long offset, * value)
@@ -1189,13 +1227,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Byte.BYTES, getMeta(), this, errorBranch);
-            UnsafeAccess.get().putByte(unwrapArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putByte(arrayForWrite(getLanguage(), holder, offset, Byte.BYTES), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset, byte value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            UnsafeAccess.get().putByte(unwrapArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putByte(arrayForWrite(getLanguage(), holder, offset, Byte.BYTES), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1248,7 +1286,7 @@ public final class Target_sun_misc_Unsafe {
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
             Versioning.onStore(holder, value);
-            UnsafeAccess.get().putObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putObject(arrayForWrite(getLanguage(), holder, offset, 1), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
@@ -1256,7 +1294,7 @@ public final class Target_sun_misc_Unsafe {
                         @JavaType(Object.class) StaticObject value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
             Versioning.onStore(holder, value);
-            UnsafeAccess.get().putObject(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putObject(arrayForWrite(getLanguage(), holder, offset, 1), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1309,13 +1347,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, 1, getMeta(), this, errorBranch);
-            UnsafeAccess.get().putBoolean(unwrapArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putBoolean(arrayForWrite(getLanguage(), holder, offset, 1), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset, boolean value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            UnsafeAccess.get().putBoolean(unwrapArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putBoolean(arrayForWrite(getLanguage(), holder, offset, 1), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1368,13 +1406,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Character.BYTES, getMeta(), this, errorBranch);
-            UnsafeAccess.get().putChar(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putChar(arrayForWrite(getLanguage(), holder, offset, Character.BYTES), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset, char value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            UnsafeAccess.get().putChar(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putChar(arrayForWrite(getLanguage(), holder, offset, Character.BYTES), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1427,13 +1465,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Short.BYTES, getMeta(), this, errorBranch);
-            UnsafeAccess.get().putShort(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putShort(arrayForWrite(getLanguage(), holder, offset, Short.BYTES), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset, short value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            UnsafeAccess.get().putShort(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putShort(arrayForWrite(getLanguage(), holder, offset, Short.BYTES), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1486,13 +1524,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Integer.BYTES, getMeta(), this, errorBranch);
-            UnsafeAccess.get().putInt(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putInt(arrayForWrite(getLanguage(), holder, offset, Integer.BYTES), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset, int value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            UnsafeAccess.get().putInt(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putInt(arrayForWrite(getLanguage(), holder, offset, Integer.BYTES), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1545,13 +1583,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Float.BYTES, getMeta(), this, errorBranch);
-            UnsafeAccess.get().putFloat(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putFloat(arrayForWrite(getLanguage(), holder, offset, Float.BYTES), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset, float value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            UnsafeAccess.get().putFloat(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putFloat(arrayForWrite(getLanguage(), holder, offset, Float.BYTES), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1604,13 +1642,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Double.BYTES, getMeta(), this, errorBranch);
-            UnsafeAccess.get().putDouble(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putDouble(arrayForWrite(getLanguage(), holder, offset, Double.BYTES), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset, double value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            UnsafeAccess.get().putDouble(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putDouble(arrayForWrite(getLanguage(), holder, offset, Double.BYTES), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1663,13 +1701,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Long.BYTES, getMeta(), this, errorBranch);
-            UnsafeAccess.get().putLong(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putLong(arrayForWrite(getLanguage(), holder, offset, Long.BYTES), offset, value);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         void doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset, long value,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            UnsafeAccess.get().putLong(unwrapNullOrArray(getLanguage(), holder), offset, value);
+            UnsafeAccess.get().putLong(arrayForWrite(getLanguage(), holder, offset, Long.BYTES), offset, value);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1928,13 +1966,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Byte.BYTES, getMeta(), this, errorBranch);
-            return UnsafeAccess.get().getByte(unwrapNullOrArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getByte(arrayForRead(getLanguage(), holder, offset, Byte.BYTES), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         byte doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return UnsafeAccess.get().getByte(unwrapNullOrArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getByte(arrayForRead(getLanguage(), holder, offset, Byte.BYTES), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -1990,7 +2028,7 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, REFERENCE_SIZE, getMeta(), this, errorBranch);
-            return (StaticObject) UnsafeAccess.get().getObject(unwrapNullOrArray(getLanguage(), holder), offset);
+            return (StaticObject) UnsafeAccess.get().getObject(arrayForRead(getLanguage(), holder, offset, 1), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
@@ -1998,7 +2036,7 @@ public final class Target_sun_misc_Unsafe {
         StaticObject doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder,
                         long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return (StaticObject) UnsafeAccess.get().getObject(unwrapNullOrArray(getLanguage(), holder), offset);
+            return (StaticObject) UnsafeAccess.get().getObject(arrayForRead(getLanguage(), holder, offset, 1), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -2054,13 +2092,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, 1, getMeta(), this, errorBranch);
-            return UnsafeAccess.get().getBoolean(unwrapNullOrArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getBoolean(arrayForRead(getLanguage(), holder, offset, 1), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         boolean doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return UnsafeAccess.get().getBoolean(unwrapNullOrArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getBoolean(arrayForRead(getLanguage(), holder, offset, 1), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -2116,13 +2154,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Character.BYTES, getMeta(), this, errorBranch);
-            return UnsafeAccess.get().getChar(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getChar(arrayForRead(getLanguage(), holder, offset, Character.BYTES), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         char doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return UnsafeAccess.get().getChar(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getChar(arrayForRead(getLanguage(), holder, offset, Character.BYTES), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -2178,13 +2216,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Short.BYTES, getMeta(), this, errorBranch);
-            return UnsafeAccess.get().getShort(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getShort(arrayForRead(getLanguage(), holder, offset, Short.BYTES), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         short doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return UnsafeAccess.get().getShort(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getShort(arrayForRead(getLanguage(), holder, offset, Short.BYTES), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -2240,13 +2278,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Integer.BYTES, getMeta(), this, errorBranch);
-            return UnsafeAccess.get().getInt(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getInt(arrayForRead(getLanguage(), holder, offset, Integer.BYTES), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         int doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return UnsafeAccess.get().getInt(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getInt(arrayForRead(getLanguage(), holder, offset, Integer.BYTES), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -2302,13 +2340,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Float.BYTES, getMeta(), this, errorBranch);
-            return UnsafeAccess.get().getFloat(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getFloat(arrayForRead(getLanguage(), holder, offset, Float.BYTES), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         float doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return UnsafeAccess.get().getFloat(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getFloat(arrayForRead(getLanguage(), holder, offset, Float.BYTES), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -2364,13 +2402,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Double.BYTES, getMeta(), this, errorBranch);
-            return UnsafeAccess.get().getDouble(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getDouble(arrayForRead(getLanguage(), holder, offset, Double.BYTES), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         double doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return UnsafeAccess.get().getDouble(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getDouble(arrayForRead(getLanguage(), holder, offset, Double.BYTES), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")
@@ -2426,13 +2464,13 @@ public final class Target_sun_misc_Unsafe {
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language,
                         @Cached InlinedBranchProfile errorBranch) {
             boundsCheckAndEnterErrorBranch(holder, offset, Long.BYTES, getMeta(), this, errorBranch);
-            return UnsafeAccess.get().getLong(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getLong(arrayForRead(getLanguage(), holder, offset, Long.BYTES), offset);
         }
 
         @Specialization(guards = {"isArray(holder)", "!language.checkUnsafeArrayBounds()"})
         long doArrayNoBoundsCheck(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @JavaType(Object.class) StaticObject holder, long offset,
                         @SuppressWarnings("unused") @Bind("getLanguage()") EspressoLanguage language) {
-            return UnsafeAccess.get().getLong(unwrapArray(getLanguage(), holder), offset);
+            return UnsafeAccess.get().getLong(arrayForRead(getLanguage(), holder, offset, Long.BYTES), offset);
         }
 
         @Specialization(guards = "!isNullOrArray(holder)")

@@ -904,6 +904,27 @@ public final class Meta extends ContextAccessImpl
                         .field(VERSION_16_OR_HIGHER, Names.typeAnnotations, Types._byte_array) //
                         .notRequiredField(java_lang_reflect_RecordComponent);
 
+        // Sync-as-Share: reflection's lazily filled caches, marked @Unversioned where they are declared
+        ObjectKlass accessibleObject = java_lang_reflect_Executable.getSuperKlass();
+        java_lang_reflect_AccessibleObject_accessCheckCache = declaredFieldNamed(accessibleObject, "accessCheckCache");
+        java_lang_reflect_Executable_parameterData = declaredFieldNamed(java_lang_reflect_Executable, "parameterData");
+        java_lang_reflect_Executable_declaredAnnotations = declaredFieldNamed(java_lang_reflect_Executable, "declaredAnnotations");
+        java_lang_reflect_Method_callerSensitive = declaredFieldNamed(java_lang_reflect_Method, "callerSensitive");
+        java_lang_reflect_Method_methodAccessor = declaredFieldNamed(java_lang_reflect_Method, "methodAccessor");
+        java_lang_reflect_Method_hash = declaredFieldNamed(java_lang_reflect_Method, "hash");
+        java_lang_reflect_Method_genericInfo = declaredFieldNamed(java_lang_reflect_Method, "genericInfo");
+        java_lang_reflect_Constructor_constructorAccessor = declaredFieldNamed(java_lang_reflect_Constructor, "constructorAccessor");
+        java_lang_reflect_Constructor_genericInfo = declaredFieldNamed(java_lang_reflect_Constructor, "genericInfo");
+        java_lang_reflect_Field_fieldAccessor = declaredFieldNamed(java_lang_reflect_Field, "fieldAccessor");
+        java_lang_reflect_Field_overrideFieldAccessor = declaredFieldNamed(java_lang_reflect_Field, "overrideFieldAccessor");
+        java_lang_reflect_Field_genericInfo = declaredFieldNamed(java_lang_reflect_Field, "genericInfo");
+        java_lang_reflect_Field_declaredAnnotations = declaredFieldNamed(java_lang_reflect_Field, "declaredAnnotations");
+        java_lang_reflect_Parameter_declaredAnnotations = declaredFieldNamed(java_lang_reflect_Parameter, "declaredAnnotations");
+        java_lang_reflect_Parameter_parameterTypeCache = declaredFieldNamed(java_lang_reflect_Parameter, "parameterTypeCache");
+        java_lang_reflect_Parameter_parameterClassCache = declaredFieldNamed(java_lang_reflect_Parameter, "parameterClassCache");
+        java_lang_reflect_RecordComponent_genericInfo = declaredFieldNamed(java_lang_reflect_RecordComponent, "genericInfo");
+        java_lang_reflect_RecordComponent_declaredAnnotations = declaredFieldNamed(java_lang_reflect_RecordComponent, "declaredAnnotations");
+
         sun_reflect_MagicAccessorImpl = diff() //
                         .klass(VERSION_8_OR_LOWER, Types.sun_reflect_MagicAccessorImpl) //
                         .klass(VERSION_9_TO_21, Types.jdk_internal_reflect_MagicAccessorImpl) //
@@ -1213,6 +1234,21 @@ public final class Meta extends ContextAccessImpl
                 }
             }
         }
+    }
+
+    // Sync-as-Share: a field of klass by name alone, or null if klass is absent or this JDK does not declare
+    // it. For JDK-internal fields only Sync-as-Share needs a handle on, so they need no name or type symbols
+    // of their own; their types (MethodAccessor, FieldRepository, ...) differ across JDKs anyway.
+    private static Field declaredFieldNamed(ObjectKlass klass, String name) {
+        if (klass == null) {
+            return null;
+        }
+        for (Field f : klass.getDeclaredFields()) {
+            if (f.getNameAsString().equals(name)) {
+                return f;
+            }
+        }
+        return null;
     }
 
     private static void initializeEspressoClassInHierarchy(ObjectKlass klass) {
@@ -1568,6 +1604,29 @@ public final class Meta extends ContextAccessImpl
     public final Field java_lang_reflect_Field_class;
     public final Field java_lang_reflect_Field_name;
     public final Field java_lang_reflect_Field_type;
+
+    // Sync-as-Share: the caches java.lang.reflect fills in on a reflection object the first time it is
+    // used, without a lock. Each is built to tolerate threads racing to fill it (every thread computes the
+    // same value), and holds only JDK objects, so stopping the model's reachability walk there loses no
+    // program data. Looked up by name (see declaredFieldNamed); null where this JDK has no such field.
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_AccessibleObject_accessCheckCache;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Executable_parameterData;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Executable_declaredAnnotations;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Method_callerSensitive;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Method_methodAccessor;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Method_hash;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Method_genericInfo;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Constructor_constructorAccessor;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Constructor_genericInfo;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Field_fieldAccessor;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Field_overrideFieldAccessor;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Field_genericInfo;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Field_declaredAnnotations;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Parameter_declaredAnnotations;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Parameter_parameterTypeCache;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Parameter_parameterClassCache;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_RecordComponent_genericInfo;
+    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_RecordComponent_declaredAnnotations;
 
     public final ObjectKlass java_lang_Shutdown;
     public final Method java_lang_Shutdown_shutdown;

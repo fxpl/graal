@@ -839,7 +839,9 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
     public static ByteSequence getSignatureFromGuestDescription(@JavaType(Class[].class) StaticObject ptypes,
                     @JavaType(Class.class) StaticObject rtype, Meta meta) {
         Symbol<Type> returnType = rtype.getMirrorKlass(meta).getType();
-        StaticObject[] parameterTypes = ptypes.unwrap(meta.getLanguage());
+        // Sync-as-Share: read through the barrier, as a method type's parameter array can be versioned (a
+        // MethodType built by the program and then shared); only read, so the calling thread's view will do
+        StaticObject[] parameterTypes = ptypes.getArrayForRead(meta.getLanguage(), 0, ptypes.length(meta.getLanguage()));
         int len = 2;
         for (StaticObject parameterType : parameterTypes) {
             len += parameterType.getMirrorKlass(meta).getType().length();
