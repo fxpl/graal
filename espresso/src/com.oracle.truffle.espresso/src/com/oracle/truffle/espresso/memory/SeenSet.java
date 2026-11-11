@@ -22,65 +22,51 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.BitSet;
 
 public class SeenSet {
 
-    private static final Map<Set<SyncState>, SeenSet> table = new ConcurrentHashMap<>();
+    // one bit per sync state, by its position in the compression run, never changed once made
+    private final BitSet seen;
 
-    public static final SeenSet EMPTY = new SeenSet(Set.of());
-
-    private final Set<SyncState> seen;
-
-    // remembers what with returned for each state, so repeats skip the copy and the table lookup
-    private final Map<SyncState, SeenSet> next = new ConcurrentHashMap<>();
-
-    private SeenSet(Set<SyncState> seen) {
+    private SeenSet(BitSet seen) {
       this.seen = seen;
     }
 
-    // return an interned version of the set
-    public SeenSet with(SyncState state) {
-      SeenSet memo = next.get(state);
-      if (memo != null) {
-        return memo;
-      }
-
-      Set<SyncState> newSeen = new HashSet<>(seen);
-      newSeen.add(state);
-
-      final Set<SyncState> immSet = Set.copyOf(newSeen);
-      SeenSet interned = table.computeIfAbsent(immSet, k -> new SeenSet(k));
-      // racing threads all get the same interned set, so a plain put is fine
-      next.put(state, interned);
-      return interned;
+    // the set with only the sync state at this position
+    public static SeenSet of(int position) {
+      BitSet seen = new BitSet();
+      seen.set(position);
+      return new SeenSet(seen);
     }
 
-    // return an interned version of the union of both sets
     public SeenSet union(SeenSet other) {
-      if (other == this || seen.containsAll(other.seen)) {
+      if (other == this) {
         return this;
       }
-      if (other.seen.containsAll(seen)) {
+
+      BitSet both = new BitSet();
+      both.or(seen);
+      both.or(other.seen);
+
+      // when either set is already the union, return it, so commits down a chain share one set
+      if (both.equals(seen)) {
+        return this;
+      }
+      if (both.equals(other.seen)) {
         return other;
       }
-
-      Set<SyncState> newSeen = new HashSet<>(seen);
-      newSeen.addAll(other.seen);
-      return table.computeIfAbsent(Set.copyOf(newSeen), k -> new SeenSet(k));
+      return new SeenSet(both);
     }
 
-    public boolean contains(SyncState state) {
-      return seen.contains(state);
+    @Override
+    public boolean equals(Object o) {
+      return o instanceof SeenSet other && seen.equals(other.seen);
     }
 
-    // forget every interned set, so the table does not keep dead states alive between compressions
-    static void reset() {
-      table.clear();
-      EMPTY.next.clear();
+    @Override
+    public int hashCode() {
+      return seen.hashCode();
     }
 
 }

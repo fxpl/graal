@@ -22,9 +22,7 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -40,18 +38,22 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 final class SeenSetCompression {
 
-    static boolean COMPRESS = true;
-
-    // how many calls to tryCompress, across every thread, between compressions
-    private static final int INTERVAL = 4096;
+    // how many calls to tryCompress, across every thread, between compressions, from
+    // SYNCSHARE_COMPRESS_INTERVAL (default 4096), and 0 turns compression off
+    private static final int INTERVAL = intervalFromEnvironment();
     private static final AtomicLong calls = new AtomicLong();
 
     private SeenSetCompression() {
     }
 
+    private static int intervalFromEnvironment() {
+        String interval = System.getenv("SYNCSHARE_COMPRESS_INTERVAL");
+        return interval == null ? 4096 : Integer.parseInt(interval);
+    }
+
     // compresses on every INTERVAL-th call
     static void tryCompress() {
-        if (COMPRESS && calls.incrementAndGet() % INTERVAL == 0) {
+        if (INTERVAL > 0 && calls.incrementAndGet() % INTERVAL == 0) {
             compress();
         }
     }
@@ -59,12 +61,43 @@ final class SeenSetCompression {
     private static void compress() {
         Commit.GRAPH.writeLock().lock();
         try {
-            SeenSet.reset();
+            // collect the seen sets for all of the entry commits pointed
+            // to by sync states (locks, threads, etc.)
+            Map<Commit, SeenSet> seenBy = new HashMap<>();
+            synchronized (SyncState.ALL) {
+                // each sync state pointing at a commit gets the next bit position for this run
+                int position = 0;
+                for (SyncState s : SyncState.ALL) {
+                    if (s.commit != null) {
+                        // To syncstates maybe be pointing at the same commit
+                        seenBy.merge(s.commit, SeenSet.of(position), SeenSet::union);
+                        position++;
+                    }
+                }
+            }
 
-            Map<Commit, SeenSet> holders = holders();
-            List<Commit> newestFirst = reachedFrom(holders.keySet());
-            newestFirst.sort((c1, c2) -> Integer.compare(c2.generation(), c1.generation()));
-            Map<Commit, SeenSet> seenBy = seenSets(newestFirst, holders);
+            // Walk back from the entry points newest first, so every child is visited before its parents.
+            // A commit's seen set is complete when it is visited, and is then unioned into each of its parents.
+            List<Commit> newestFirst = new ArrayList<>();
+            Queue<Commit> ready = new PriorityQueue<>((c1, c2) ->
+                Integer.compare(c2.generation(), c1.generation())
+            );
+            ready.addAll(seenBy.keySet());
+
+            while (!ready.isEmpty()) {
+                Commit c = ready.poll();
+                newestFirst.add(c);
+
+                SeenSet seen = seenBy.get(c);
+                for (Commit p : c.parents()) {
+                    // the first child to reach a parent gives it its seen set and queues it
+                    boolean isQueued = seenBy.containsKey(p);
+                    seenBy.merge(p, seen, SeenSet::union);
+                    if (!isQueued) {
+                        ready.add(p);
+                    }
+                }
+            }
 
             // newest first, so each region folds into its newest commit
             Set<Commit> absorbed = new HashSet<>();
@@ -78,63 +111,21 @@ final class SeenSetCompression {
         }
     }
 
-    // the states holding each commit
-    private static Map<Commit, SeenSet> holders() {
-        Map<Commit, SeenSet> holders = new HashMap<>();
-        synchronized (SyncState.ALL) {
-            for (SyncState s : SyncState.ALL) {
-                if (s.commit != null) {
-                    holders.merge(s.commit, SeenSet.EMPTY.with(s), SeenSet::union);
-                }
-            }
-        }
-        return holders;
-    }
-
-    // every commit reachable from the given ones through parents
-    private static List<Commit> reachedFrom(Set<Commit> starts) {
-        Set<Commit> reached = new HashSet<>(starts);
-        Deque<Commit> worklist = new ArrayDeque<>(starts);
-        while (!worklist.isEmpty()) {
-            for (Commit p : worklist.pop().parents()) {
-                if (reached.add(p)) {
-                    worklist.push(p);
-                }
-            }
-        }
-        return new ArrayList<>(reached);
-    }
-
-    // A commit is seen by its holders and by whoever sees one of its children, so children go first.
-    // Only reached children count, and those are already in the map by the time their parents are.
-    private static Map<Commit, SeenSet> seenSets(List<Commit> newestFirst, Map<Commit, SeenSet> holders) {
-        Map<Commit, SeenSet> seenBy = new HashMap<>();
-        for (Commit c : newestFirst) {
-            SeenSet seen = holders.getOrDefault(c, SeenSet.EMPTY);
-            for (Commit child : c.children()) {
-                SeenSet childSeen = seenBy.get(child);
-                if (childSeen != null) {
-                    seen = seen.union(childSeen);
-                }
-            }
-            seenBy.put(c, seen);
-        }
-        return seenBy;
-    }
-
-    // folds the region of ancestors with the same seen set into into, and returns the commits folded
+    // folds the region of ancestors with the same seen set into 'into', and returns the commits absorbed
     private static List<Commit> collapseInto(Commit into, Map<Commit, SeenSet> seenBy) {
         SeenSet seen = seenBy.get(into);
         Set<Commit> region = new HashSet<>();
-        Set<Commit> newParents = new HashSet<>();
         List<Commit> absorbedInOrder = new ArrayList<>();
         Queue<Commit> ready = new PriorityQueue<>((c1, c2) ->
             Integer.compare(c2.generation(), c1.generation())
         );
 
+        // for each parent we reach, how many references come from inside the region we are walking
+        Map<Commit, Integer> reachedParentsRefs = new HashMap<>();
+
         for (Commit p : into.parents()) {
-            newParents.add(p);
-            if (seen == seenBy.get(p)) {
+            reachedParentsRefs.merge(p, 1, Integer::sum);
+            if (seen.equals(seenBy.get(p))) {
                 // these nodes can be merged together
                 ready.add(p);
                 region.add(p);
@@ -146,8 +137,8 @@ final class SeenSetCompression {
             absorbedInOrder.add(ancestor);
 
             for (Commit p : ancestor.parents()) {
-                newParents.add(p);
-                if (seen == seenBy.get(p) && region.add(p)) {
+                reachedParentsRefs.merge(p, 1, Integer::sum);
+                if (seen.equals(seenBy.get(p)) && region.add(p)) {
                     ready.add(p);
                 }
             }
@@ -157,7 +148,8 @@ final class SeenSetCompression {
             return absorbedInOrder;
         }
 
-        newParents.removeAll(region);
+        // what is left are the parents outside the region
+        reachedParentsRefs.keySet().removeAll(region);
 
         // Create a new map for the change set of the node, applying the commits changes in order
         Map<ObjectNumber, ObjectChanges> absorbed = new HashMap<>();
@@ -171,7 +163,10 @@ final class SeenSetCompression {
                 if (!region.contains(child) && child != into) {
                     Set<Commit> childsNewParents = new HashSet<Commit>(child.parents());
                     childsNewParents.remove(c);
-                    childsNewParents.add(into);
+                    // a child already pointing at into keeps its one edge, so into only gains new ones
+                    if (childsNewParents.add(into)) {
+                        into.incRef();
+                    }
                     child.setParents(childsNewParents);
                     movedChildren.add(child);
                 }
@@ -185,10 +180,22 @@ final class SeenSetCompression {
         into.setChanges(absorbed);
 
         // Update out parents to be the parents of all the nodes in the region whose parents were outside the region
-        into.setParents(newParents);
+        into.setParents(reachedParentsRefs.keySet());
+
+        // the commits that pointed at each outside parent are now just into, so it keeps one reference
+        reachedParentsRefs.forEach((p, refs) -> {
+            for (int i = 1; i < refs; i++) {
+                p.decRef();
+            }
+        });
 
         // And tell of the parents outside the region whose children were collapsed that this is now their child
         into.parents().forEach(p -> p.addChild(into));
+
+        // the absorbed commits are gone, so their parents lose them as children
+        for (Commit c : absorbedInOrder) {
+            c.parents().forEach(p -> p.removeChild(c));
+        }
 
         // We can lower the generation of this now to whatever the max of the parents was + 1
         // we might get to the root and find null, it which case the generation was 0

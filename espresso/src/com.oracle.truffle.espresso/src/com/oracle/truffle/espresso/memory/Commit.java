@@ -23,12 +23,9 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
@@ -40,14 +37,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * {@code changes} are the writes this commit made, per object ({@link ObjectChanges}: to an
  * object's fields, or to an array's elements); {@code parents} is empty for a thread's first
  * commit, has one entry for an ordinary commit, two for a fresh <em>merge</em> commit (whose
- * {@code changes} are empty), and any number once {@link #absorbAncestors} has compressed exclusive
- * ancestors into it.
+ * {@code changes} are empty), and any number once {@link RefCountAbsorption} or
+ * {@link SeenSetCompression} has folded ancestors into it.
  *
  * <p>Reference counted: sync states (through {@link SyncState#set}) and child commits each hold a
- * reference. A commit with a count
- * of 1 is exclusive to its one referrer and may be rewritten: {@link #extend} folds new writes into
- * an exclusive head, and {@link #absorbAncestors} pulls exclusive ancestors into a commit. A count
- * reaching 0 releases the commit's parents in turn ({@link #decRef}).
+ * reference. {@link RefCountAbsorption} pulls ancestors whose every reference it can account for
+ * into a commit. A count reaching 0 releases the commit's parents in turn ({@link #decRef}).
  *
  * <p>Not immutable: other threads walk {@code changes}/{@code parents} without locking, so rewrites
  * of a commit they may reach build a new map/set and swap the volatile field (changes before
@@ -279,115 +274,7 @@ public class Commit {
         changes = filtered;
     }
 
-    private static int incAndGetReachCount(Commit p, Map<Commit, Integer> reachedCount) {
-        return reachedCount.merge(p, 1, Integer::sum);
-    }
-
-    // This is a little hairy, so here is the rough idea:
-    // for every ancestor, we can absorb the ancestor into this node
-    // if from this node we can account for all the references to that
-    // ancestor (essentially there is subgraph with a dominator)
-    // absorb into commit T:
-    //   for every ancestor, count the edges reaching it from T or from what T has absorbed
-    //
-    //   start: one edge from T into each of T's parents
-    //   repeat:
-    //     pick an ancestor A whose count equals its refCount
-    //         (every reference to A comes from inside the region)
-    //     absorb A into T
-    //     add one edge from A into each of A's parents
-    //   until no ancestor's count equals its refCount
-    //
-    //   T's changes   = T's own, over everything absorbed, newest over oldest
-    //   T's parents   = the ancestors still counted but not absorbed (the boundary)
-    //   each boundary commit: its k edges from the region become one edge from T,
-    //                         so drop its count by k - 1
-    private synchronized boolean absorbAncestors() {
-        Map<Commit, Integer> reachedCount = new HashMap<>();
-        Deque<Commit> ready = new ArrayDeque<>();      // commits where every reference is account for
-        List<Commit> absorbedInOrder = new ArrayList<>();
-
-        for (Commit p : parents) {
-            if (incAndGetReachCount(p, reachedCount) == p.getRefCount()) {
-                ready.push(p);
-            }
-        }
-
-        // Find all of the ancestors which we can account for the references
-        // Store them in an ordered queue so that we can replay them and
-        // get the correct outcome for the resulting node
-        while(!ready.isEmpty()) {
-            Commit ancestor = ready.pop();
-            reachedCount.remove(ancestor);
-            absorbedInOrder.add(ancestor);
-
-            for (Commit p : ancestor.parents()) {
-                if (incAndGetReachCount(p, reachedCount) == p.getRefCount()) {
-                    ready.push(p);
-                }
-            }
-        }
-
-        if (absorbedInOrder.isEmpty()) {
-            return false;
-        }
-
-        // Create a new map for the change set of the node, applying the commits changes in order
-        Map<ObjectNumber, ObjectChanges> absorbed = new HashMap<>();
-        for (Commit ancestor : absorbedInOrder) {
-            ancestor.changes().forEach((number, older) ->
-                absorbed.merge(number, older, (newer, o) -> newer.createFoldWithOlder(o)));
-        }
-        // this commit's own writes win over the absorbed ones
-        changes.forEach((number, own) ->
-            absorbed.merge(number, own, (older, o) -> o.createFoldWithOlder(older)));
-
-        // Now we need to remove as many incoming references as we accounted for
-        for (Map.Entry<Commit, Integer> b : reachedCount.entrySet()) {
-            for (int i = 1; i < b.getValue(); i++) {
-                b.getKey().decRef();
-            }
-        }
-
-        changes = absorbed;
-        parents = Set.copyOf(reachedCount.keySet());
-        VersioningStats.onAbsorb(absorbedInOrder.size());
-        return true;
-    }
-
-    private final boolean shouldAbsorb = true;
-    private static final Object ABSORB = new Object();
-    public boolean tryAbsorbAncestors() {
-        // nothing is ours alone: no allocation, no lock
-        if (!shouldAbsorb || parents.stream().noneMatch(p -> p.getRefCount() == 1)) {
-            return false;
-        }
-        synchronized(ABSORB) {
-            return absorbAncestors();
-        }
-    }
-
-    // We assume we are in a conflict free DAG
-    public void compressUpwards() {
-        Deque<Commit> compressTails = new ArrayDeque<>();
-        compressTails.add(this);
-
-        Set<Commit> visited = new HashSet<>();
-        while (!compressTails.isEmpty()) {
-            Commit tail = compressTails.pop();
-            if (!visited.add(tail)) {
-                continue;
-            }
-
-            if (tail.tryAbsorbAncestors()) {
-                // Only continue if we succeeded in compressing anything, there may be
-                // stuff higher in the DAG but we leave that for a deeper compression task
-                compressTails.addAll(tail.parents());
-            }
-        }
-    }
-
-    // The setters below are for SeenSetCompression, which rewrites the graph under the write side
+    // The setters below are for SeenSetCompression and RefCountAbsorption, which rewrite the graph
 
     void setChanges(Map<ObjectNumber, ObjectChanges> changes) {
         this.changes = changes;
@@ -403,5 +290,9 @@ public class Commit {
 
     void addChild(Commit child) {
         children.add(child);
+    }
+
+    void removeChild(Commit child) {
+        children.remove(child);
     }
 }

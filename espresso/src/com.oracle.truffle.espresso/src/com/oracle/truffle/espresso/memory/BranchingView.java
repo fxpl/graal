@@ -232,7 +232,7 @@ public final class BranchingView implements MemoryView {
         Object found = null;
         Commit current = state().commit;
         while (current != null) {
-            current.tryAbsorbAncestors();
+            runRefCountAbsorption(current);
 
             // parents before changes: a concurrent absorb swaps changes then parents, so new parents
             // guarantee the new changes are seen too
@@ -317,8 +317,18 @@ public final class BranchingView implements MemoryView {
         setHead(next);
     }
 
-    private void compress() {
+    private void runSeenSetCompression() {
         SeenSetCompression.tryCompress();
+    }
+
+    // under the read side, so a compression on another thread never rewrites the graph at the same time
+    private static void runRefCountAbsorption(Commit into) {
+        Commit.GRAPH.readLock().lock();
+        try {
+            RefCountAbsorption.tryAbsorbAncestors(into);
+        } finally {
+            Commit.GRAPH.readLock().unlock();
+        }
     }
 
     private enum CommitColour { MINE, THEIRS, BOTH; };
@@ -338,8 +348,8 @@ public final class BranchingView implements MemoryView {
         } finally {
             Commit.GRAPH.readLock().unlock();
         }
-        // our head may have moved; collapsing takes the write side, so only now the read side is released
-        compress();
+        // our head may have moved, and collapsing takes the write side, so only now the read side is released
+        runSeenSetCompression();
         return conflicts;
     }
 
@@ -401,7 +411,7 @@ public final class BranchingView implements MemoryView {
         int nonBoth = 2;
         while (nonBoth > 0) {
             Commit head = heads.remove();
-            head.tryAbsorbAncestors();
+            runRefCountAbsorption(head);
             CommitColour colour = colours.get(head);
 
             // We've now visited everything below this node,
@@ -536,7 +546,7 @@ public final class BranchingView implements MemoryView {
         commitStaging();
 
         // after commit, try to compress the DAG
-        compress();
+        runSeenSetCompression();
     }
 
     // commit, compress and push the changes to the 'to' location
@@ -547,12 +557,12 @@ public final class BranchingView implements MemoryView {
         to.set(null);
         commitStaging();
         to.set(state().commit);
-        // after the lock has moved, so its new seen marks are in
-        compress();
+        // after the lock has moved, so the compression sees it holding our head
+        runSeenSetCompression();
 
         // when we let go of a commit, we may now enable a lot more compressions
         if (old != null && old.getRefCount() > 0) {
-            old.tryAbsorbAncestors();
+            runRefCountAbsorption(old);
         }
     }
 
