@@ -202,6 +202,16 @@ public final class BranchingView implements MemoryView {
 
     /** The newest committed value of the field under the head, else null. The head must be set. */
     private Object getLastCommittedValue(ObjectNumber number, Field field) {
+        // a walk: holds the graph's read side, so nothing rewrites the commits it passes
+        Commit.GRAPH.readLock().lock();
+        try {
+            return findLastCommittedValue(number, field);
+        } finally {
+            Commit.GRAPH.readLock().unlock();
+        }
+    }
+
+    private Object findLastCommittedValue(ObjectNumber number, Field field) {
         // The pathological cases are:
         // 1) the value is all the way back at version 0
 
@@ -307,11 +317,8 @@ public final class BranchingView implements MemoryView {
         setHead(next);
     }
 
-    /** Shallow compression from this thread's head (no-op if it has no head yet). */
     private void compress() {
-        if (state().commit != null) {
-            state().commit.compressUpwards();
-        }
+        SeenSetCompression.tryCompress();
     }
 
     private enum CommitColour { MINE, THEIRS, BOTH; };
@@ -321,7 +328,23 @@ public final class BranchingView implements MemoryView {
      * by both branches (empty means none). Staging must be empty — every sync action (lock
      * acquire, join, volatile read/write) commits first.
      */
-    ConflictingLocations merge(Commit theirHead) {
+    ConflictingLocations merge(SyncState theirState) {
+        // a walk: holds the graph's read side for the whole merge, so nothing rewrites the commits it
+        // colours or installs from; anything that rewrites the graph runs after the unlock
+        ConflictingLocations conflicts;
+        Commit.GRAPH.readLock().lock();
+        try {
+            conflicts = mergeHeads(theirState);
+        } finally {
+            Commit.GRAPH.readLock().unlock();
+        }
+        // our head may have moved; collapsing takes the write side, so only now the read side is released
+        compress();
+        return conflicts;
+    }
+
+    private ConflictingLocations mergeHeads(SyncState theirState) {
+        Commit theirHead = theirState.commit;
         assert stagingEmpty() : "merging with uncommitted writes";
         long start = VersioningStats.now();
         Commit myHead = state().commit;
@@ -482,13 +505,9 @@ public final class BranchingView implements MemoryView {
         }
 
         if (mineOnly.isEmpty()) {
-            // we are some ancestor of theirs, so just fast forward
+            // we are some ancestor of theirs, so just fast forward (merge compresses once the read side is
+            // released)
             setHead(theirHead);
-
-            // At this point, we have also moved our head, so try to compress
-            // the history as we dropped a ref to part way through the
-            // history
-            compress();
             recordWalkedMerge(MergeOutcome.FAST_FORWARD, colours.size(), mineOnly, theirsOnly, start, walked);
             return ConflictingLocations.NONE;
         }
@@ -510,7 +529,7 @@ public final class BranchingView implements MemoryView {
     // pull from another commit and report any conflicting locations
     ConflictingLocations pull(SyncState from) {
         commitStaging();
-        return merge(from.commit);
+        return merge(from);
     }
 
     void commit() {
@@ -526,8 +545,10 @@ public final class BranchingView implements MemoryView {
         // and the commit can fold into it
         Commit old = to.commit;
         to.set(null);
-        commit();
+        commitStaging();
         to.set(state().commit);
+        // after the lock has moved, so its new seen marks are in
+        compress();
 
         // when we let go of a commit, we may now enable a lot more compressions
         if (old != null && old.getRefCount() > 0) {
@@ -541,6 +562,16 @@ public final class BranchingView implements MemoryView {
     // writes to all of their indexes, so figuring out which array commits shadow which others is more complicated
     // than collecting history and applying it
     private WorkingArray createArrayFromHistory(StaticObject array) {
+        // a walk: holds the graph's read side, so nothing rewrites the commits it passes
+        Commit.GRAPH.readLock().lock();
+        try {
+            return buildArrayFromHistory(array);
+        } finally {
+            Commit.GRAPH.readLock().unlock();
+        }
+    }
+
+    private WorkingArray buildArrayFromHistory(StaticObject array) {
         VersioningStats.onWorkingArrayBuild();
         ObjectNumber number = array.getObjectNumber();
         Object storage = array.copyOfRawArray(array.getKlass().getLanguage());

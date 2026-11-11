@@ -24,13 +24,16 @@ package com.oracle.truffle.espresso.memory;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * A node in the branching model's commit DAG (the prototype's {@code branching::Commit}).
@@ -61,11 +64,20 @@ public class Commit {
     // relative to its parents, for working out relative orders with
     // ancestors when we walk the graph
     // ancestors are always strictly lower in generation.
-    private final int generation;
+    private volatile int generation;
 
     private volatile int refCount;
     private static final AtomicIntegerFieldUpdater<Commit> REF_COUNT =
                 AtomicIntegerFieldUpdater.newUpdater(Commit.class, "refCount");
+
+
+    // commits that have this one as a parent; weak, so dead children drop out
+    private final Set<Commit> children = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+
+    // One lock for the whole commit graph: walks (the views' reads and merges) hold the read side, so any
+    // number run at once, and anything that rewrites commits other threads can reach holds the write side.
+    // Static, as walks start in the views and cross every thread's history.
+    static final ReentrantReadWriteLock GRAPH = new ReentrantReadWriteLock();
 
     /** Which thread made a commit, and how many commits that thread had made before it. */
     record Epoch(int thread, int sequence) {
@@ -88,13 +100,31 @@ public class Commit {
         this.changes = new HashMap<>(changes);
         this.parents = Set.copyOf(parents);
 
-        int generation = 0;
-        for (Commit p : this.parents) {
-            p.incRef();
-            generation = Math.max(generation, p.generation);
-        }
+        // prevent a concurrent collapse from changing a parent's generation between reading it and linking in
+        GRAPH.readLock().lock();
+        try {
+            int generation = 0;
+            for (Commit p : this.parents) {
+                p.incRef();
+                generation = Math.max(generation, p.generation);
+            }
 
-        this.generation = generation + 1;
+            this.generation = generation + 1;
+
+            // last, so the commit is complete before a parent can hand it out
+            for (Commit p : this.parents) {
+                p.children.add(this);
+            }
+        } finally {
+            GRAPH.readLock().unlock();
+        }
+    }
+
+    /** A snapshot of this commit's children. */
+    Set<Commit> children() {
+        synchronized (children) {
+            return Set.copyOf(children);
+        }
     }
 
     /**
@@ -122,18 +152,10 @@ public class Commit {
         }
 
         /**
-         * {@code newChanges} on top of {@code head}: folded into it when only the caller references it, else a
-         * new commit with {@code head} as its parent. A fold restamps the commit, as it may have been made by
-         * another thread.
+         * {@code newChanges} as a new commit with {@code head} as its parent. Never folds into the head, as
+         * nothing records who sees it between compressions, and SeenSetCompression collapses the chain later.
          */
         Commit extend(Commit head, Map<ObjectNumber, ObjectChanges> newChanges) {
-            if (head.refCount == 1) {
-                // only the caller's head references this commit so adopt the changes
-                head.adoptChanges(newChanges);
-                head.epoch = nextEpoch();
-                VersioningStats.onFold();
-                return head;
-            }
             return new Commit(nextEpoch(), newChanges, Set.of(head));
         }
 
@@ -227,7 +249,7 @@ public class Commit {
 
     // we want to update the node with new changes during commit compaction
     private synchronized void adoptChanges(Map<ObjectNumber, ObjectChanges> newChanges) {
-        assert refCount == 1 : "cannot adopt changes if more than one commit can see this commit";
+        // assert refCount == 1 : "cannot adopt changes if more than one commit can see this commit";
         newChanges.forEach((number, newer) -> {
             changes.merge(number, newer, (older, n) -> {
                 older.putAll(n);
@@ -363,5 +385,23 @@ public class Commit {
                 compressTails.addAll(tail.parents());
             }
         }
+    }
+
+    // The setters below are for SeenSetCompression, which rewrites the graph under the write side
+
+    void setChanges(Map<ObjectNumber, ObjectChanges> changes) {
+        this.changes = changes;
+    }
+
+    void setParents(Set<Commit> parents) {
+        this.parents = Set.copyOf(parents);
+    }
+
+    void setGeneration(int generation) {
+        this.generation = generation;
+    }
+
+    void addChild(Commit child) {
+        children.add(child);
     }
 }

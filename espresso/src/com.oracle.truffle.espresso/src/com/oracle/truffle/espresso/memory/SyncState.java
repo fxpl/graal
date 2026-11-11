@@ -22,6 +22,10 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.Collections;
+import java.util.Set;
+import java.util.WeakHashMap;
+
 /**
  * The state for one synchronisation object (a lock, a volatile field, a class's initialisation, a
  * thread, or linear's global history): a commit, {@code null} until the first push. In branching a pull
@@ -44,8 +48,12 @@ public final class SyncState {
     Commit commit;
     final Kind kind;
 
+    // every live state, so compression can find the commits they hold, held weakly so dead states drop out
+    static final Set<SyncState> ALL = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+
     public SyncState(Kind kind) {
         this.kind = kind;
+        ALL.add(this);
         VersioningStats.onSyncStateCreated(this);
     }
 
@@ -63,7 +71,13 @@ public final class SyncState {
         if (c != null) {
             c.incRef();
         }
-        commit = c;
+        // under the graph's read side, so compression never sees a state halfway through moving
+        Commit.GRAPH.readLock().lock();
+        try {
+            commit = c;
+        } finally {
+            Commit.GRAPH.readLock().unlock();
+        }
         if (old != null) {
             old.decRef();
         }
