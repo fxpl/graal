@@ -46,6 +46,8 @@ public final class SyncState {
     }
 
     Commit commit;
+    // the clock of the thread that last set commit, so a pull can tell it already has it without walking
+    Clock clock;
     final Kind kind;
 
     // every live state, so compression can find the commits they hold, held weakly so dead states drop out

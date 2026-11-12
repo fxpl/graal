@@ -112,6 +112,8 @@ public final class BranchingView implements MemoryView {
 
     private void setHead(Commit c) {
         state().set(c);
+        // a join pulls from this state, so it carries our clock as a pushed state would
+        state().clock = committer.clock();
     }
 
     boolean stagingEmpty() {
@@ -362,6 +364,10 @@ public final class BranchingView implements MemoryView {
         } finally {
             Commit.GRAPH.readLock().unlock();
         }
+        // a clean pull takes in their clock, so a later pull of what they had can skip the walk
+        if (conflicts.isEmpty() && theirState.commit != null) {
+            committer.join(theirState.clock);
+        }
         // our head may have moved, and collapsing takes the write side, so only now the read side is released
         runRefCountAbsorptionRecursively();
         runSeenSetCompression();
@@ -401,9 +407,8 @@ public final class BranchingView implements MemoryView {
             return ConflictingLocations.NONE;
         }
 
-        // now check if the two heads can be quickly compared as they were
-        // created one after the other
-        if (myHead.isComparableTo(theirHead) && theirHead.isEarlierOrSame(myHead)) {
+        // their state was last set at a point our clock already covers, so their head is in our history
+        if (theirState.clock.compare(committer.clock()) == Clock.Order.BEFORE_OR_SAME) {
             // they are an ancestor of us so nothing to do
             VersioningStats.onMergeUnwalked(MergeOutcome.EPOCH_INCLUDED);
             return ConflictingLocations.NONE;
@@ -581,6 +586,7 @@ public final class BranchingView implements MemoryView {
         to.set(null);
         commitStaging();
         to.set(state().commit);
+        to.clock = committer.clock();
         // after the lock has moved, so the compression sees it holding our head
         runRefCountAbsorptionRecursively();
         runSeenSetCompression();

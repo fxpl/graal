@@ -74,24 +74,7 @@ public class Commit {
     // Static, as walks start in the views and cross every thread's history.
     static final ReentrantReadWriteLock GRAPH = new ReentrantReadWriteLock();
 
-    /** Which thread made a commit, and how many commits that thread had made before it. */
-    record Epoch(int thread, int sequence) {
-        boolean isComparableTo(Epoch e) {
-            return thread == e.thread;
-        }
-
-        boolean isEarlierOrSame(Epoch e) {
-            assert isComparableTo(e) : "meaningless comparison of two epochs";
-            return sequence <= e.sequence;
-        }
-    }
-
-    // Who last wrote into this commit: set when it is made, and again when a thread folds into it, so it
-    // always names the thread whose writes it last took
-    private volatile Epoch epoch;
-
-    private Commit(Epoch epoch, Map<ObjectNumber, ? extends ObjectChanges> changes, Set<Commit> parents) {
-        this.epoch = epoch;
+    private Commit(Map<ObjectNumber, ? extends ObjectChanges> changes, Set<Commit> parents) {
         this.changes = new HashMap<>(changes);
         this.parents = Set.copyOf(parents);
 
@@ -124,52 +107,58 @@ public class Commit {
 
     /**
      * The only way a thread makes or folds into a commit. Each view owns one, told its thread's id once, and
-     * every commit it makes or folds into is stamped with that id and the thread's next sequence number. A
-     * commit therefore names the thread that last wrote into it, never the thread whose commit it grew from.
-     * Used only by its owning thread, so the counter needs no synchronisation.
+     * it keeps the thread's clock, ticked on every commit, fold and merge the thread makes. The clock belongs
+     * to the thread, not to its head, which may be a commit another thread made. Used only by its owning
+     * thread, so the clock needs no synchronisation.
      */
     static final class Committer {
 
-        private final int thread;
-        private int sequence = 0;
+        // this thread's clock as of its last commit, fold or merge
+        private Clock clock;
 
         Committer(int thread) {
-            this.thread = thread;
+            this.clock = Epoch.start(thread);
         }
 
-        private Epoch nextEpoch() {
-            return new Epoch(thread, sequence++);
+        Clock clock() {
+            return clock;
+        }
+
+        /** Take in the clock of a sync state this thread has just pulled from. */
+        void join(Clock theirs) {
+            clock = clock.join(theirs);
         }
 
         /** A thread's first commit: no parents. */
         Commit first(Map<ObjectNumber, ObjectChanges> changes) {
-            return new Commit(nextEpoch(), changes, Set.of());
+            clock = clock.tick();
+            return new Commit(changes, Set.of());
         }
 
         /**
          * {@code newChanges} on top of {@code head}. Folded into {@code head} when its only reference is the
-         * sync state holding it, else a new commit with {@code head} as its parent. A fold restamps the
-         * commit, as it may have been made by another thread.
+         * sync state holding it, else a new commit with {@code head} as its parent.
          */
         Commit extend(Commit head, Map<ObjectNumber, ObjectChanges> newChanges) {
+            clock = clock.tick();
             // under the read side, so a compression on another thread never rewrites the head as we fold
             GRAPH.readLock().lock();
             try {
                 if (head.getRefCount() == 1) {
                     head.adoptChanges(newChanges);
-                    head.epoch = nextEpoch();
                     VersioningStats.onFold();
                     return head;
                 }
             } finally {
                 GRAPH.readLock().unlock();
             }
-            return new Commit(nextEpoch(), newChanges, Set.of(head));
+            return new Commit(newChanges, Set.of(head));
         }
 
         /** A merge commit of {@code mine} and {@code theirs}, writing only the values taken for resolved conflicts. */
         Commit merge(Commit mine, Commit theirs, Map<ObjectNumber, FieldChanges> resolved) {
-            return new Commit(nextEpoch(), resolved, Set.of(mine, theirs));
+            clock = clock.tick();
+            return new Commit(resolved, Set.of(mine, theirs));
         }
     }
 
@@ -178,15 +167,6 @@ public class Commit {
     @Override
     public boolean equals(Object o) {
         return this == o;
-    }
-
-    boolean isComparableTo(Commit o) {
-        return epoch.isComparableTo(o.epoch);
-    }
-
-    boolean isEarlierOrSame(Commit o) {
-        assert isComparableTo(o) : "meaningless comparison of two commits";
-        return epoch.isEarlierOrSame(o.epoch);
     }
 
     @Override
