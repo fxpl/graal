@@ -927,6 +927,9 @@ public final class Meta extends ContextAccessImpl
         java_lang_reflect_Parameter_parameterClassCache = declaredFieldNamed(java_lang_reflect_Parameter, "parameterClassCache");
         java_lang_reflect_RecordComponent_genericInfo = declaredFieldNamed(java_lang_reflect_RecordComponent, "genericInfo");
         java_lang_reflect_RecordComponent_declaredAnnotations = declaredFieldNamed(java_lang_reflect_RecordComponent, "declaredAnnotations");
+        java_lang_Class_genericInfo = declaredFieldNamed(java_lang_Class, "genericInfo");
+        java_lang_Class_enumConstants = declaredFieldNamed(java_lang_Class, "enumConstants");
+        java_lang_Class_enumConstantDirectory = declaredFieldNamed(java_lang_Class, "enumConstantDirectory");
 
         sun_reflect_MagicAccessorImpl = diff() //
                         .klass(VERSION_8_OR_LOWER, Types.sun_reflect_MagicAccessorImpl) //
@@ -1650,6 +1653,9 @@ public final class Meta extends ContextAccessImpl
     @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Parameter_parameterClassCache;
     @ResolveConflicts(THEIRS) public final Field java_lang_reflect_RecordComponent_genericInfo;
     @ResolveConflicts(THEIRS) public final Field java_lang_reflect_RecordComponent_declaredAnnotations;
+    @ResolveConflicts(THEIRS) public final Field java_lang_Class_genericInfo;
+    @ResolveConflicts(THEIRS) public final Field java_lang_Class_enumConstants;
+    @ResolveConflicts(THEIRS) public final Field java_lang_Class_enumConstantDirectory;
 
     public final ObjectKlass java_lang_Shutdown;
     public final Method java_lang_Shutdown_shutdown;
