@@ -481,6 +481,7 @@ public final class BranchingView implements MemoryView {
         }
 
         // First check for conflicts between mine and theirs
+        Map<ObjectNumber, FieldChanges> resolved = new HashMap<>();
         if (!mineFieldsWritten.isEmpty() || !mineArrayWritten.isEmpty()) {
             Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
             Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
@@ -490,7 +491,14 @@ public final class BranchingView implements MemoryView {
                         Set<Field> mine = mineFieldsWritten.get(number);
                         if (mine != null) {
                             for (Field field : f.fields()) {
-                                if (mine.contains(field)) {
+                                if (!mine.contains(field)) {
+                                    continue;
+                                }
+                                if (field.isResolvedByTheirs()) {
+                                    // theirsOnly is newest first, so the first value met is the one to take
+                                    FieldChanges taken = resolved.computeIfAbsent(number, n -> FieldChanges.of(new HashMap<>()));
+                                    taken.values().putIfAbsent(field, f.get(field));
+                                } else {
                                     fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
                                 }
                             }
@@ -537,8 +545,8 @@ public final class BranchingView implements MemoryView {
             return ConflictingLocations.NONE;
         }
 
-        // create the merge of the parents
-        Commit mergeCommit = committer.merge(state().commit, theirHead);
+        // create the merge of the parents, holding theirs for each resolved field so every walk finds the same value
+        Commit mergeCommit = committer.merge(state().commit, theirHead, resolved);
         VersioningStats.onMerge();
         VersioningStats.describeCommit(mergeCommit, state(), true);
         setHead(mergeCommit);

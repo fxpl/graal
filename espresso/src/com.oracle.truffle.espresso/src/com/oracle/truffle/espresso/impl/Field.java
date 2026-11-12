@@ -66,6 +66,7 @@ import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.memory.MemoryModel;
+import com.oracle.truffle.espresso.memory.ResolveConflicts;
 import com.oracle.truffle.espresso.memory.Unversioned;
 import com.oracle.truffle.espresso.memory.Versioning;
 import com.oracle.truffle.espresso.runtime.staticobject.FieldStorageObject;
@@ -122,6 +123,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     private boolean unversionable;
     // why Meta marked it @Unversioned; null for a hidden field
     private Unversioned.Reason unversionedReason;
+    // how a merge resolves concurrent writes to this field, for the fields Meta marks @ResolveConflicts;
+    // null for every other field, whose concurrent writes are a conflict
+    private ResolveConflicts.Resolution conflictResolution;
 
     public Field(ObjectKlass.KlassVersion holder, LinkedField linkedField, RuntimeConstantPool pool) {
         this.linkedField = linkedField;
@@ -154,6 +158,15 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
 
     public final boolean isUnversionable() {
         return unversionable;
+    }
+
+    public void markConflictResolution(ResolveConflicts.Resolution resolution) {
+        conflictResolution = resolution;
+    }
+
+    /** Whether a merge takes the pulled value when this field was written on both sides. */
+    public final boolean isResolvedByTheirs() {
+        return conflictResolution == ResolveConflicts.Resolution.THEIRS;
     }
 
     // Sync-as-Share: a reference stored through this field shares what it refers to if obj is shared,

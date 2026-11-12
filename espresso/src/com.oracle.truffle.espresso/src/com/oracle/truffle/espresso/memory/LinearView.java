@@ -258,6 +258,11 @@ public final class LinearView implements MemoryView {
     }
 
     ConflictingLocations pull() {
+        return pull(Map.of());
+    }
+
+    // collected is push's copy of staging, so a write dropped for theirs is dropped from it too
+    private ConflictingLocations pull(Map<ObjectNumber, ObjectChanges> collected) {
         // Walk from the global head back to our base, checking those commits against what we have
         // staged; if none conflict, install them into the working set oldest first and move our base
         // to the head.
@@ -279,6 +284,7 @@ public final class LinearView implements MemoryView {
         List<Commit> history = new ArrayList<>();
         Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
         Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
+        Map<ObjectNumber, Set<Field>> takenFromTheirs = new HashMap<>();
         boolean mayConflict = !stagingEmpty();
 
         Commit curr = head;
@@ -294,7 +300,12 @@ public final class LinearView implements MemoryView {
                         if (mine != null) {
                             Set<Field> written = mine.written;
                             for (Field field : f.fields()) {
-                                if (written.contains(field)) {
+                                if (!written.contains(field)) {
+                                    continue;
+                                }
+                                if (field.isResolvedByTheirs()) {
+                                    takenFromTheirs.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                                } else {
                                     fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
                                 }
                             }
@@ -320,6 +331,21 @@ public final class LinearView implements MemoryView {
         }
 
         VersioningStats.onPull(history.size());
+
+        // no conflicts, so now drop our writes to fields that take theirs, from staging and from push's copy
+        takenFromTheirs.forEach((number, fields) -> {
+            WorkingObject mine = writtenObjects.get(number);
+            mine.written.removeAll(fields);
+            if (mine.written.isEmpty()) {
+                writtenObjects.remove(number);
+            }
+            if (collected.get(number) instanceof FieldChanges staged) {
+                staged.values().keySet().removeAll(fields);
+                if (staged.fields().isEmpty()) {
+                    collected.remove(number);
+                }
+            }
+        });
 
         // Apply while our base is still held: it bounds compression, so nothing at or below it can be
         // absorbed into a commit in history, whose changes would then differ from those checked above
@@ -348,18 +374,18 @@ public final class LinearView implements MemoryView {
         return ConflictingLocations.NONE;
     }
 
-    /** The staged writes as the changes of a commit; staging itself is left as it is (see emptyChanges) */
-    private Map<ObjectNumber, ObjectChanges> collectChanges() {
-        // before merging the changes into the head, first try to
-        // purge any dead objects from the head commit (non-recursive)
+    /** Purge dead objects from the head commit (non-recursive) and from staging. */
+    private void purgeDead() {
         long deadCount = deadObjectCount.get();
         if (state().commit != null && deadCount > deadSetSizeAtLastPurge) {
             state().commit.purgeObjects();
             deadSetSizeAtLastPurge = deadCount;
         }
-
-        // before commit, try to clear out anything that is dead from staging
         emptyDeadQueue();
+    }
+
+    /** The staged writes as the changes of a commit; staging itself is left as it is (see emptyChanges) */
+    private Map<ObjectNumber, ObjectChanges> collectChanges() {
 
         // The written fields of each object, plus the written elements of each array, copied: the written
         // marks stay until the commit is appended, as a conflict must leave staging untouched
@@ -408,11 +434,16 @@ public final class LinearView implements MemoryView {
     // (taking the lock only to read the head), then under the lock pull again if the head has moved
     // since (usually a commit or two) and append our commit
     ConflictingLocations push() {
-        Map<ObjectNumber, ObjectChanges> changes = collectChanges();
+        purgeDead();
 
         ConflictingLocations conflicts = pull();
-        if (!conflicts.isEmpty() || changes.isEmpty()) {
+        if (!conflicts.isEmpty()) {
             return conflicts;
+        }
+
+        Map<ObjectNumber, ObjectChanges> changes = collectChanges();
+        if (changes.isEmpty()) {
+            return ConflictingLocations.NONE;
         }
 
         SyncState baseState = state();
@@ -420,8 +451,8 @@ public final class LinearView implements MemoryView {
 
         synchronized (global) {
             if (global.commit != baseState.commit) {
-                conflicts = pull();          // hopefully only a commit or two
-                if (!conflicts.isEmpty()) {
+                conflicts = pull(changes);   // hopefully only a commit or two
+                if (!conflicts.isEmpty() || changes.isEmpty()) {
                     return conflicts;
                 }
             }

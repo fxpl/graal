@@ -41,7 +41,7 @@ import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.bet
 import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.higher;
 import static com.oracle.truffle.espresso.classfile.JavaVersion.VersionRange.lower;
 import static com.oracle.truffle.espresso.impl.EspressoClassLoadingException.wrapClassNotFoundGuestException;
-import static com.oracle.truffle.espresso.memory.Unversioned.Reason.BENIGN_RACE;
+import static com.oracle.truffle.espresso.memory.ResolveConflicts.Resolution.THEIRS;
 import static com.oracle.truffle.espresso.memory.Unversioned.Reason.IMMUTABLE;
 import static com.oracle.truffle.espresso.memory.Unversioned.Reason.VM_STATE;
 
@@ -78,6 +78,7 @@ import com.oracle.truffle.espresso.impl.ModuleTable;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.impl.PrimitiveKlass;
 import com.oracle.truffle.espresso.impl.jvmci.JVMCIUtils;
+import com.oracle.truffle.espresso.memory.ResolveConflicts;
 import com.oracle.truffle.espresso.memory.Unversioned;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
@@ -260,6 +261,8 @@ public final class Meta extends ContextAccessImpl
                         .field(VERSION_9_OR_HIGHER, Names.value, Types._byte_array) //
                         .field(java_lang_String);
         java_lang_String_hash = java_lang_String.requireDeclaredField(Names.hash, Types._int);
+        // Sync-as-Share: where hashCode records a hash of 0 since JDK 13, with the same benign race as hash
+        java_lang_String_hashIsZero = declaredFieldNamed(java_lang_String, "hashIsZero");
         java_lang_String_hashCode = java_lang_String.requireDeclaredMethod(Names.hashCode, Signatures._int);
         java_lang_String_length = java_lang_String.requireDeclaredMethod(Names.length, Signatures._int);
         java_lang_String_toCharArray = java_lang_String.requireDeclaredMethod(Names.toCharArray, Signatures._char_array);
@@ -904,7 +907,7 @@ public final class Meta extends ContextAccessImpl
                         .field(VERSION_16_OR_HIGHER, Names.typeAnnotations, Types._byte_array) //
                         .notRequiredField(java_lang_reflect_RecordComponent);
 
-        // Sync-as-Share: reflection's lazily filled caches, marked @Unversioned where they are declared
+        // Sync-as-Share: reflection's lazily filled caches, marked @ResolveConflicts where they are declared
         ObjectKlass accessibleObject = java_lang_reflect_Executable.getSuperKlass();
         java_lang_reflect_AccessibleObject_accessCheckCache = declaredFieldNamed(accessibleObject, "accessCheckCache");
         java_lang_reflect_Executable_parameterData = declaredFieldNamed(java_lang_reflect_Executable, "parameterData");
@@ -1126,6 +1129,16 @@ public final class Meta extends ContextAccessImpl
         java_util_concurrent_locks_ReentrantLock_Sync = knownKlass(Types.java_util_concurrent_locks_ReentrantLock_Sync);
         java_util_concurrent_locks_ReentrantReadWriteLock_Sync = knownKlass(Types.java_util_concurrent_locks_ReentrantReadWriteLock_Sync);
 
+        // Sync-as-Share: the wait-queue nodes' status, marked @ResolveConflicts where they are declared. Since JDK 17
+        // a waiter clears its own status while its signaller clears bits of it, two volatile writes with no order
+        // between them that the lock relies on, so the race is the JDK's rather than the program's
+        ObjectKlass aqsNode = diff().klass(higher(17), Types.java_util_concurrent_locks_AbstractQueuedSynchronizer_Node).notRequiredKlass();
+        ObjectKlass aqlsNode = diff().klass(higher(17), Types.java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node).notRequiredKlass();
+        ObjectKlass stampedLockNode = diff().klass(higher(17), Types.java_util_concurrent_locks_StampedLock_Node).notRequiredKlass();
+        java_util_concurrent_locks_AbstractQueuedSynchronizer_Node_status = declaredFieldNamed(aqsNode, "status");
+        java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node_status = declaredFieldNamed(aqlsNode, "status");
+        java_util_concurrent_locks_StampedLock_Node_status = declaredFieldNamed(stampedLockNode, "status");
+
         java_math_BigInteger = knownKlass(Types.java_math_BigInteger);
         java_math_BigInteger_init = java_math_BigInteger.requireDeclaredMethod(Names._init_, Signatures._void_byte_array);
         java_math_BigInteger_toByteArray = java_math_BigInteger.requireDeclaredMethod(Names.toByteArray, Signatures._byte_array);
@@ -1217,21 +1230,30 @@ public final class Meta extends ContextAccessImpl
 
         tRegexSupport = context.getLanguage().useTRegex() ? new TRegexSupport() : null;
 
-        markUnversionableFields();
+        markAnnotatedFields();
     }
 
     // Sync-as-Share: flag the field behind every handle annotated @Unversioned, so the model can never
-    // own it. A handle is null when its field does not exist on this JDK.
-    private void markUnversionableFields() {
+    // own it, and behind every handle annotated @ResolveConflicts, so a merge resolves concurrent writes to
+    // it. A handle is null when its field does not exist on this JDK.
+    private void markAnnotatedFields() {
         for (java.lang.reflect.Field handle : Meta.class.getDeclaredFields()) {
-            if (handle.isAnnotationPresent(Unversioned.class)) {
-                try {
-                    if (handle.get(this) instanceof Field field) {
+            boolean isUnversioned = handle.isAnnotationPresent(Unversioned.class);
+            boolean isResolved = handle.isAnnotationPresent(ResolveConflicts.class);
+            if (!isUnversioned && !isResolved) {
+                continue;
+            }
+            try {
+                if (handle.get(this) instanceof Field field) {
+                    if (isUnversioned) {
                         field.markUnversionable(handle.getAnnotation(Unversioned.class).value());
                     }
-                } catch (IllegalAccessException e) {
-                    throw EspressoError.shouldNotReachHere(e);
+                    if (isResolved) {
+                        field.markConflictResolution(handle.getAnnotation(ResolveConflicts.class).value());
+                    }
                 }
+            } catch (IllegalAccessException e) {
+                throw EspressoError.shouldNotReachHere(e);
             }
         }
     }
@@ -1495,7 +1517,8 @@ public final class Meta extends ContextAccessImpl
 
     // Guest String.
     @Unversioned(IMMUTABLE) public final Field java_lang_String_value;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_String_hash;
+    @ResolveConflicts(THEIRS) public final Field java_lang_String_hash;
+    @ResolveConflicts(THEIRS) public final Field java_lang_String_hashIsZero;
     @Unversioned(IMMUTABLE) public final Field java_lang_String_coder;
     public final Field java_lang_String_COMPACT_STRINGS;
     public final Method java_lang_String_hashCode;
@@ -1609,24 +1632,24 @@ public final class Meta extends ContextAccessImpl
     // used, without a lock. Each is built to tolerate threads racing to fill it (every thread computes the
     // same value), and holds only JDK objects, so stopping the model's reachability walk there loses no
     // program data. Looked up by name (see declaredFieldNamed); null where this JDK has no such field.
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_AccessibleObject_accessCheckCache;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Executable_parameterData;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Executable_declaredAnnotations;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Method_callerSensitive;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Method_methodAccessor;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Method_hash;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Method_genericInfo;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Constructor_constructorAccessor;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Constructor_genericInfo;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Field_fieldAccessor;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Field_overrideFieldAccessor;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Field_genericInfo;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Field_declaredAnnotations;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Parameter_declaredAnnotations;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Parameter_parameterTypeCache;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_Parameter_parameterClassCache;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_RecordComponent_genericInfo;
-    @Unversioned(BENIGN_RACE) public final Field java_lang_reflect_RecordComponent_declaredAnnotations;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_AccessibleObject_accessCheckCache;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Executable_parameterData;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Executable_declaredAnnotations;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Method_callerSensitive;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Method_methodAccessor;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Method_hash;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Method_genericInfo;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Constructor_constructorAccessor;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Constructor_genericInfo;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Field_fieldAccessor;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Field_overrideFieldAccessor;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Field_genericInfo;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Field_declaredAnnotations;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Parameter_declaredAnnotations;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Parameter_parameterTypeCache;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_Parameter_parameterClassCache;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_RecordComponent_genericInfo;
+    @ResolveConflicts(THEIRS) public final Field java_lang_reflect_RecordComponent_declaredAnnotations;
 
     public final ObjectKlass java_lang_Shutdown;
     public final Method java_lang_Shutdown_shutdown;
@@ -2053,6 +2076,9 @@ public final class Meta extends ContextAccessImpl
     public final Field java_util_concurrent_locks_AbstractOwnableSynchronizer_exclusiveOwnerThread;
     public final ObjectKlass java_util_concurrent_locks_ReentrantLock_Sync;
     public final ObjectKlass java_util_concurrent_locks_ReentrantReadWriteLock_Sync;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_AbstractQueuedSynchronizer_Node_status;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node_status;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_StampedLock_Node_status;
 
     public final ObjectKlass java_math_BigInteger;
     public final Method java_math_BigInteger_init;

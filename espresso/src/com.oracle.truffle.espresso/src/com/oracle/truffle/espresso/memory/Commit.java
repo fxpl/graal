@@ -90,7 +90,7 @@ public class Commit {
     // always names the thread whose writes it last took
     private volatile Epoch epoch;
 
-    private Commit(Epoch epoch, Map<ObjectNumber, ObjectChanges> changes, Set<Commit> parents) {
+    private Commit(Epoch epoch, Map<ObjectNumber, ? extends ObjectChanges> changes, Set<Commit> parents) {
         this.epoch = epoch;
         this.changes = new HashMap<>(changes);
         this.parents = Set.copyOf(parents);
@@ -167,9 +167,9 @@ public class Commit {
             return new Commit(nextEpoch(), newChanges, Set.of(head));
         }
 
-        /** A merge commit of {@code mine} and {@code theirs}: no writes of its own, two parents. */
-        Commit merge(Commit mine, Commit theirs) {
-            return new Commit(nextEpoch(), Map.of(), Set.of(mine, theirs));
+        /** A merge commit of {@code mine} and {@code theirs}, writing only the values taken for resolved conflicts. */
+        Commit merge(Commit mine, Commit theirs, Map<ObjectNumber, FieldChanges> resolved) {
+            return new Commit(nextEpoch(), resolved, Set.of(mine, theirs));
         }
     }
 

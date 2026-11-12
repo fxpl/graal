@@ -460,6 +460,9 @@ public class EspressoSymbols {
         public static final Symbol<Type> java_util_concurrent_locks_AbstractOwnableSynchronizer = SYMBOLS.putType("Ljava/util/concurrent/locks/AbstractOwnableSynchronizer;");
         public static final Symbol<Type> java_util_concurrent_locks_ReentrantLock_Sync = SYMBOLS.putType("Ljava/util/concurrent/locks/ReentrantLock$Sync;");
         public static final Symbol<Type> java_util_concurrent_locks_ReentrantReadWriteLock_Sync = SYMBOLS.putType("Ljava/util/concurrent/locks/ReentrantReadWriteLock$Sync;");
+        public static final Symbol<Type> java_util_concurrent_locks_AbstractQueuedSynchronizer_Node = SYMBOLS.putType("Ljava/util/concurrent/locks/AbstractQueuedSynchronizer$Node;");
+        public static final Symbol<Type> java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node = SYMBOLS.putType("Ljava/util/concurrent/locks/AbstractQueuedLongSynchronizer$Node;");
+        public static final Symbol<Type> java_util_concurrent_locks_StampedLock_Node = SYMBOLS.putType("Ljava/util/concurrent/locks/StampedLock$Node;");
 
         // java math
         public static final Symbol<Type> java_math_BigInteger = SYMBOLS.putType("Ljava/math/BigInteger;");

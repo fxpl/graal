@@ -46,6 +46,11 @@ final class FieldChanges implements ObjectChanges {
         return new FieldChanges(written);
     }
 
+    /** These values, as written to their fields. */
+    static FieldChanges of(Map<Field, Object> values) {
+        return new FieldChanges(values);
+    }
+
     /** The value written to {@code field}, or null if it was not written. */
     Object get(Field field) {
         return values.get(field);
