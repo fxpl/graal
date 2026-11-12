@@ -147,10 +147,23 @@ public class Commit {
         }
 
         /**
-         * {@code newChanges} as a new commit with {@code head} as its parent. Never folds into the head, as
-         * nothing records who sees it between compressions, and SeenSetCompression collapses the chain later.
+         * {@code newChanges} on top of {@code head}. Folded into {@code head} when its only reference is the
+         * sync state holding it, else a new commit with {@code head} as its parent. A fold restamps the
+         * commit, as it may have been made by another thread.
          */
         Commit extend(Commit head, Map<ObjectNumber, ObjectChanges> newChanges) {
+            // under the read side, so a compression on another thread never rewrites the head as we fold
+            GRAPH.readLock().lock();
+            try {
+                if (head.getRefCount() == 1) {
+                    head.adoptChanges(newChanges);
+                    head.epoch = nextEpoch();
+                    VersioningStats.onFold();
+                    return head;
+                }
+            } finally {
+                GRAPH.readLock().unlock();
+            }
             return new Commit(nextEpoch(), newChanges, Set.of(head));
         }
 

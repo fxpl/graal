@@ -325,7 +325,21 @@ public final class BranchingView implements MemoryView {
     private static void runRefCountAbsorption(Commit into) {
         Commit.GRAPH.readLock().lock();
         try {
-            RefCountAbsorption.tryAbsorbAncestors(into);
+            RefCountAbsorption.absorbInto(into);
+        } finally {
+            Commit.GRAPH.readLock().unlock();
+        }
+    }
+
+    // absorb into our head and on up through its new parents, under the read side as above
+    private void runRefCountAbsorptionRecursively() {
+        Commit head = state().commit;
+        if (head == null) {
+            return;
+        }
+        Commit.GRAPH.readLock().lock();
+        try {
+            RefCountAbsorption.absorbIntoRecursively(head);
         } finally {
             Commit.GRAPH.readLock().unlock();
         }
@@ -349,6 +363,7 @@ public final class BranchingView implements MemoryView {
             Commit.GRAPH.readLock().unlock();
         }
         // our head may have moved, and collapsing takes the write side, so only now the read side is released
+        runRefCountAbsorptionRecursively();
         runSeenSetCompression();
         return conflicts;
     }
@@ -546,6 +561,7 @@ public final class BranchingView implements MemoryView {
         commitStaging();
 
         // after commit, try to compress the DAG
+        runRefCountAbsorptionRecursively();
         runSeenSetCompression();
     }
 
@@ -558,6 +574,7 @@ public final class BranchingView implements MemoryView {
         commitStaging();
         to.set(state().commit);
         // after the lock has moved, so the compression sees it holding our head
+        runRefCountAbsorptionRecursively();
         runSeenSetCompression();
 
         // when we let go of a commit, we may now enable a lot more compressions

@@ -130,7 +130,7 @@ final class RefCountAbsorption {
         }
     }
 
-    static boolean tryAbsorbAncestors(Commit into) {
+    static boolean absorbInto(Commit into) {
         // nothing is ours alone so no allocation and no lock
         if (!shouldAbsorb || into.parents().stream().noneMatch(p -> p.getRefCount() == 1)) {
             return false;
@@ -141,7 +141,7 @@ final class RefCountAbsorption {
     }
 
     // We assume we are in a conflict free DAG
-    static void compressUpwards(Commit from) {
+    static void absorbIntoRecursively(Commit from) {
         Deque<Commit> compressTails = new ArrayDeque<>();
         compressTails.add(from);
 
@@ -152,7 +152,7 @@ final class RefCountAbsorption {
                 continue;
             }
 
-            if (tryAbsorbAncestors(tail)) {
+            if (absorbInto(tail)) {
                 // Only continue if we succeeded in compressing anything, there may be
                 // stuff higher in the DAG but we leave that for a deeper compression task
                 compressTails.addAll(tail.parents());

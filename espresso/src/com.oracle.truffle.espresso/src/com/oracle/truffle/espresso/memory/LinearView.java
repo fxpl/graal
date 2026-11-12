@@ -343,7 +343,7 @@ public final class LinearView implements MemoryView {
         baseState.set(head);
         head.decRef();
 
-        RefCountAbsorption.compressUpwards(head);
+        RefCountAbsorption.absorbIntoRecursively(head);
 
         return ConflictingLocations.NONE;
     }
@@ -438,7 +438,7 @@ public final class LinearView implements MemoryView {
         }
 
         emptyChanges();
-        RefCountAbsorption.compressUpwards(newGlobal);
+        RefCountAbsorption.absorbIntoRecursively(newGlobal);
 
         return ConflictingLocations.NONE;
     }
