@@ -135,8 +135,12 @@ final class RefCountAbsorption {
         if (!shouldAbsorb || into.parents().stream().noneMatch(p -> p.getRefCount() == 1)) {
             return false;
         }
+        long asked = VersioningStats.now();
         synchronized(ABSORB) {
-            return absorbAncestors(into);
+            long took = VersioningStats.now();
+            boolean isAbsorbed = absorbAncestors(into);
+            VersioningStats.onAbsorbRun(asked, took, VersioningStats.now());
+            return isAbsorbed;
         }
     }
 

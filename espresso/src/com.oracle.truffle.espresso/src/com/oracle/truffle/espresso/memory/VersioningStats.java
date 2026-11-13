@@ -80,6 +80,12 @@ final class VersioningStats {
     static final AtomicLong folds = new AtomicLong();           // ...commits that folded into an exclusive head in
                                                                 // place (no new node). New nodes ~= commits - folds + merges
     static final AtomicLong absorbed = new AtomicLong();        // commits absorbed into a descendant by compression
+    static final AtomicLong compressions = new AtomicLong();    // seen-set compression runs
+    static final AtomicLong compressWaitNanos = new AtomicLong(); // ...time waiting for the graph's write side, summed
+    static final AtomicLong compressHeldNanos = new AtomicLong(); // ...time holding it, every other graph user stopped, summed
+    static final AtomicLong absorbRuns = new AtomicLong();      // ref-count absorptions that took the ABSORB lock
+    static final AtomicLong absorbWaitNanos = new AtomicLong(); // ...time waiting for it, summed
+    static final AtomicLong absorbHeldNanos = new AtomicLong(); // ...time holding it, summed
                                                                 // (resident nodes <= commits - folds + merges - absorbed)
     static final AtomicLong purgedFields = new AtomicLong();    // committed field writes removed because their object died
     static final AtomicLong purgedArrays = new AtomicLong();    // committed arrays removed because they died (one per array per commit)
@@ -188,6 +194,24 @@ final class VersioningStats {
     static void onAbsorb(int commitsAbsorbed) {
         if (ENABLED) {
             absorbed.addAndGet(commitsAbsorbed);
+        }
+    }
+
+    /** A seen-set compression run, from asking for the graph's write side, through taking it, to letting it go. */
+    static void onCompress(long asked, long took, long released) {
+        if (ENABLED) {
+            compressions.incrementAndGet();
+            compressWaitNanos.addAndGet(took - asked);
+            compressHeldNanos.addAndGet(released - took);
+        }
+    }
+
+    /** A ref-count absorption, from asking for the ABSORB lock, through taking it, to letting it go. */
+    static void onAbsorbRun(long asked, long took, long released) {
+        if (ENABLED) {
+            absorbRuns.incrementAndGet();
+            absorbWaitNanos.addAndGet(took - asked);
+            absorbHeldNanos.addAndGet(released - took);
         }
     }
 
@@ -605,6 +629,14 @@ final class VersioningStats {
             n.put("absorbed", absorbed.get());
             n.put("released", released.get());
             section(derived, "nodes").put("live", nodesCreated() - absorbed.get() - released.get());
+
+            Map<String, Long> rw = section(sections, "rewrite");
+            rw.put("compressions", compressions.get());
+            rw.put("compressWaitNanos", compressWaitNanos.get());
+            rw.put("compressHeldNanos", compressHeldNanos.get());
+            rw.put("absorbRuns", absorbRuns.get());
+            rw.put("absorbWaitNanos", absorbWaitNanos.get());
+            rw.put("absorbHeldNanos", absorbHeldNanos.get());
 
             Map<String, Long> d = section(sections, "dead");
             d.put("cleanerRegistrations", cleanerRegistrations.get());

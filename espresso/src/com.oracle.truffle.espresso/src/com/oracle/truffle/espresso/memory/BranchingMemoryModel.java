@@ -96,9 +96,13 @@ public final class BranchingMemoryModel implements MemoryModel {
         }
     }
 
-    public BranchingMemoryModel(EspressoContext context) {
+    // makes each thread's first clock
+    private final ClockFactory clocks;
+
+    public BranchingMemoryModel(EspressoContext context, ClockFactory clocks) {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
+        this.clocks = clocks;
         VersioningStats.arm("branching", cleaner);
     }
 
@@ -108,7 +112,8 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     public MemoryView newThreadView() {
-        return new BranchingView(this::bindThreadSyncState, deadObjectCount, new Commit.Committer(nextThreadId.getAndIncrement()));
+        Clock start = clocks.start(nextThreadId.getAndIncrement());
+        return new BranchingView(this::bindThreadSyncState, deadObjectCount, new Commit.Committer(start));
     }
 
     private SyncState newThreadSyncState(StaticObject thread) {

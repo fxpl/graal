@@ -106,8 +106,8 @@ public class Commit {
     }
 
     /**
-     * The only way a thread makes or folds into a commit. Each view owns one, told its thread's id once, and
-     * it keeps the thread's clock, ticked on every commit, fold and merge the thread makes. The clock belongs
+     * The only way a thread makes or folds into a commit. Each view owns one, given its thread's first clock by
+     * the model's {@link ClockFactory}, and it keeps that clock, ticked on every commit, fold and merge the thread makes. The clock belongs
      * to the thread, not to its head, which may be a commit another thread made. Used only by its owning
      * thread, so the clock needs no synchronisation.
      */
@@ -116,12 +116,17 @@ public class Commit {
         // this thread's clock as of its last commit, fold or merge
         private Clock clock;
 
-        Committer(int thread) {
-            this.clock = Epoch.start(thread);
+        Committer(Clock start) {
+            this.clock = start;
         }
 
         Clock clock() {
             return clock;
+        }
+
+        /** One more event on this thread, for a head that moved without a commit (adopted or fast-forwarded). */
+        void tick() {
+            clock = clock.tick();
         }
 
         /** Take in the clock of a sync state this thread has just pulled from. */

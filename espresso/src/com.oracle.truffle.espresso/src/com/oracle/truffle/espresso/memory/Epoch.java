@@ -44,11 +44,9 @@ record Epoch(int thread, int sequence) implements Clock {
         return this;
     }
 
+    /** Exact within one thread, and false for another thread's epoch, which says nothing either way. */
     @Override
-    public Order compare(Clock other) {
-        if (!(other instanceof Epoch e) || e.thread != thread) {
-            return Order.UNKNOWN;
-        }
-        return sequence <= e.sequence ? Order.BEFORE_OR_SAME : Order.AFTER;
+    public boolean happensBefore(Clock other) {
+        return other instanceof Epoch e && e.thread == thread && sequence <= e.sequence;
     }
 }

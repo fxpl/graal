@@ -51,9 +51,13 @@ public final class LinearMemoryModel implements MemoryModel {
         return cleaner;
     }
 
-    public LinearMemoryModel(EspressoContext context) {
+    // makes each thread's first clock, which linear keeps but never compares
+    private final ClockFactory clocks;
+
+    public LinearMemoryModel(EspressoContext context, ClockFactory clocks) {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
+        this.clocks = clocks;
         VersioningStats.arm("linear", cleaner);
     }
 
@@ -64,7 +68,8 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public MemoryView newThreadView() {
-        return new LinearView(this::bindThreadSyncState, global, deadObjectCount, new Commit.Committer(nextThreadId.getAndIncrement()));
+        Clock start = clocks.start(nextThreadId.getAndIncrement());
+        return new LinearView(this::bindThreadSyncState, global, deadObjectCount, new Commit.Committer(start));
     }
 
     private SyncState newThreadSyncState(StaticObject thread) {

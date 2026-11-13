@@ -59,7 +59,9 @@ final class SeenSetCompression {
     }
 
     private static void compress() {
+        long asked = VersioningStats.now();
         Commit.GRAPH.writeLock().lock();
+        long took = VersioningStats.now();
         try {
             // collect the seen sets for all of the entry commits pointed
             // to by sync states (locks, threads, etc.)
@@ -108,6 +110,7 @@ final class SeenSetCompression {
             }
         } finally {
             Commit.GRAPH.writeLock().unlock();
+            VersioningStats.onCompress(asked, took, VersioningStats.now());
         }
     }
 

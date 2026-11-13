@@ -23,29 +23,22 @@
 package com.oracle.truffle.espresso.memory;
 
 /**
- * A logical clock stamped on every commit, so two commits can sometimes be ordered without walking the
- * graph. Immutable: each operation returns a new clock. A clock may know less than the graph does, and
- * says so with {@link Order#UNKNOWN}, after which the caller walks.
+ * A logical clock kept by each thread and stored on each sync state, so a pull can sometimes tell it already
+ * has what the sync state holds without walking the graph. Immutable: each operation returns a new clock,
+ * as a clock handed to a sync state must not change after.
  */
 interface Clock {
 
-    /** How this clock's commit stands to another's. */
-    enum Order {
-        /** This commit is the other or one of its ancestors. */
-        BEFORE_OR_SAME,
-        /** The other commit is one of this commit's ancestors. */
-        AFTER,
-        /** Neither commit is an ancestor of the other. */
-        CONCURRENT,
-        /** This clock cannot tell. */
-        UNKNOWN
-    }
-
-    /** The clock after one more event on this thread, a commit or a fold into the head. */
+    /** The clock after one more event on this thread, a commit, a fold or a move of the head. */
     Clock tick();
 
-    /** A clock at least as late as this one and {@code theirs}, for a merge. */
+    /** A clock at least as late as this one and {@code theirs}, for a pull. */
     Clock join(Clock theirs);
 
-    Order compare(Clock other);
+    /**
+     * Whether the event this clock marks, its owner's state when it was taken, happens before the point
+     * {@code other} marks. False means not shown to: a clock may know less than the graph does, and then
+     * the caller walks.
+     */
+    boolean happensBefore(Clock other);
 }

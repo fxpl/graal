@@ -159,6 +159,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     @CompilationFinal private int maxStackTraceDepth;
     @CompilationFinal private boolean implicitInteropEnabled;
     @CompilationFinal private EspressoOptions.MemoryModelMode memoryModelMode;
+    @CompilationFinal private EspressoOptions.SyncShareClockMode syncShareClockMode;
     // {@code true} iff a non-stock memory model is active. Kept as a separate PE-constant so the
     // Sync-as-Share hooks on the hot path fold away entirely under {@code SHARED}.
     @CompilationFinal private boolean versionedMemorySelected;
@@ -271,6 +272,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         implicitInteropEnabled = env.getOptions().get(EspressoOptions.EnableImplicitInterop);
         memoryModelMode = env.getOptions().get(EspressoOptions.MemoryModel);
         versionedMemorySelected = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
+        syncShareClockMode = env.getOptions().get(EspressoOptions.SyncShareClock);
         scheduleExploreMode = env.getOptions().get(EspressoOptions.ScheduleExplore);
         scheduleExploreEnabled = scheduleExploreMode != EspressoOptions.ScheduleExploreMode.OFF;
         scheduleDriveMode = env.getOptions().get(EspressoOptions.ScheduleDrive);
@@ -441,6 +443,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.EagerFrameAnalysis) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.SpecCompliance) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModel) &&
+                        isOptionCompatible(newOptions, oldOptions, EspressoOptions.SyncShareClock) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleExplore) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleDrive) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleFile) &&
@@ -664,6 +667,10 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
 
     public EspressoOptions.MemoryModelMode getMemoryModelMode() {
         return memoryModelMode;
+    }
+
+    public EspressoOptions.SyncShareClockMode getSyncShareClockMode() {
+        return syncShareClockMode;
     }
 
     /**

@@ -383,6 +383,8 @@ public final class BranchingView implements MemoryView {
             // either pickup the other commit as head (there is nothing to merge)
             // or the genuinely is no operation to do here
             if (theirHead != null) {
+                // the head moves, so the clock moves, or one clock value would name two heads
+                committer.tick();
                 setHead(theirHead);
                 // our working objects and arrays were read from version 0 alone, so may be stale against
                 // the adopted history; with no head we have never committed, so none has written marks
@@ -408,7 +410,7 @@ public final class BranchingView implements MemoryView {
         }
 
         // their state was last set at a point our clock already covers, so their head is in our history
-        if (theirState.clock.compare(committer.clock()) == Clock.Order.BEFORE_OR_SAME) {
+        if (theirState.clock.happensBefore(committer.clock())) {
             // they are an ancestor of us so nothing to do
             VersioningStats.onMergeUnwalked(MergeOutcome.EPOCH_INCLUDED);
             return ConflictingLocations.NONE;
@@ -545,6 +547,7 @@ public final class BranchingView implements MemoryView {
         if (mineOnly.isEmpty()) {
             // we are some ancestor of theirs, so just fast forward (merge compresses once the read side is
             // released)
+            committer.tick();
             setHead(theirHead);
             recordWalkedMerge(MergeOutcome.FAST_FORWARD, colours.size(), mineOnly, theirsOnly, start, walked);
             return ConflictingLocations.NONE;

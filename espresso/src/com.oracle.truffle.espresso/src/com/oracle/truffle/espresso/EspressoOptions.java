@@ -323,6 +323,29 @@ public final class EspressoOptions {
                     usageSyntax = "shared|linear|branching") //
     public static final OptionKey<MemoryModelMode> MemoryModel = new OptionKey<>(MemoryModelMode.SHARED, MEMORY_MODEL_OPTION_TYPE);
 
+    /** The logical clock a versioned memory model keeps on threads and sync objects (Sync-as-Share). */
+    public enum SyncShareClockMode {
+        EPOCH,
+        VECTOR
+    }
+
+    private static final OptionType<SyncShareClockMode> SYNC_SHARE_CLOCK_OPTION_TYPE = new OptionType<>("SyncShareClock", new Function<String, SyncShareClockMode>() {
+        @Override
+        public SyncShareClockMode apply(String s) {
+            try {
+                return SyncShareClockMode.valueOf(s.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("--java.SyncShareClock: Clock can be 'epoch' or 'vector'.");
+            }
+        }
+    });
+
+    @Option(help = "Selects the logical clock the versioned memory models keep on threads and sync objects: 'epoch' (thread and sequence, compares only within a thread) or 'vector' (one entry per thread).", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "epoch|vector") //
+    public static final OptionKey<SyncShareClockMode> SyncShareClock = new OptionKey<>(SyncShareClockMode.EPOCH, SYNC_SHARE_CLOCK_OPTION_TYPE);
+
     /**
      * Schedule exploration mode. Independent of {@link #MemoryModel}: the scheduler observes (and, in
      * later slices, controls) the order threads pass through synchronization seams, whereas the memory
