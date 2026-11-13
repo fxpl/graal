@@ -346,6 +346,33 @@ public final class EspressoOptions {
                     usageSyntax = "epoch|vector") //
     public static final OptionKey<SyncShareClockMode> SyncShareClock = new OptionKey<>(SyncShareClockMode.EPOCH, SYNC_SHARE_CLOCK_OPTION_TYPE);
 
+    public enum SyncShareVolatileResolutionMode {
+        CONFLICT,
+        THEIRS_IN_JDK,
+        THEIRS
+    }
+
+    private static final OptionType<SyncShareVolatileResolutionMode> SYNC_SHARE_VOLATILE_RESOLUTION_OPTION_TYPE = new OptionType<>("SyncShareVolatileResolution",
+                    new Function<String, SyncShareVolatileResolutionMode>() {
+                        @Override
+                        public SyncShareVolatileResolutionMode apply(String s) {
+                            try {
+                                return SyncShareVolatileResolutionMode.valueOf(s.toUpperCase(Locale.ROOT).replace('-', '_'));
+                            } catch (IllegalArgumentException e) {
+                                throw new IllegalArgumentException("--java.SyncShareVolatileResolution: can be 'conflict', 'theirs-in-jdk' or 'theirs'.");
+                            }
+                        }
+                    });
+
+    @Option(help = "How the versioned memory models treat two volatile writes to a field with no happens-before between them: 'conflict' (report it), " +
+                    "'theirs-in-jdk' (take the pulled value when the field's class was defined by the boot loader, report it otherwise) or 'theirs' (always take the pulled value). " +
+                    "A field annotated @ResolveConflicts takes the pulled value whatever this is.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "conflict|theirs-in-jdk|theirs") //
+    public static final OptionKey<SyncShareVolatileResolutionMode> SyncShareVolatileResolution = new OptionKey<>(SyncShareVolatileResolutionMode.CONFLICT,
+                    SYNC_SHARE_VOLATILE_RESOLUTION_OPTION_TYPE);
+
     /**
      * Schedule exploration mode. Independent of {@link #MemoryModel}: the scheduler observes (and, in
      * later slices, controls) the order threads pass through synchronization seams, whereas the memory

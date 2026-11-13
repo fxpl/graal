@@ -212,6 +212,37 @@ public interface MemoryModel {
      */
     boolean onArrayCompareAndSet(StaticObject array, int index, StaticObject expected, StaticObject value);
 
+    /** {@link #onArrayCompareAndSet(StaticObject, int, StaticObject, StaticObject)} for an {@code int} array. */
+    boolean onArrayCompareAndSet(StaticObject array, int index, int expected, int value);
+
+    /** {@link #onArrayCompareAndSet(StaticObject, int, StaticObject, StaticObject)} for a {@code long} array. */
+    boolean onArrayCompareAndSet(StaticObject array, int index, long expected, long value);
+
+    /**
+     * Compare-and-exchange of element {@code index} of the versioned reference {@code array}: as
+     * {@link #onArrayCompareAndSet(StaticObject, int, StaticObject, StaticObject)}, returning the element it
+     * compared against rather than whether it matched.
+     */
+    StaticObject onArrayCompareAndExchange(StaticObject array, int index, StaticObject expected, StaticObject value);
+
+    /** {@link #onArrayCompareAndExchange(StaticObject, int, StaticObject, StaticObject)} for an {@code int} array. */
+    int onArrayCompareAndExchange(StaticObject array, int index, int expected, int value);
+
+    /** {@link #onArrayCompareAndExchange(StaticObject, int, StaticObject, StaticObject)} for a {@code long} array. */
+    long onArrayCompareAndExchange(StaticObject array, int index, long expected, long value);
+
+    /** {@link #onArrayCompareAndExchange(StaticObject, int, StaticObject, StaticObject)} for a {@code byte} array. */
+    byte onArrayCompareAndExchange(StaticObject array, int index, byte expected, byte value);
+
+    /** {@link #onArrayCompareAndExchange(StaticObject, int, StaticObject, StaticObject)} for a {@code short} array. */
+    short onArrayCompareAndExchange(StaticObject array, int index, short expected, short value);
+
+    /**
+     * Get-and-set of element {@code index} of the versioned reference {@code array}: a compare-and-exchange
+     * that always matches, so it writes {@code value} and returns the element it replaced.
+     */
+    StaticObject onArrayGetAndSet(StaticObject array, int index, StaticObject value);
+
     /**
      * Class-init release (JLS §12.4.2): {@code <clinit>} of {@code klass} has completed, so push the
      * initializer's writes to the class's init state. Happens once per class.

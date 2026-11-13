@@ -164,9 +164,26 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         conflictResolution = resolution;
     }
 
-    /** Whether a merge takes the pulled value when this field was written on both sides. */
+    /**
+     * Whether a merge takes the pulled value when this field was written on both sides: the field is annotated so,
+     * or it is volatile and --java.SyncShareVolatileResolution covers it.
+     */
     public final boolean isResolvedByTheirs() {
-        return conflictResolution == ResolveConflicts.Resolution.THEIRS;
+        if (conflictResolution == ResolveConflicts.Resolution.THEIRS) {
+            return true;
+        }
+        if (!isVolatile()) {
+            return false;
+        }
+        switch (getDeclaringKlass().getMeta().getLanguage().getSyncShareVolatileResolution()) {
+            case THEIRS:
+                return true;
+            case THEIRS_IN_JDK:
+                // the JDK's classes are the boot loader's, whichever thread caused them to load
+                return StaticObject.isNull(getDeclaringKlass().getDefiningClassLoader());
+            default:
+                return false;
+        }
     }
 
     // Sync-as-Share: a reference stored through this field shares what it refers to if obj is shared,

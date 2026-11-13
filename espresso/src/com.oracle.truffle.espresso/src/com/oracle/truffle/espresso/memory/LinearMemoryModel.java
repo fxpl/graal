@@ -27,6 +27,8 @@ import java.lang.reflect.Array;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
@@ -288,6 +290,23 @@ public final class LinearMemoryModel implements MemoryModel {
         return swapped;
     }
 
+    // as compareAndSet, returning the value read rather than whether it matched
+    private <T> T compareAndExchange(SyncState state, Supplier<T> read, Predicate<T> matches, Runnable write) {
+        LinearView view = currentView();
+        ConflictingLocations conflict;
+        T witness;
+        synchronized (state) {
+            conflict = view.pull();
+            witness = read.get();
+            if (matches.test(witness) && conflict.isEmpty()) {
+                write.run();
+                conflict = view.push();
+            }
+        }
+        handleConflicts(conflict, view, "compare-and-exchange");
+        return witness;
+    }
+
     @Override
     public Object onVolatileArrayRead(StaticObject array, int index) {
         // As onVolatileRead, on the one sync state all the array's elements share. Unlike arrayForRead and
@@ -326,6 +345,54 @@ public final class LinearMemoryModel implements MemoryModel {
         // the model does the element access itself (see onVolatileArrayRead)
         return compareAndSet(array.volatileArraySyncState(), () -> Array.get(arrayForRead(array, index), index) == expected,
                         () -> Array.set(arrayForWrite(array, index), index, value));
+    }
+
+    @Override
+    public boolean onArrayCompareAndSet(StaticObject array, int index, int expected, int value) {
+        return compareAndSet(array.volatileArraySyncState(), () -> Array.getInt(arrayForRead(array, index), index) == expected,
+                        () -> Array.setInt(arrayForWrite(array, index), index, value));
+    }
+
+    @Override
+    public boolean onArrayCompareAndSet(StaticObject array, int index, long expected, long value) {
+        return compareAndSet(array.volatileArraySyncState(), () -> Array.getLong(arrayForRead(array, index), index) == expected,
+                        () -> Array.setLong(arrayForWrite(array, index), index, value));
+    }
+
+    @Override
+    public StaticObject onArrayCompareAndExchange(StaticObject array, int index, StaticObject expected, StaticObject value) {
+        return compareAndExchange(array.volatileArraySyncState(), () -> (StaticObject) Array.get(arrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.set(arrayForWrite(array, index), index, value));
+    }
+
+    @Override
+    public int onArrayCompareAndExchange(StaticObject array, int index, int expected, int value) {
+        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getInt(arrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.setInt(arrayForWrite(array, index), index, value));
+    }
+
+    @Override
+    public long onArrayCompareAndExchange(StaticObject array, int index, long expected, long value) {
+        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getLong(arrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.setLong(arrayForWrite(array, index), index, value));
+    }
+
+    @Override
+    public byte onArrayCompareAndExchange(StaticObject array, int index, byte expected, byte value) {
+        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getByte(arrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.setByte(arrayForWrite(array, index), index, value));
+    }
+
+    @Override
+    public short onArrayCompareAndExchange(StaticObject array, int index, short expected, short value) {
+        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getShort(arrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.setShort(arrayForWrite(array, index), index, value));
+    }
+
+    @Override
+    public StaticObject onArrayGetAndSet(StaticObject array, int index, StaticObject value) {
+        return compareAndExchange(array.volatileArraySyncState(), () -> (StaticObject) Array.get(arrayForRead(array, index), index),
+                        witness -> true, () -> Array.set(arrayForWrite(array, index), index, value));
     }
 
     @Override

@@ -150,6 +150,46 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
+    public boolean onArrayCompareAndSet(StaticObject array, int index, int expected, int value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onArrayCompareAndSet: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public boolean onArrayCompareAndSet(StaticObject array, int index, long expected, long value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onArrayCompareAndSet: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public StaticObject onArrayCompareAndExchange(StaticObject array, int index, StaticObject expected, StaticObject value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onArrayCompareAndExchange: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public int onArrayCompareAndExchange(StaticObject array, int index, int expected, int value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onArrayCompareAndExchange: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public long onArrayCompareAndExchange(StaticObject array, int index, long expected, long value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onArrayCompareAndExchange: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public byte onArrayCompareAndExchange(StaticObject array, int index, byte expected, byte value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onArrayCompareAndExchange: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public short onArrayCompareAndExchange(StaticObject array, int index, short expected, short value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onArrayCompareAndExchange: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public StaticObject onArrayGetAndSet(StaticObject array, int index, StaticObject value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onArrayGetAndSet: memory-model hooks must be folded under shared");
+    }
+
+    @Override
     public void onClassInitialized(ObjectKlass klass) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onClassInitialized: memory-model hooks must be folded under shared");
     }

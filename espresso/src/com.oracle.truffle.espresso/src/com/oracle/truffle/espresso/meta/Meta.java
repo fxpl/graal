@@ -1141,6 +1141,12 @@ public final class Meta extends ContextAccessImpl
         java_util_concurrent_locks_AbstractQueuedSynchronizer_Node_status = declaredFieldNamed(aqsNode, "status");
         java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node_status = declaredFieldNamed(aqlsNode, "status");
         java_util_concurrent_locks_StampedLock_Node_status = declaredFieldNamed(stampedLockNode, "status");
+        // and their next, a hint a cancelled waiter and a queue cleaner both splice, which a stale value only slows
+        java_util_concurrent_locks_AbstractQueuedSynchronizer_Node_next = declaredFieldNamed(aqsNode, "next");
+        java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node_next = declaredFieldNamed(aqlsNode, "next");
+        java_util_concurrent_locks_StampedLock_Node_next = declaredFieldNamed(stampedLockNode, "next");
+        // a future's waiter and its completer both clear the waiting thread to null
+        java_util_concurrent_FutureTask_WaitNode_thread = declaredFieldNamed(knownKlass(Types.java_util_concurrent_FutureTask_WaitNode), "thread");
 
         java_math_BigInteger = knownKlass(Types.java_math_BigInteger);
         java_math_BigInteger_init = java_math_BigInteger.requireDeclaredMethod(Names._init_, Signatures._void_byte_array);
@@ -2085,6 +2091,10 @@ public final class Meta extends ContextAccessImpl
     @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_AbstractQueuedSynchronizer_Node_status;
     @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node_status;
     @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_StampedLock_Node_status;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_AbstractQueuedSynchronizer_Node_next;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node_next;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_StampedLock_Node_next;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_FutureTask_WaitNode_thread;
 
     public final ObjectKlass java_math_BigInteger;
     public final Method java_math_BigInteger_init;
