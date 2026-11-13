@@ -136,31 +136,48 @@ final class RefCountAbsorption {
             return false;
         }
         long asked = VersioningStats.now();
-        synchronized(ABSORB) {
-            long took = VersioningStats.now();
-            boolean isAbsorbed = absorbAncestors(into);
-            VersioningStats.onAbsorbRun(asked, took, VersioningStats.now());
-            return isAbsorbed;
+        // the read side keeps a compression on another thread from rewriting the graph at the same time
+        Commit.GRAPH.readLock().lock();
+        try {
+            synchronized(ABSORB) {
+                long took = VersioningStats.now();
+                boolean isAbsorbed = absorbAncestors(into);
+                VersioningStats.onAbsorbRun(asked, took, VersioningStats.now());
+                return isAbsorbed;
+            }
+        } finally {
+            Commit.GRAPH.readLock().unlock();
         }
     }
 
     // We assume we are in a conflict free DAG
     static void absorbIntoRecursively(Commit from) {
+        // nothing is ours alone so no allocation and no lock
+        if (!shouldAbsorb || from.parents().stream().noneMatch(p -> p.getRefCount() == 1)) {
+            return;
+        }
+
         Deque<Commit> compressTails = new ArrayDeque<>();
         compressTails.add(from);
 
         Set<Commit> visited = new HashSet<>();
-        while (!compressTails.isEmpty()) {
-            Commit tail = compressTails.pop();
-            if (!visited.add(tail)) {
-                continue;
-            }
+        // the read side for the whole climb, so a compression never runs between its steps
+        Commit.GRAPH.readLock().lock();
+        try {
+            while (!compressTails.isEmpty()) {
+                Commit tail = compressTails.pop();
+                if (!visited.add(tail)) {
+                    continue;
+                }
 
-            if (absorbInto(tail)) {
-                // Only continue if we succeeded in compressing anything, there may be
-                // stuff higher in the DAG but we leave that for a deeper compression task
-                compressTails.addAll(tail.parents());
+                if (absorbInto(tail)) {
+                    // Only continue if we succeeded in compressing anything, there may be
+                    // stuff higher in the DAG but we leave that for a deeper compression task
+                    compressTails.addAll(tail.parents());
+                }
             }
+        } finally {
+            Commit.GRAPH.readLock().unlock();
         }
     }
 }

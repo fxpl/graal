@@ -323,28 +323,17 @@ public final class BranchingView implements MemoryView {
         SeenSetCompression.tryCompress();
     }
 
-    // under the read side, so a compression on another thread never rewrites the graph at the same time
     private static void runRefCountAbsorption(Commit into) {
-        Commit.GRAPH.readLock().lock();
-        try {
-            RefCountAbsorption.absorbInto(into);
-        } finally {
-            Commit.GRAPH.readLock().unlock();
-        }
+        RefCountAbsorption.absorbInto(into);
     }
 
-    // absorb into our head and on up through its new parents, under the read side as above
+    // absorb into our head and on up through its new parents
     private void runRefCountAbsorptionRecursively() {
         Commit head = state().commit;
         if (head == null) {
             return;
         }
-        Commit.GRAPH.readLock().lock();
-        try {
-            RefCountAbsorption.absorbIntoRecursively(head);
-        } finally {
-            Commit.GRAPH.readLock().unlock();
-        }
+        RefCountAbsorption.absorbIntoRecursively(head);
     }
 
     private enum CommitColour { MINE, THEIRS, BOTH; };
