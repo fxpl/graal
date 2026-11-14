@@ -1829,7 +1829,7 @@ public final class Meta extends ContextAccessImpl
     public final Field java_lang_Thread_0hostThread;
     public final Field java_lang_Thread_0espressoManaged;
     public final Field java_lang_Thread_0toNativeLock;
-    @Unversioned(VM_STATE) public final Field java_lang_Thread_0interrupted;
+    @ResolveConflicts(THEIRS) public final Field java_lang_Thread_0interrupted;
     public final Field java_lang_Thread_0interruptedEvent;
     public final Field java_lang_Thread_0unparkSignals;
     public final Field java_lang_Thread_0parkLock;

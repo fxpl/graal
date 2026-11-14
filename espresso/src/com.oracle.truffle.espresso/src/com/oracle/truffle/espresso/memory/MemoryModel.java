@@ -128,6 +128,27 @@ public interface MemoryModel {
         return arrayForWrite(array, index, index + 1);
     }
 
+    /**
+     * The storage a volatile or atomic access reads element {@code index} of the shared {@code array}
+     * from, through the view when the model versions the array, else the array itself.
+     */
+    default Object volatileArrayForRead(StaticObject array, int index) {
+        if (Versioning.isVersioned(array)) {
+            return arrayForRead(array, index);
+        } else {
+            return array.getRawArray(array.getKlass().getLanguage());
+        }
+    }
+
+    /** As {@link #volatileArrayForRead}, for a write. */
+    default Object volatileArrayForWrite(StaticObject array, int index) {
+        if (Versioning.isVersioned(array)) {
+            return arrayForWrite(array, index);
+        } else {
+            return array.getRawArray(array.getKlass().getLanguage());
+        }
+    }
+
     // --- Synchronisation actions (Table 1). May report a conflict. ---
 
     /** The child's first action, on the child, before its code runs (the parent's half is {@link #onSpawn}). */
@@ -162,52 +183,59 @@ public interface MemoryModel {
     void onMonitorExit(StaticObject lock);
 
     /**
-     * Volatile read (the paper's {@code VolatileRead} rule). A volatile field is an <em>un-versioned</em>
-     * cell {@code (value, commit)} kept beside the locks, not in the versioned heap: the value is a plain
-     * slot, the commit carries the happens-before of the ordinary writes published alongside it. A read
-     * <em>acquires</em> — it pulls (Branching: merges the cell's commit; Linear: pulls the global history), which
-     * may raise a conflict on those ordinary writes — then returns the cell's value. A read publishes
-     * nothing.
+     * Volatile read (the paper's {@code VolatileRead} rule) of {@code field} of the shared {@code holder}.
+     * Pulls from the field's volatile sync state (Branching: merges its commit; Linear: pulls the global
+     * history), which may raise a conflict, then reads the value: through the view when the model versions
+     * the field, else from the raw slot. Pushes nothing. Atomic per field. Boxed for primitives.
      */
     Object onVolatileRead(StaticObject holder, Field field);
 
     /**
-     * Volatile write (the paper's {@code VolatileWrite} rule). Acquires as {@link #volatileRead}, then
-     * <em>releases</em>: sets the cell's value to {@code value} and publishes the writer's commit to the
-     * cell. The value is stored in the cell only — never staged or versioned — so concurrent volatile
-     * writes to the same field are not a data race (last writer wins); only the ordinary writes carried
-     * on the commit are conflict-checked, at the acquire. Atomic per field.
+     * Volatile write (the paper's {@code VolatileWrite} rule) of {@code field} of the shared {@code holder}.
+     * Writes the value, then pulls from and pushes to the field's volatile sync state. A versioned field's
+     * value is staged, so a volatile write unordered with ours is a conflict at the pull (the JLS counts
+     * two volatile writes without happens-before as a data race). An unversioned field's value goes to the
+     * raw slot and is not staged, so only the other writes the pull brings in are checked. Atomic per field.
      */
     void onVolatileWrite(StaticObject holder, Field field, Object value);
 
     /**
-     * Compare-and-set of a versioned field of {@code holder}, atomic on the field's volatile sync state:
-     * pull, then if the field read through the view is {@code expected}, stage {@code value} and push.
-     * The read comes before the write, so each compare-and-set is informed by the last and two never
-     * conflict. A failed one is a volatile read.
+     * Compare-and-set of {@code field} of the shared {@code holder}, atomic on the field's volatile sync
+     * state: pull, read the field, and if it matches {@code expected} (as {@link Field#isSameValue}) write
+     * {@code value} and push. The value goes through the view when the model versions the field, else the
+     * raw slot. The read comes before the write, so each compare-and-set is informed by the last and two
+     * never conflict. A failed one is a volatile read. Values are boxed for primitives.
      */
-    boolean onCompareAndSet(StaticObject holder, Field field, int expected, int value);
-
-    /** {@link #onCompareAndSet(StaticObject, Field, int, int)} for a {@code long} field. */
-    boolean onCompareAndSet(StaticObject holder, Field field, long expected, long value);
-
-    /** {@link #onCompareAndSet(StaticObject, Field, int, int)} for a reference field, compared by identity. */
-    boolean onCompareAndSet(StaticObject holder, Field field, StaticObject expected, StaticObject value);
+    boolean onCompareAndSet(StaticObject holder, Field field, Object expected, Object value);
 
     /**
-     * A volatile read of element {@code index} of the versioned {@code array}, as {@link #onVolatileRead}
+     * Compare-and-exchange of {@code field} of the shared {@code holder}: as
+     * {@link #onCompareAndSet(StaticObject, Field, Object, Object)}, returning the value it compared
+     * against rather than whether it matched.
+     */
+    Object onCompareAndExchange(StaticObject holder, Field field, Object expected, Object value);
+
+    /**
+     * Get-and-set of {@code field} of the shared {@code holder}: a compare-and-exchange that always matches,
+     * so it writes {@code value} and returns the value it replaced.
+     */
+    Object onGetAndSet(StaticObject holder, Field field, Object value);
+
+    /**
+     * A volatile read of element {@code index} of the shared {@code array}, as {@link #onVolatileRead}
      * on the array's one volatile sync state, which all its elements share. The value is boxed for
      * primitives.
      */
     Object onVolatileArrayRead(StaticObject array, int index);
 
-    /** A volatile write of element {@code index} of the versioned {@code array}, as {@link #onVolatileWrite}. */
+    /** A volatile write of element {@code index} of the shared {@code array}, as {@link #onVolatileWrite}. */
     void onVolatileArrayWrite(StaticObject array, int index, Object value);
 
     /**
-     * Compare-and-set of element {@code index} of the versioned reference {@code array}, atomic on the
-     * array's volatile sync state: pull, then if the element read through the view is {@code expected}
-     * (by identity), stage {@code value} and push. The read comes before the write, so each
+     * Compare-and-set of element {@code index} of the shared reference {@code array}, atomic on the
+     * array's volatile sync state: pull, then if the element is {@code expected} (by identity), write
+     * {@code value} and push. The element is read and written in {@link #volatileArrayForRead} and
+     * {@link #volatileArrayForWrite}'s storage. The read comes before the write, so each
      * compare-and-set is informed by the last and two never conflict. A failed one is a volatile read.
      */
     boolean onArrayCompareAndSet(StaticObject array, int index, StaticObject expected, StaticObject value);
@@ -219,7 +247,7 @@ public interface MemoryModel {
     boolean onArrayCompareAndSet(StaticObject array, int index, long expected, long value);
 
     /**
-     * Compare-and-exchange of element {@code index} of the versioned reference {@code array}: as
+     * Compare-and-exchange of element {@code index} of the shared reference {@code array}: as
      * {@link #onArrayCompareAndSet(StaticObject, int, StaticObject, StaticObject)}, returning the element it
      * compared against rather than whether it matched.
      */
@@ -238,7 +266,7 @@ public interface MemoryModel {
     short onArrayCompareAndExchange(StaticObject array, int index, short expected, short value);
 
     /**
-     * Get-and-set of element {@code index} of the versioned reference {@code array}: a compare-and-exchange
+     * Get-and-set of element {@code index} of the shared reference {@code array}: a compare-and-exchange
      * that always matches, so it writes {@code value} and returns the element it replaced.
      */
     StaticObject onArrayGetAndSet(StaticObject array, int index, StaticObject value);

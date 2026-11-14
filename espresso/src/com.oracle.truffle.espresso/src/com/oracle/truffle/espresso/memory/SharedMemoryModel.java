@@ -120,18 +120,18 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
-    public boolean onCompareAndSet(StaticObject holder, Field field, int expected, int value) {
+    public boolean onCompareAndSet(StaticObject holder, Field field, Object expected, Object value) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onCompareAndSet: memory-model hooks must be folded under shared");
     }
 
     @Override
-    public boolean onCompareAndSet(StaticObject holder, Field field, long expected, long value) {
-        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onCompareAndSet: memory-model hooks must be folded under shared");
+    public Object onCompareAndExchange(StaticObject holder, Field field, Object expected, Object value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onCompareAndExchange: memory-model hooks must be folded under shared");
     }
 
     @Override
-    public boolean onCompareAndSet(StaticObject holder, Field field, StaticObject expected, StaticObject value) {
-        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onCompareAndSet: memory-model hooks must be folded under shared");
+    public Object onGetAndSet(StaticObject holder, Field field, Object value) {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onGetAndSet: memory-model hooks must be folded under shared");
     }
 
     @Override

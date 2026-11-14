@@ -160,6 +160,11 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         return unversionable;
     }
 
+    // Sync-as-Share, is this field the VM's own bookkeeping, marked @Unversioned(VM_STATE)
+    public final boolean isVmState() {
+        return unversionedReason == Unversioned.Reason.VM_STATE;
+    }
+
     public void markConflictResolution(ResolveConflicts.Resolution resolution) {
         conflictResolution = resolution;
     }
@@ -190,7 +195,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     // unless the field is VM state
     private void onStore(StaticObject obj, Object value) {
         if (!unversionable) {
-            Versioning.onStore(obj, value);
+            Versioning.onStore(obj, this, value);
         }
     }
 
@@ -486,11 +491,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         return getDeclaringKlass().getContext().getMemoryModel();
     }
 
-    // Sync-as-Share: read a field the model owns: a volatile access with its acquire, a plain one through
-    // the calling thread's view. A volatile access to a plain field (VM code reading it with
-    // Unsafe.get*Volatile, as the JDK does for Module.enableNativeAccess) is modelled as a volatile access
-    // to that field: the value is still read through the view, after a pull from the field's own volatile
-    // sync state. Boxed for primitives.
+    // Sync-as-Share, a read that goes to the model, a volatile one with its pull and a plain one through the view, boxed
     private Object readVersioned(StaticObject obj, boolean forceVolatile) {
         if (isVolatile() || forceVolatile) {
             return memoryModel().onVolatileRead(obj, this);
@@ -498,8 +499,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         return memoryModel().readField(obj, this);
     }
 
-    // Sync-as-Share: write a field the model owns, as readVersioned: a volatile access stages the value and
-    // pushes to the field's volatile sync state, a plain one only stages it.
+    // Sync-as-Share, a write that goes to the model, a volatile one with its push and a plain one staged in the view
     private void writeVersioned(StaticObject obj, Object value, boolean forceVolatile) {
         if (isVolatile() || forceVolatile) {
             memoryModel().onVolatileWrite(obj, this, value);
@@ -551,11 +551,11 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     }
 
     /**
-     * Write {@code value} to {@code obj}'s slot for this field, bypassing the memory model. Only for the
-     * model's volatile writes: a volatile field's value lives in its slot.
+     * Write {@code value} to {@code obj}'s slot for this field with a volatile store, bypassing the memory
+     * model. Only for the model's volatile and atomic writes to a field it does not version, whose value
+     * lives in its slot.
      */
     public void setRawValue(StaticObject obj, Object value) {
-        assert isVolatile() : "only a volatile field's slot is written by the model";
         // @formatter:off
         switch (getKind()) {
             case Boolean: linkedField.setBooleanVolatile(obj, (boolean) value); break;
@@ -570,6 +570,22 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
             default:
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw EspressoError.shouldNotReachHere();
+        }
+        // @formatter:on
+    }
+
+    /**
+     * Are {@code a} and {@code b}, two values of this field, the same as a compare-and-set compares them?
+     * References by identity, floats and doubles by their raw bits, other kinds by value. Boxed for
+     * primitives.
+     */
+    public boolean isSameValue(Object a, Object b) {
+        // @formatter:off
+        switch (getKind()) {
+            case Object: return a == b;
+            case Float: return Float.floatToRawIntBits((float) a) == Float.floatToRawIntBits((float) b);
+            case Double: return Double.doubleToRawLongBits((double) a) == Double.doubleToRawLongBits((double) b);
+            default: return a.equals(b);
         }
         // @formatter:on
     }
@@ -593,7 +609,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
 
         // Sync-as-Share: a versioned location reads through the model, so VM reads see what guest bytecode
         // sees.
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return readVersioned(obj, forceVolatile);
         }
 
@@ -643,7 +659,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
 
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
         onStore(obj, value);
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -693,6 +709,10 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         onStore(obj, value);
+        // Sync-as-Share, an atomic access is a volatile access whether or not the field is volatile
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (StaticObject) memoryModel().onGetAndSet(obj, this, value);
+        }
         return (StaticObject) linkedField.getAndSetObject(obj, value);
     }
 
@@ -701,8 +721,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         onStore(obj, after);
-        if (Versioning.versionsField(obj, this)) {
-            return memoryModel().onCompareAndSet(obj, this, (StaticObject) before, (StaticObject) after);
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
         }
         return linkedField.compareAndSwapObject(obj, before, after);
     }
@@ -712,6 +732,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert !isHidden() : this + " is hidden";
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         onStore(obj, after);
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (StaticObject) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return (StaticObject) linkedField.compareAndExchangeObject(obj, before, after);
     }
 
@@ -768,7 +791,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as getObjectHelper; the model returns primitive kinds boxed.
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return (Boolean) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
@@ -787,7 +810,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -801,12 +824,19 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public boolean compareAndSwapBoolean(StaticObject obj, boolean before, boolean after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share, as compareAndSwapObject
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
+        }
         return linkedField.compareAndSwapBoolean(obj, before, after);
     }
 
     public boolean compareAndExchangeBoolean(StaticObject obj, boolean before, boolean after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Boolean) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return linkedField.compareAndExchangeBoolean(obj, before, after);
     }
     // endregion boolean
@@ -819,7 +849,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public byte getByte(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return (Byte) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
@@ -838,7 +868,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -852,12 +882,19 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public boolean compareAndSwapByte(StaticObject obj, byte before, byte after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share, as compareAndSwapObject
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
+        }
         return linkedField.compareAndSwapByte(obj, before, after);
     }
 
     public byte compareAndExchangeByte(StaticObject obj, byte before, byte after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Byte) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return linkedField.compareAndExchangeByte(obj, before, after);
     }
     // endregion byte
@@ -870,7 +907,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public char getChar(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return (Character) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
@@ -889,7 +926,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -903,12 +940,19 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public boolean compareAndSwapChar(StaticObject obj, char before, char after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share, as compareAndSwapObject
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
+        }
         return linkedField.compareAndSwapChar(obj, before, after);
     }
 
     public char compareAndExchangeChar(StaticObject obj, char before, char after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Character) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return linkedField.compareAndExchangeChar(obj, before, after);
     }
     // endregion char
@@ -921,7 +965,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public double getDouble(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return (Double) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
@@ -940,7 +984,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -954,12 +998,19 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public boolean compareAndSwapDouble(StaticObject obj, double before, double after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share, as compareAndSwapObject
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
+        }
         return linkedField.compareAndSwapDouble(obj, before, after);
     }
 
     public double compareAndExchangeDouble(StaticObject obj, double before, double after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Double) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return linkedField.compareAndExchangeDouble(obj, before, after);
     }
     // endregion double
@@ -972,7 +1023,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public float getFloat(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return (Float) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
@@ -991,7 +1042,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -1005,12 +1056,19 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public boolean compareAndSwapFloat(StaticObject obj, float before, float after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share, as compareAndSwapObject
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
+        }
         return linkedField.compareAndSwapFloat(obj, before, after);
     }
 
     public float compareAndExchangeFloat(StaticObject obj, float before, float after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Float) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return linkedField.compareAndExchangeFloat(obj, before, after);
     }
     // endregion float
@@ -1023,7 +1081,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public int getInt(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return (Integer) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
@@ -1042,7 +1100,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -1056,13 +1114,17 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public int getAndSetInt(StaticObject obj, int value) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share, as compareAndSwapObject
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Integer) memoryModel().onGetAndSet(obj, this, value);
+        }
         return linkedField.getAndSetInt(obj, value);
     }
 
     public boolean compareAndSwapInt(StaticObject obj, int before, int after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
             return memoryModel().onCompareAndSet(obj, this, before, after);
         }
         return linkedField.compareAndSwapInt(obj, before, after);
@@ -1071,6 +1133,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public int compareAndExchangeInt(StaticObject obj, int before, int after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Integer) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return linkedField.compareAndExchangeInt(obj, before, after);
     }
     // endregion int
@@ -1084,7 +1149,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return (Long) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
@@ -1104,7 +1169,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getKind().needsTwoSlots();
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -1119,6 +1184,10 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
+        // Sync-as-Share, as compareAndSwapObject
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Long) memoryModel().onGetAndSet(obj, this, value);
+        }
         return linkedField.getAndSetLong(obj, value);
     }
 
@@ -1126,7 +1195,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         assert getKind().needsTwoSlots();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
             return memoryModel().onCompareAndSet(obj, this, before, after);
         }
         return linkedField.compareAndSwapLong(obj, before, after);
@@ -1135,6 +1204,9 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public long compareAndExchangeLong(StaticObject obj, long before, long after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Long) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return linkedField.compareAndExchangeLong(obj, before, after);
     }
     // endregion long
@@ -1147,7 +1219,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public short getShort(StaticObject obj, boolean forceVolatile) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             return (Short) readVersioned(obj, forceVolatile);
         }
         if (isVolatile() || forceVolatile) {
@@ -1166,7 +1238,7 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
         // Sync-as-Share: as setObjectHelper.
         assert isWriteAllowed(obj) : this + " is @Unversioned(IMMUTABLE) but is written a second time";
-        if (Versioning.versionsField(obj, this)) {
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, forceVolatile)) {
             writeVersioned(obj, value, forceVolatile);
             return;
         }
@@ -1180,12 +1252,19 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     public boolean compareAndSwapShort(StaticObject obj, short before, short after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        // Sync-as-Share, as compareAndSwapObject
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return memoryModel().onCompareAndSet(obj, this, before, after);
+        }
         return linkedField.compareAndSwapShort(obj, before, after);
     }
 
     public short compareAndExchangeShort(StaticObject obj, short before, short after) {
         obj.checkNotForeign();
         assert getDeclaringKlass().isAssignableFrom(obj.getKlass()) : this + " does not exist in " + obj.getKlass();
+        if (Versioning.versionsField(obj, this) || Versioning.synchronisesVolatile(obj, this, true)) {
+            return (Short) memoryModel().onCompareAndExchange(obj, this, before, after);
+        }
         return linkedField.compareAndExchangeShort(obj, before, after);
     }
     // endregion short

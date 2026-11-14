@@ -189,6 +189,24 @@ public final class BranchingMemoryModel implements MemoryModel {
         registerForCleaning(holder);
     }
 
+    // a volatile's value, through the view when the model owns the field, else from the raw slot
+    private Object readVolatileField(StaticObject holder, Field field) {
+        if (Versioning.versionsField(holder, field)) {
+            return readField(holder, field);
+        } else {
+            return field.getRawValue(holder);
+        }
+    }
+
+    // as readVolatileField, for a write
+    private void writeVolatileField(StaticObject holder, Field field, Object value) {
+        if (Versioning.versionsField(holder, field)) {
+            writeField(holder, field, value);
+        } else {
+            field.setRawValue(holder, value);
+        }
+    }
+
     @Override
     public Object arrayForRead(StaticObject array, int from, int to) {
         return currentView().arrayForRead(array, from, to);
@@ -262,7 +280,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public Object onVolatileRead(StaticObject holder, Field field) {
         // Volatile read (paper VolatileRead): pull from the field's sync state, then read the value
-        // through the view, like any versioned value. No push — a read adds no history. Atomic per
+        // (readVolatileField). No push — a read adds no history. Atomic per
         // field (synchronised on the sync state) so value and commit are read together, consistent
         // against a concurrent volatile write to the same field.
         BranchingView view = currentView();
@@ -271,7 +289,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         Object value;
         synchronized (state) {
             conflict = view.pull(state);
-            value = readField(holder, field);
+            value = readVolatileField(holder, field);
         }
         handleConflicts(conflict, view, "volatile read");
         return value;
@@ -279,15 +297,16 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onVolatileWrite(StaticObject holder, Field field, Object value) {
-        // Volatile write (paper VolatileWrite): stage the value like any write, then release it to the
-        // field's sync state. The release merges what the state already holds (a push alone would drop
-        // it), and staging first means a volatile write unordered with ours is a conflict there: the
-        // JLS counts two volatile writes without happens-before as a data race. Atomic per field.
+        // Volatile write (paper VolatileWrite): write the value (writeVolatileField, staged when the field is
+        // versioned), then release it to the field's sync state. The release merges what the state already
+        // holds (a push alone would drop it), and staging first means a volatile write unordered with ours
+        // is a conflict there: the JLS counts two volatile writes without happens-before as a data race.
+        // Atomic per field.
         BranchingView view = currentView();
         SyncState state = holder.volatileSyncState(field);
         ConflictingLocations conflicts;
         synchronized (state) {
-            writeField(holder, field, value);
+            writeVolatileField(holder, field, value);
             conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
                 view.push(state);
@@ -297,18 +316,19 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     @Override
-    public boolean onCompareAndSet(StaticObject holder, Field field, int expected, int value) {
-        return compareAndSet(holder.volatileSyncState(field), () -> (int) readField(holder, field) == expected, () -> writeField(holder, field, value));
+    public boolean onCompareAndSet(StaticObject holder, Field field, Object expected, Object value) {
+        return compareAndSet(holder.volatileSyncState(field), () -> field.isSameValue(readVolatileField(holder, field), expected), () -> writeVolatileField(holder, field, value));
     }
 
     @Override
-    public boolean onCompareAndSet(StaticObject holder, Field field, long expected, long value) {
-        return compareAndSet(holder.volatileSyncState(field), () -> (long) readField(holder, field) == expected, () -> writeField(holder, field, value));
+    public Object onCompareAndExchange(StaticObject holder, Field field, Object expected, Object value) {
+        return compareAndExchange(holder.volatileSyncState(field), () -> readVolatileField(holder, field), witness -> field.isSameValue(witness, expected),
+                        () -> writeVolatileField(holder, field, value));
     }
 
     @Override
-    public boolean onCompareAndSet(StaticObject holder, Field field, StaticObject expected, StaticObject value) {
-        return compareAndSet(holder.volatileSyncState(field), () -> readField(holder, field) == expected, () -> writeField(holder, field, value));
+    public Object onGetAndSet(StaticObject holder, Field field, Object value) {
+        return compareAndExchange(holder.volatileSyncState(field), () -> readVolatileField(holder, field), witness -> true, () -> writeVolatileField(holder, field, value));
     }
 
     // pull, test, then write and push, all atomic on the location's sync state; the read comes first, so
@@ -359,7 +379,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         Object value;
         synchronized (state) {
             conflict = view.pull(state);
-            value = Array.get(arrayForRead(array, index), index);
+            value = Array.get(volatileArrayForRead(array, index), index);
         }
         handleConflicts(conflict, view, "volatile read");
         return value;
@@ -373,7 +393,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         ConflictingLocations conflicts;
         synchronized (state) {
             // the model does the element write itself, through the barrier (see onVolatileArrayRead)
-            Array.set(arrayForWrite(array, index), index, value);
+            Array.set(volatileArrayForWrite(array, index), index, value);
             conflicts = view.pull(state);
             if (conflicts.isEmpty()) {
                 view.push(state);
@@ -385,56 +405,56 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public boolean onArrayCompareAndSet(StaticObject array, int index, StaticObject expected, StaticObject value) {
         // the model does the element access itself (see onVolatileArrayRead)
-        return compareAndSet(array.volatileArraySyncState(), () -> Array.get(arrayForRead(array, index), index) == expected,
-                        () -> Array.set(arrayForWrite(array, index), index, value));
+        return compareAndSet(array.volatileArraySyncState(), () -> Array.get(volatileArrayForRead(array, index), index) == expected,
+                        () -> Array.set(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override
     public boolean onArrayCompareAndSet(StaticObject array, int index, int expected, int value) {
-        return compareAndSet(array.volatileArraySyncState(), () -> Array.getInt(arrayForRead(array, index), index) == expected,
-                        () -> Array.setInt(arrayForWrite(array, index), index, value));
+        return compareAndSet(array.volatileArraySyncState(), () -> Array.getInt(volatileArrayForRead(array, index), index) == expected,
+                        () -> Array.setInt(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override
     public boolean onArrayCompareAndSet(StaticObject array, int index, long expected, long value) {
-        return compareAndSet(array.volatileArraySyncState(), () -> Array.getLong(arrayForRead(array, index), index) == expected,
-                        () -> Array.setLong(arrayForWrite(array, index), index, value));
+        return compareAndSet(array.volatileArraySyncState(), () -> Array.getLong(volatileArrayForRead(array, index), index) == expected,
+                        () -> Array.setLong(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override
     public StaticObject onArrayCompareAndExchange(StaticObject array, int index, StaticObject expected, StaticObject value) {
-        return compareAndExchange(array.volatileArraySyncState(), () -> (StaticObject) Array.get(arrayForRead(array, index), index),
-                        witness -> witness == expected, () -> Array.set(arrayForWrite(array, index), index, value));
+        return compareAndExchange(array.volatileArraySyncState(), () -> (StaticObject) Array.get(volatileArrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.set(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override
     public int onArrayCompareAndExchange(StaticObject array, int index, int expected, int value) {
-        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getInt(arrayForRead(array, index), index),
-                        witness -> witness == expected, () -> Array.setInt(arrayForWrite(array, index), index, value));
+        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getInt(volatileArrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.setInt(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override
     public long onArrayCompareAndExchange(StaticObject array, int index, long expected, long value) {
-        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getLong(arrayForRead(array, index), index),
-                        witness -> witness == expected, () -> Array.setLong(arrayForWrite(array, index), index, value));
+        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getLong(volatileArrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.setLong(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override
     public byte onArrayCompareAndExchange(StaticObject array, int index, byte expected, byte value) {
-        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getByte(arrayForRead(array, index), index),
-                        witness -> witness == expected, () -> Array.setByte(arrayForWrite(array, index), index, value));
+        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getByte(volatileArrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.setByte(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override
     public short onArrayCompareAndExchange(StaticObject array, int index, short expected, short value) {
-        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getShort(arrayForRead(array, index), index),
-                        witness -> witness == expected, () -> Array.setShort(arrayForWrite(array, index), index, value));
+        return compareAndExchange(array.volatileArraySyncState(), () -> Array.getShort(volatileArrayForRead(array, index), index),
+                        witness -> witness == expected, () -> Array.setShort(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override
     public StaticObject onArrayGetAndSet(StaticObject array, int index, StaticObject value) {
-        return compareAndExchange(array.volatileArraySyncState(), () -> (StaticObject) Array.get(arrayForRead(array, index), index),
-                        witness -> true, () -> Array.set(arrayForWrite(array, index), index, value));
+        return compareAndExchange(array.volatileArraySyncState(), () -> (StaticObject) Array.get(volatileArrayForRead(array, index), index),
+                        witness -> true, () -> Array.set(volatileArrayForWrite(array, index), index, value));
     }
 
     @Override

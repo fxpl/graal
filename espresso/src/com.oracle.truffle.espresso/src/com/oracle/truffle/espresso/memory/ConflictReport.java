@@ -48,7 +48,7 @@ public final class ConflictReport {
     public String message() {
         String what = Stream.concat(
                         locations.fields().values().stream().flatMap(Set::stream).map(ConflictReport::describe),
-                        locations.arrays().entrySet().stream().map(e -> "array " + e.getKey().threadId + ":" + e.getKey().count + " at indices " + e.getValue()))
+                        locations.arrays().entrySet().stream().map(e -> "array " + e.getKey() + " at indices " + e.getValue()))
                         .sorted().collect(Collectors.joining(", "));
         return "Sync-as-Share conflict: incompatible concurrent update to " + what + ", caught at " + action + " in " + userCodeLocation;
     }

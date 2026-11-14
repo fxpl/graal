@@ -113,31 +113,48 @@ public final class Versioning {
         return !field.isUnversionable() && isVersioned(obj);
     }
 
+    /**
+     * Does a volatile access to {@code field} of {@code obj} synchronise ({@code forceVolatile} makes an
+     * access to a plain field volatile, as an atomic access is)? When another thread can reach {@code obj},
+     * whoever owns the value. A hidden or {@link Unversioned.Reason#VM_STATE} field never does: it is the
+     * VM's own bookkeeping, written behind the program's back, and the model writes some hidden fields itself.
+     */
+    public static boolean synchronisesVolatile(StaticObject obj, Field field, boolean forceVolatile) {
+        return (field.isVolatile() || forceVolatile) && !field.isHidden() && !field.isVmState() && isShared(obj);
+    }
+
     /** Mark {@code root} shared, and everything reachable from it through fields that are not unversionable. */
     public static void markShared(StaticObject root) {
-        mark(root, false);
+        mark(root, null, false);
     }
 
     /** Mark {@code root} versioned (and so shared), and everything reachable from it likewise. */
     public static void markVersioned(StaticObject root) {
-        mark(root, true);
+        mark(root, null, true);
+    }
+
+    // an object the walk has still to visit, with the field it was reached through (null for the root or an element)
+    private record Reached(StaticObject object, Field through) {
     }
 
     // The walk behind both: a versioning walk continues through objects that are shared but not yet
-    // versioned, a sharing walk stops at any shared object
-    private static void mark(StaticObject root, boolean versioned) {
+    // versioned, a sharing walk stops at any shared object. Each object shared for the first time records
+    // its type and the field it was reached through on its number, for reports
+    private static void mark(StaticObject root, Field rootThrough, boolean versioned) {
         if (StaticObject.isNull(root) || !isModelActive(root.getKlass())) {
             return;
         }
-        Deque<StaticObject> pending = new ArrayDeque<>();
-        pending.push(root);
+        Deque<Reached> pending = new ArrayDeque<>();
+        pending.push(new Reached(root, rootThrough));
         while (!pending.isEmpty()) {
-            StaticObject o = pending.pop();
+            Reached reached = pending.pop();
+            StaticObject o = reached.object();
             if (StaticObject.isNull(o) || (versioned ? o.isVersioned() : o.isShared())) {
                 continue;
             }
             if (!o.isShared()) {
                 o.setShared();
+                o.getObjectNumber().onShared(o.getKlass(), reached.through());
                 VersioningStats.onShared(o.isArray());
             }
             if (versioned) {
@@ -149,13 +166,13 @@ public final class Versioning {
             if (klass.isArray()) {
                 if (!((ArrayKlass) klass).getComponentType().isPrimitive()) {
                     for (StaticObject element : o.<StaticObject[]> getRawArray(klass.getLanguage())) {
-                        pending.push(element);
+                        pending.push(new Reached(element, null));
                     }
                 }
             } else {
                 for (Field f : ((ObjectKlass) klass).getFieldTable()) {
                     if (!f.getKind().isPrimitive() && !f.isUnversionable() && !f.isRemoved()) {
-                        pending.push((StaticObject) f.getRawValue(o));
+                        pending.push(new Reached((StaticObject) f.getRawValue(o), f));
                     }
                 }
             }
@@ -168,8 +185,13 @@ public final class Versioning {
      * {@code value} is as the accessor received it; only a guest object is marked.
      */
     public static void onStore(StaticObject target, Object value) {
+        onStore(target, null, value);
+    }
+
+    /** As {@link #onStore(StaticObject, Object)}, for a store into {@code field}, which a report then names. */
+    public static void onStore(StaticObject target, Field field, Object value) {
         if (value instanceof StaticObject o && isShared(target)) {
-            mark(o, target.isVersioned());
+            mark(o, field, target.isVersioned());
         }
     }
 
@@ -180,7 +202,7 @@ public final class Versioning {
         }
         boolean versioned = target.isVersioned();
         for (int i = from; i < to; i++) {
-            mark(values[i], versioned);            // returns at once for null or already marked values
+            mark(values[i], null, versioned);      // returns at once for null or already marked values
         }
     }
 

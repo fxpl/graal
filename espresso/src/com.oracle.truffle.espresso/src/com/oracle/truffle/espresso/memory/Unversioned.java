@@ -45,8 +45,11 @@ public @interface Unversioned {
         /**
          * The VM writes it from host code behind the program's back (an escaped thread's {@code eetop}
          * as it ends): versioning it second-guesses a protocol the program never took part in, and a
-         * write dropped on a conflict corrupts the VM's own bookkeeping. Guest code still synchronises
-         * with this state through the model's own events (thread end and the join hook).
+         * write dropped on a conflict corrupts the VM's own bookkeeping. Its writes are not the program's
+         * synchronisation actions, so even a volatile one never synchronises through the model (a thread's
+         * {@code threadStatus} changes at every sleep and block, which orders nothing). Guest code
+         * synchronises with this state through the model's own events (thread start, thread end and the
+         * join and isAlive hooks).
          */
         VM_STATE,
         /**
