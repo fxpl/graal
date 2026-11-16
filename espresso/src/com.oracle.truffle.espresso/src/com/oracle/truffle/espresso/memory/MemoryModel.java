@@ -326,6 +326,10 @@ public interface MemoryModel {
     default void activate() {
     }
 
+    /** Report the state the run leaves. Called once as the context is disposed, after every guest thread has ended. */
+    default void dispose() {
+    }
+
     // --- Scheduler introspection (read-only; used by the schedule explorer, not the hot path) ---
 
     /**

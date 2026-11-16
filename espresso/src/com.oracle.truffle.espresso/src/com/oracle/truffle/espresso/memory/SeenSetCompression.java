@@ -59,9 +59,12 @@ final class SeenSetCompression {
     }
 
     private static void compress() {
-        long asked = VersioningStats.now();
+        ModelEvents.CompressWait wait = new ModelEvents.CompressWait();
+        wait.begin();
         Commit.GRAPH.writeLock().lock();
-        long took = VersioningStats.now();
+        wait.commit();
+        ModelEvents.Compress compress = new ModelEvents.Compress();
+        compress.begin();
         try {
             // collect the seen sets for all of the entry commits pointed
             // to by sync states (locks, threads, etc.)
@@ -109,8 +112,8 @@ final class SeenSetCompression {
                 }
             }
         } finally {
+            compress.commit();
             Commit.GRAPH.writeLock().unlock();
-            VersioningStats.onCompress(asked, took, VersioningStats.now());
         }
     }
 
@@ -226,7 +229,7 @@ final class SeenSetCompression {
             }
         }
 
-        VersioningStats.onAbsorb(absorbedInOrder.size());
+        ModelEvents.absorbed(absorbedInOrder.size());
         return absorbedInOrder;
     }
 }

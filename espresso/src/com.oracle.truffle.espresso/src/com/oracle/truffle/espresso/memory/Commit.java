@@ -151,7 +151,7 @@ public class Commit {
             try {
                 if (head.getRefCount() == 1) {
                     head.adoptChanges(newChanges);
-                    VersioningStats.onFold();
+                    ModelEvents.folded();
                     return head;
                 }
             } finally {
@@ -220,7 +220,7 @@ public class Commit {
 
                 boolean marked = REF_COUNT.compareAndSet(c, 0, -1);
                 assert marked : "a reference was taken to a commit whose count had reached 0";
-                VersioningStats.onRelease();
+                ModelEvents.released();
 
                 for (Commit p : c.parents()) {
                     if (REF_COUNT.decrementAndGet(p) == 0) {
@@ -268,7 +268,7 @@ public class Commit {
             }
         }
 
-        VersioningStats.onPurge(fieldsRemoved, arraysRemoved);
+        ModelEvents.purged(fieldsRemoved, arraysRemoved);
         changes = filtered;
     }
 

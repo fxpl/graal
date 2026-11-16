@@ -133,12 +133,12 @@ public final class LinearView implements MemoryView {
             visited++;
             Object value = c.changesTo(number) instanceof FieldChanges f ? f.get(field) : null;
             if (value != null) {
-                VersioningStats.onReadWalk(visited, true);
+                ModelEvents.readWalked(visited, true);
                 return value;
             }
             c = parents.isEmpty() ? null : parents.iterator().next();
         }
-        VersioningStats.onReadWalk(visited, false);
+        ModelEvents.readWalked(visited, false);
         return null;
     }
 
@@ -152,12 +152,12 @@ public final class LinearView implements MemoryView {
             WorkingArray array = workingArrays.remove(number);
             if (array != null) {
                 writtenArrays.remove(number);
-                VersioningStats.onDrainArray(array.written.cardinality());
+                ModelEvents.arrayDrained(array.written.cardinality());
             }
             workingObjects.remove(number);
             WorkingObject written = writtenObjects.remove(number);
             if (written != null) {
-                VersioningStats.onDrainStagedFields(written.written.size());
+                ModelEvents.stagedFieldsDrained(written.written.size());
             }
         }
     }
@@ -182,7 +182,7 @@ public final class LinearView implements MemoryView {
         WorkingObject w = workingObject(holder);
         Object value = w.values.get(field);
         if (value != null) {
-            VersioningStats.onWorkingFieldHit();
+            ModelEvents.workingFieldHit();
             return value;
         }
 
@@ -212,7 +212,7 @@ public final class LinearView implements MemoryView {
     // the root up to our base, oldest first, so the last writer of each element wins. Arrays need a whole
     // copy up front, as the bytecodes, intrinsics and natives index the storage directly.
     private WorkingArray createArrayFromHistory(StaticObject array) {
-        VersioningStats.onWorkingArrayBuild();
+        ModelEvents.workingArrayBuilt();
         ObjectNumber number = array.getObjectNumber();
         Object storage = array.copyOfRawArray(array.getKlass().getLanguage());
 
@@ -235,7 +235,7 @@ public final class LinearView implements MemoryView {
     private WorkingArray workingArray(StaticObject array) {
         WorkingArray working = workingArrays.get(array.getObjectNumber());
         if (working != null) {
-            VersioningStats.onWorkingArrayHit();
+            ModelEvents.workingArrayHit();
             return working;
         }
         working = createArrayFromHistory(array);
@@ -330,7 +330,7 @@ public final class LinearView implements MemoryView {
             return new ConflictingLocations(fieldConflicts, arrayConflicts);
         }
 
-        VersioningStats.onPull(history.size());
+        ModelEvents.pulled(history.size());
 
         // no conflicts, so now drop our writes to fields that take theirs, from staging and from push's copy
         takenFromTheirs.forEach((number, fields) -> {
@@ -425,8 +425,8 @@ public final class LinearView implements MemoryView {
         writtenArrays.clear();
 
         if (fields > 0 || arrays > 0 || arrayElements > 0) {
-            VersioningStats.observeStaging(fields + arrayElements);
-            VersioningStats.onCommit(fields, arrays, arrayElements);
+            ModelEvents.stagingObserved(fields + arrayElements);
+            ModelEvents.committed(fields, arrays, arrayElements);
         }
     }
 

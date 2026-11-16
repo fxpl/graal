@@ -191,6 +191,7 @@ suite = {
                 "jdk.unsupported", # sun.misc.Signal
                 "java.management",
                 "jdk.management",
+                "jdk.jfr", # the memory model's stats events
             ],
             "uses": [
                 "com.oracle.truffle.espresso.ffi.NativeAccess.Provider",

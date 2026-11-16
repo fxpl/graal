@@ -81,7 +81,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         public void run() {
             objectNumber.setDead();
             deadObjectCount.incrementAndGet();
-            VersioningStats.onMarkedForPurging();
+            ModelEvents.markedForPurging();
         }
     }
 
@@ -97,7 +97,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         if (!object.isCleanerRegistered()) {
             object.markCleanerRegistered();
             cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), deadObjectCount));
-            VersioningStats.onCleanerRegistered();
+            ModelEvents.cleanerRegistered();
         }
     }
 
@@ -108,7 +108,11 @@ public final class BranchingMemoryModel implements MemoryModel {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
         this.clocks = clocks;
-        VersioningStats.arm("branching", cleaner);
+    }
+
+    @Override
+    public void dispose() {
+        VersioningStats.report("branching", cleaner);
     }
 
     @Override

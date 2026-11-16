@@ -56,7 +56,6 @@ public final class SyncState {
     public SyncState(Kind kind) {
         this.kind = kind;
         ALL.add(this);
-        VersioningStats.onSyncStateCreated(this);
     }
 
     /**

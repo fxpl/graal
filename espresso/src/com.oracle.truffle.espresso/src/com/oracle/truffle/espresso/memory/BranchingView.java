@@ -42,7 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 import com.oracle.truffle.espresso.impl.Field;
-import com.oracle.truffle.espresso.memory.VersioningStats.MergeOutcome;
+import com.oracle.truffle.espresso.memory.ModelEvents.MergeOutcome;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
@@ -145,12 +145,12 @@ public final class BranchingView implements MemoryView {
             WorkingArray array = workingArrays.remove(number);
             if (array != null) {
                 writtenArrays.remove(number);
-                VersioningStats.onDrainArray(array.written.cardinality());
+                ModelEvents.arrayDrained(array.written.cardinality());
             }
             workingObjects.remove(number);
             WorkingObject written = writtenObjects.remove(number);
             if (written != null) {
-                VersioningStats.onDrainStagedFields(written.written.size());
+                ModelEvents.stagedFieldsDrained(written.written.size());
             }
         }
     }
@@ -188,7 +188,7 @@ public final class BranchingView implements MemoryView {
         WorkingObject w = workingObject(holder);
         Object value = w.values.get(field);
         if (value != null) {
-            VersioningStats.onWorkingFieldHit();
+            ModelEvents.workingFieldHit();
             return value;
         }
 
@@ -265,7 +265,7 @@ public final class BranchingView implements MemoryView {
         }
 
         lastWalkSize = visited.size();
-        VersioningStats.onReadWalk(visited.size(), found != null);
+        ModelEvents.readWalked(visited.size(), found != null);
         return found;
     }
 
@@ -308,8 +308,9 @@ public final class BranchingView implements MemoryView {
         }
 
         // staging only grows between commits, so its size now is its peak since the last one
-        VersioningStats.observeStaging(fields + arrayElements);
-        VersioningStats.onCommit(fields, arrays, arrayElements);
+        ModelEvents.stagingObserved(fields + arrayElements);
+        ModelEvents.committed(fields, arrays, arrayElements);
+        VersioningStats.countCommit();
 
         Commit head = state().commit;
         Commit next = head == null ? committer.first(changes) : committer.extend(head, changes);
@@ -366,7 +367,6 @@ public final class BranchingView implements MemoryView {
     private ConflictingLocations mergeHeads(SyncState theirState) {
         Commit theirHead = theirState.commit;
         assert stagingEmpty() : "merging with uncommitted writes";
-        long start = VersioningStats.now();
         Commit myHead = state().commit;
         if (myHead == null) {
             // either pickup the other commit as head (there is nothing to merge)
@@ -379,31 +379,36 @@ public final class BranchingView implements MemoryView {
                 // the adopted history; with no head we have never committed, so none has written marks
                 workingObjects.clear();
                 workingArrays.clear();
-                VersioningStats.onMergeUnwalked(MergeOutcome.ADOPTED);
+                ModelEvents.mergeSkipped(MergeOutcome.ADOPTED);
             } else {
-                VersioningStats.onMergeUnwalked(MergeOutcome.NOTHING);
+                ModelEvents.mergeSkipped(MergeOutcome.NOTHING);
             }
             return ConflictingLocations.NONE;
         }
 
         if (theirHead == null) {
             // just return as there is nothing to merge
-            VersioningStats.onMergeUnwalked(MergeOutcome.NOTHING);
+            ModelEvents.mergeSkipped(MergeOutcome.NOTHING);
             return ConflictingLocations.NONE;
         }
 
         if (theirHead == myHead) {
             // no point in doing this
-            VersioningStats.onMergeUnwalked(MergeOutcome.SAME);
+            ModelEvents.mergeSkipped(MergeOutcome.SAME);
             return ConflictingLocations.NONE;
         }
 
         // their state was last set at a point our clock already covers, so their head is in our history
         if (theirState.clock.happensBefore(committer.clock())) {
             // they are an ancestor of us so nothing to do
-            VersioningStats.onMergeUnwalked(MergeOutcome.EPOCH_INCLUDED);
+            ModelEvents.mergeSkipped(MergeOutcome.EPOCH_INCLUDED);
             return ConflictingLocations.NONE;
         }
+
+        ModelEvents.Merge merge = new ModelEvents.Merge();
+        merge.begin();
+        ModelEvents.MergeWalk walk = new ModelEvents.MergeWalk();
+        walk.begin();
 
         List<Commit> mineOnly = new ArrayList<>();
         List<Commit> theirsOnly = new ArrayList<>();
@@ -456,11 +461,11 @@ public final class BranchingView implements MemoryView {
             }
         }
         lastMergeWalkSize = colours.size();
-        long walked = VersioningStats.now();
+        walk.commit();
 
         if (theirsOnly.isEmpty()) {
             // they are an ancestor of us so nothing to do
-            recordWalkedMerge(MergeOutcome.INCLUDED, colours.size(), mineOnly, theirsOnly, start, walked);
+            recordWalkedMerge(merge, MergeOutcome.INCLUDED, colours.size(), mineOnly, theirsOnly);
             return ConflictingLocations.NONE;
         }
 
@@ -510,7 +515,7 @@ public final class BranchingView implements MemoryView {
                 });
             }
             if (!fieldConflicts.isEmpty() || !arrayConflicts.isEmpty()) {
-                recordWalkedMerge(MergeOutcome.CONFLICT, colours.size(), mineOnly, theirsOnly, start, walked);
+                recordWalkedMerge(merge, MergeOutcome.CONFLICT, colours.size(), mineOnly, theirsOnly);
                 return new ConflictingLocations(fieldConflicts, arrayConflicts);
             }
         }
@@ -538,22 +543,28 @@ public final class BranchingView implements MemoryView {
             // released)
             committer.tick();
             setHead(theirHead);
-            recordWalkedMerge(MergeOutcome.FAST_FORWARD, colours.size(), mineOnly, theirsOnly, start, walked);
+            recordWalkedMerge(merge, MergeOutcome.FAST_FORWARD, colours.size(), mineOnly, theirsOnly);
             return ConflictingLocations.NONE;
         }
 
         // create the merge of the parents, holding theirs for each resolved field so every walk finds the same value
         Commit mergeCommit = committer.merge(state().commit, theirHead, resolved);
-        VersioningStats.onMerge();
+        ModelEvents.mergeCommitted();
         VersioningStats.describeCommit(mergeCommit, state(), true);
         setHead(mergeCommit);
-        recordWalkedMerge(MergeOutcome.MERGED, colours.size(), mineOnly, theirsOnly, start, walked);
+        recordWalkedMerge(merge, MergeOutcome.MERGED, colours.size(), mineOnly, theirsOnly);
         return ConflictingLocations.NONE;
     }
 
-    private static void recordWalkedMerge(MergeOutcome outcome, int visited, List<Commit> mineOnly, List<Commit> theirsOnly,
-                    long start, long walked) {
-        VersioningStats.onMergeWalked(outcome, visited, mineOnly.size(), theirsOnly.size(), walked - start, VersioningStats.now() - start);
+    private static void recordWalkedMerge(ModelEvents.Merge merge, MergeOutcome outcome, int visited, List<Commit> mineOnly,
+                    List<Commit> theirsOnly) {
+        if (merge.shouldCommit()) {
+            merge.outcome = outcome.name();
+            merge.visited = visited;
+            merge.mineOnly = mineOnly.size();
+            merge.theirsOnly = theirsOnly.size();
+            merge.commit();
+        }
     }
 
     // pull from another commit and report any conflicting locations
@@ -605,7 +616,7 @@ public final class BranchingView implements MemoryView {
     }
 
     private WorkingArray buildArrayFromHistory(StaticObject array) {
-        VersioningStats.onWorkingArrayBuild();
+        ModelEvents.workingArrayBuilt();
         ObjectNumber number = array.getObjectNumber();
         Object storage = array.copyOfRawArray(array.getKlass().getLanguage());
 
@@ -657,7 +668,7 @@ public final class BranchingView implements MemoryView {
         assert activated : "a read through a view before its thread started";
         WorkingArray working = workingArrays.get(array.getObjectNumber());
         if (working != null) {
-            VersioningStats.onWorkingArrayHit();
+            ModelEvents.workingArrayHit();
             return working.storage;
         }
 
@@ -675,7 +686,7 @@ public final class BranchingView implements MemoryView {
             workingArrays.put(array.getObjectNumber(), working);
             track(array);
         } else {
-            VersioningStats.onWorkingArrayHit();
+            ModelEvents.workingArrayHit();
         }
 
         working.markWrittenRange(from, to);

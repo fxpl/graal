@@ -76,7 +76,7 @@ public final class Versioning {
 
     /** An object was allocated while versioning is on, for the stats' count of what the model could own. */
     public static void onAllocated(boolean array) {
-        VersioningStats.onAllocated(array);
+        ModelEvents.allocated(array);
     }
 
     /** {@code state} is {@code klass}'s initialisation state, named so the stats' graph dump can say so. */
@@ -155,11 +155,11 @@ public final class Versioning {
             if (!o.isShared()) {
                 o.setShared();
                 o.getObjectNumber().onShared(o.getKlass(), reached.through());
-                VersioningStats.onShared(o.isArray());
+                ModelEvents.shared(o.isArray());
             }
             if (versioned) {
                 o.setVersioned();
-                VersioningStats.onVersioned(o.isArray());
+                ModelEvents.versioned(o.isArray());
             }
 
             Klass klass = o.getKlass();
@@ -216,7 +216,7 @@ public final class Versioning {
         // a program's Thread subclass: its own fields are program data
         if (!isJdkClass(klass)) {
             thread.setVersioned();
-            VersioningStats.onVersioned(false);
+            ModelEvents.versioned(false);
             for (Field f : ((ObjectKlass) klass).getFieldTable()) {
                 // only fields the program declares, not the JDK's (holder, group, ...)
                 if (!f.getKind().isPrimitive() && !f.isUnversionable() && !f.isRemoved() && !isJdkClass(f.getDeclaringKlass())) {

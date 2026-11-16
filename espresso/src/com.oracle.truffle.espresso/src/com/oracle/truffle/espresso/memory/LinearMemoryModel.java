@@ -60,7 +60,11 @@ public final class LinearMemoryModel implements MemoryModel {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
         this.clocks = clocks;
-        VersioningStats.arm("linear", cleaner);
+    }
+
+    @Override
+    public void dispose() {
+        VersioningStats.report("linear", cleaner);
     }
 
     @Override
@@ -113,7 +117,7 @@ public final class LinearMemoryModel implements MemoryModel {
         public void run() {
             objectNumber.setDead();
             deadObjectCount.incrementAndGet();
-            VersioningStats.onMarkedForPurging();
+            ModelEvents.markedForPurging();
         }
     }
 
@@ -121,7 +125,7 @@ public final class LinearMemoryModel implements MemoryModel {
         if (!object.isCleanerRegistered()) {
             object.markCleanerRegistered();
             cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), deadObjectCount));
-            VersioningStats.onCleanerRegistered();
+            ModelEvents.cleanerRegistered();
         }
     }
 

@@ -125,7 +125,7 @@ final class RefCountAbsorption {
             // and the parents outside the region gain into in their place
             into.parents().forEach(p -> p.addChild(into));
 
-            VersioningStats.onAbsorb(absorbedInOrder.size());
+            ModelEvents.absorbed(absorbedInOrder.size());
             return true;
         }
     }
@@ -135,14 +135,17 @@ final class RefCountAbsorption {
         if (!shouldAbsorb || into.parents().stream().noneMatch(p -> p.getRefCount() == 1)) {
             return false;
         }
-        long asked = VersioningStats.now();
+        ModelEvents.AbsorbWait wait = new ModelEvents.AbsorbWait();
+        wait.begin();
         // the read side keeps a compression on another thread from rewriting the graph at the same time
         Commit.GRAPH.readLock().lock();
         try {
             synchronized(ABSORB) {
-                long took = VersioningStats.now();
+                wait.commit();
+                ModelEvents.Absorb absorb = new ModelEvents.Absorb();
+                absorb.begin();
                 boolean isAbsorbed = absorbAncestors(into);
-                VersioningStats.onAbsorbRun(asked, took, VersioningStats.now());
+                absorb.commit();
                 return isAbsorbed;
             }
         } finally {

@@ -1062,6 +1062,9 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
             }
             disposeCalled = true;
         }
+        if (memoryModel != null) {
+            memoryModel.dispose();
+        }
         if (getLanguage().isScheduleExploreEnabled() || getLanguage().isScheduleDriveEnabled()) {
             scheduler.report();
         }
