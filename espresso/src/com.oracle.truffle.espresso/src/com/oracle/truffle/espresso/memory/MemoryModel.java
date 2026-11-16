@@ -183,6 +183,22 @@ public interface MemoryModel {
     void onMonitorExit(StaticObject lock);
 
     /**
+     * Fences are outside the JLS, and are read informally as broadcasting the fencing thread's writes. The
+     * model gives them one sync state of its own, which every fence in the program shares. A load fence
+     * pulls from it, so the thread takes what earlier fences pushed.
+     */
+    void onLoadFence();
+
+    /**
+     * A store fence pushes the thread's writes to the fence state of {@link #onLoadFence}. The push pulls
+     * first, as a volatile write does, so for now it is a full fence.
+     */
+    void onStoreFence();
+
+    /** A full fence pulls from the fence state of {@link #onLoadFence} and then pushes to it. */
+    void onFullFence();
+
+    /**
      * Volatile read (the paper's {@code VolatileRead} rule) of {@code field} of the shared {@code holder}.
      * Pulls from the field's volatile sync state (Branching: merges its commit; Linear: pulls the global
      * history), which may raise a conflict, then reads the value: through the view when the model versions

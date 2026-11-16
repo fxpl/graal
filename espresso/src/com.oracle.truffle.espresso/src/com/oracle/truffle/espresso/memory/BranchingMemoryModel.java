@@ -69,6 +69,9 @@ public final class BranchingMemoryModel implements MemoryModel {
     // the id the next thread's committer stamps its commits with
     private final AtomicInteger nextThreadId = new AtomicInteger();
 
+    // the one sync state every fence in the program pulls from and pushes to
+    private final SyncState fence = new SyncState(SyncState.Kind.GLOBAL);
+
     // This is a record so that we don't accidentally capture the StaticObject
     // if we did that, we could end up keeping a reference to the StaticObject in the cleaner
     // register set and then the object could never be GC'd
@@ -275,6 +278,40 @@ public final class BranchingMemoryModel implements MemoryModel {
         BranchingView view = currentView();
         SyncState state = lock.lockSyncState();
         view.push(state);
+    }
+
+    @Override
+    public void onLoadFence() {
+        // pull from the fence state
+        BranchingView view = currentView();
+        ConflictingLocations conflicts;
+        synchronized (fence) {
+            conflicts = view.pull(fence);
+        }
+        handleConflicts(conflicts, view, "load fence");
+    }
+
+    @Override
+    public void onStoreFence() {
+        pullThenPushFence("store fence");
+    }
+
+    @Override
+    public void onFullFence() {
+        pullThenPushFence("full fence");
+    }
+
+    // pull from the fence state, then push to it, as a volatile write does without the write
+    private void pullThenPushFence(String label) {
+        BranchingView view = currentView();
+        ConflictingLocations conflicts;
+        synchronized (fence) {
+            conflicts = view.pull(fence);
+            if (conflicts.isEmpty()) {
+                view.push(fence);
+            }
+        }
+        handleConflicts(conflicts, view, label);
     }
 
     @Override

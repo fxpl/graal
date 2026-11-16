@@ -110,6 +110,21 @@ public final class SharedMemoryModel implements MemoryModel {
     }
 
     @Override
+    public void onLoadFence() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onLoadFence: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onStoreFence() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onStoreFence: memory-model hooks must be folded under shared");
+    }
+
+    @Override
+    public void onFullFence() {
+        throw EspressoError.shouldNotReachHere("SharedMemoryModel.onFullFence: memory-model hooks must be folded under shared");
+    }
+
+    @Override
     public Object onVolatileRead(StaticObject holder, Field field) {
         throw EspressoError.shouldNotReachHere("SharedMemoryModel.onVolatileRead: memory-model hooks must be folded under shared");
     }

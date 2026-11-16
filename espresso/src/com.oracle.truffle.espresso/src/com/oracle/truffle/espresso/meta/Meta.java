@@ -1147,6 +1147,10 @@ public final class Meta extends ContextAccessImpl
         java_util_concurrent_locks_StampedLock_Node_next = declaredFieldNamed(stampedLockNode, "next");
         // a future's waiter and its completer both clear the waiting thread to null
         java_util_concurrent_FutureTask_WaitNode_thread = declaredFieldNamed(knownKlass(Types.java_util_concurrent_FutureTask_WaitNode), "thread");
+        // as do a completable future's waiter and the thread that completes it
+        java_util_concurrent_CompletableFuture_Signaller_thread = declaredFieldNamed(knownKlass(Types.java_util_concurrent_CompletableFuture_Signaller), "thread");
+        // a cache filled lazily without a lock, so two threads may each build a view, and either view serves
+        java_util_concurrent_locks_StampedLock_writeLockView = declaredFieldNamed(knownKlass(Types.java_util_concurrent_locks_StampedLock), "writeLockView");
 
         java_math_BigInteger = knownKlass(Types.java_math_BigInteger);
         java_math_BigInteger_init = java_math_BigInteger.requireDeclaredMethod(Names._init_, Signatures._void_byte_array);
@@ -2095,6 +2099,8 @@ public final class Meta extends ContextAccessImpl
     @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_AbstractQueuedLongSynchronizer_Node_next;
     @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_StampedLock_Node_next;
     @ResolveConflicts(THEIRS) public final Field java_util_concurrent_FutureTask_WaitNode_thread;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_CompletableFuture_Signaller_thread;
+    @ResolveConflicts(THEIRS) public final Field java_util_concurrent_locks_StampedLock_writeLockView;
 
     public final ObjectKlass java_math_BigInteger;
     public final Method java_math_BigInteger_init;

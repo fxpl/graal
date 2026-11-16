@@ -247,6 +247,27 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     @Override
+    public void onLoadFence() {
+        // the global history is the fence state, so a load fence is a pull
+        LinearView view = currentView();
+        handleConflicts(view.pull(), view, "load fence");
+    }
+
+    @Override
+    public void onStoreFence() {
+        // a push, which pulls first
+        LinearView view = currentView();
+        handleConflicts(view.push(), view, "store fence");
+    }
+
+    @Override
+    public void onFullFence() {
+        // a push, which pulls first
+        LinearView view = currentView();
+        handleConflicts(view.push(), view, "full fence");
+    }
+
+    @Override
     public Object onVolatileRead(StaticObject holder, Field field) {
         LinearView view = currentView();
         SyncState state = holder.volatileSyncState(field);
