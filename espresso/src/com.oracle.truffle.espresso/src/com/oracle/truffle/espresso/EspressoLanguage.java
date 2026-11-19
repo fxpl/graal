@@ -164,6 +164,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
     // {@code true} iff a non-stock memory model is active. Kept as a separate PE-constant so the
     // Sync-as-Share hooks on the hot path fold away entirely under {@code SHARED}.
     @CompilationFinal private boolean versionedMemorySelected;
+    @CompilationFinal private boolean hostFenceSelected;
     @CompilationFinal private EspressoOptions.ScheduleExploreMode scheduleExploreMode;
     @CompilationFinal private boolean scheduleExploreEnabled;
     @CompilationFinal private EspressoOptions.ScheduleDriveMode scheduleDriveMode;
@@ -275,6 +276,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
         versionedMemorySelected = memoryModelMode != EspressoOptions.MemoryModelMode.SHARED;
         syncShareClockMode = env.getOptions().get(EspressoOptions.SyncShareClock);
         syncShareVolatileResolution = env.getOptions().get(EspressoOptions.SyncShareVolatileResolution);
+        hostFenceSelected = env.getOptions().get(EspressoOptions.SyncShareHostFences);
         scheduleExploreMode = env.getOptions().get(EspressoOptions.ScheduleExplore);
         scheduleExploreEnabled = scheduleExploreMode != EspressoOptions.ScheduleExploreMode.OFF;
         scheduleDriveMode = env.getOptions().get(EspressoOptions.ScheduleDrive);
@@ -447,6 +449,7 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.MemoryModel) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.SyncShareClock) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.SyncShareVolatileResolution) &&
+                        isOptionCompatible(newOptions, oldOptions, EspressoOptions.SyncShareHostFences) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleExplore) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleDrive) &&
                         isOptionCompatible(newOptions, oldOptions, EspressoOptions.ScheduleFile) &&
@@ -688,6 +691,14 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> imp
      */
     public boolean isVersionedMemorySelected() {
         return versionedMemorySelected;
+    }
+
+    /**
+     * Whether a guest fence issues the matching host fence. Reads as a partial-evaluation constant,
+     * so the default compiles the same as a plain host fence.
+     */
+    public boolean isHostFenceSelected() {
+        return hostFenceSelected;
     }
 
     public EspressoOptions.ScheduleExploreMode getScheduleExploreMode() {

@@ -876,12 +876,10 @@ public final class Target_sun_misc_Unsafe {
      * @since 1.8
      */
     @Substitution(hasReceiver = true)
-    public static void loadFence(@JavaType(Unsafe.class) StaticObject self) {
-        // Sync-as-Share, a load fence pulls from the model's fence state
-        if (Versioning.isModelActive(self.getKlass())) {
-            self.getKlass().getContext().getMemoryModel().onLoadFence();
+    public static void loadFence(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @Inject EspressoLanguage language) {
+        if (language.isHostFenceSelected()) {
+            InformationLeak.loadFence();
         }
-        InformationLeak.loadFence();
     }
 
     /**
@@ -890,12 +888,10 @@ public final class Target_sun_misc_Unsafe {
      * @since 1.8
      */
     @Substitution(hasReceiver = true)
-    public static void storeFence(@JavaType(Unsafe.class) StaticObject self) {
-        // Sync-as-Share, a store fence pushes to the model's fence state
-        if (Versioning.isModelActive(self.getKlass())) {
-            self.getKlass().getContext().getMemoryModel().onStoreFence();
+    public static void storeFence(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @Inject EspressoLanguage language) {
+        if (language.isHostFenceSelected()) {
+            InformationLeak.storeFence();
         }
-        InformationLeak.storeFence();
     }
 
     /**
@@ -905,12 +901,10 @@ public final class Target_sun_misc_Unsafe {
      * @since 1.8
      */
     @Substitution(hasReceiver = true)
-    public static void fullFence(@JavaType(Unsafe.class) StaticObject self) {
-        // Sync-as-Share, a full fence pulls from the model's fence state and then pushes to it
-        if (Versioning.isModelActive(self.getKlass())) {
-            self.getKlass().getContext().getMemoryModel().onFullFence();
+    public static void fullFence(@SuppressWarnings("unused") @JavaType(Unsafe.class) StaticObject self, @Inject EspressoLanguage language) {
+        if (language.isHostFenceSelected()) {
+            InformationLeak.fullFence();
         }
-        InformationLeak.fullFence();
     }
 
     @SuppressWarnings("deprecation")

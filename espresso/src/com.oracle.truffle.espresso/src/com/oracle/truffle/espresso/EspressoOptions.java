@@ -373,6 +373,12 @@ public final class EspressoOptions {
     public static final OptionKey<SyncShareVolatileResolutionMode> SyncShareVolatileResolution = new OptionKey<>(SyncShareVolatileResolutionMode.CONFLICT,
                     SYNC_SHARE_VOLATILE_RESOLUTION_OPTION_TYPE);
 
+    @Option(help = "Whether a guest load, store or full fence issues the matching fence on the host. Turning it off shows which behaviour depends on the host fence.", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "true|false") //
+    public static final OptionKey<Boolean> SyncShareHostFences = new OptionKey<>(true);
+
     /**
      * Schedule exploration mode. Independent of {@link #MemoryModel}: the scheduler observes (and, in
      * later slices, controls) the order threads pass through synchronization seams, whereas the memory
