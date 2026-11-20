@@ -462,7 +462,7 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
                     this.memoryModel = new LinearMemoryModel(this, ClockFactory.of(getLanguage().getSyncShareClockMode()));
                     break;
                 case BRANCHING:
-                    this.memoryModel = new BranchingMemoryModel(this, ClockFactory.of(getLanguage().getSyncShareClockMode()));
+                    this.memoryModel = BranchingMemoryModel.withDag(this, ClockFactory.of(getLanguage().getSyncShareClockMode()));
                     break;
                 default:
                     throw EspressoError.shouldNotReachHere("Unknown memory model: " + getLanguage().getMemoryModelMode());

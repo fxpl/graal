@@ -25,7 +25,6 @@ package com.oracle.truffle.espresso.memory;
 import java.lang.ref.Cleaner;
 import java.lang.reflect.Array;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -41,43 +40,43 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
  * and ordinary reads never conflict.
  *
  * <p>Unlike {@link LinearMemoryModel}, there is no single global history: communication is pairwise,
- * through a DAG of reference-counted {@link Commit}s. Each thread works on a {@link BranchingView}
- * whose head is held in the thread's {@link SyncState}. Every synchronisation action is a
- * <b>pull</b> (commit staged writes, then merge another sync state's commit in) and/or a <b>push</b>
- * (commit, then point another sync state at our head):
+ * through sync states. Each thread works on a {@link BranchingView}, and a {@link BranchingRepresentation}
+ * keeps the versions the views and sync states hold, today as a commit DAG ({@link DagRepresentation}).
+ * Every synchronisation action is a <b>pull</b> (merge in what another sync state holds) and/or a
+ * <b>push</b> (hand what this thread holds to another sync state):
  * <ul>
  * <li><b>spawn</b>: push to the child thread's sync state;</li>
  * <li><b>join</b>: pull from the joined thread's sync state;</li>
  * <li><b>monitor enter / exit</b>: pull from / push to the lock's sync state;</li>
  * <li><b>volatile read / write</b>: pull / pull then push, on the field's sync state;</li>
  * <li><b>class init</b>: pull then push on initialisation, pull on first use;</li>
- * <li><b>thread end</b>: commit.</li>
+ * <li><b>thread end</b>: end, so the thread's own state holds what a join pulls.</li>
  * </ul>
  *
  * <p>Sync states live on their owners: a thread's in a hidden field on the {@code Thread}, lock and
  * volatile states in the object's {@link ObjectSyncState}, class-init state on the {@link ObjectKlass}.
- * A {@link java.lang.ref.Cleaner} releases an owner's commits when the owner dies.
+ * A {@link java.lang.ref.Cleaner} tells the representation when an object or a thread dies.
  */
 public final class BranchingMemoryModel implements MemoryModel {
 
     private final EspressoContext context;
     private volatile boolean active = false;
 
+    // how the versions are kept, told of the deaths and the end of the run
+    private final BranchingRepresentation representation;
 
-    private final AtomicLong deadObjectCount;
-
-    // the id the next thread's committer stamps its commits with
+    // the id of the next thread's view
     private final AtomicInteger nextThreadId = new AtomicInteger();
 
     // This is a record so that we don't accidentally capture the StaticObject
     // if we did that, we could end up keeping a reference to the StaticObject in the cleaner
     // register set and then the object could never be GC'd
-    record MarkObjectForPurging(ObjectNumber objectNumber, AtomicLong deadObjectCount) implements Runnable {
+    record MarkDead(ObjectNumber objectNumber, BranchingRepresentation representation) implements Runnable {
 
         @Override
         public void run() {
             objectNumber.setDead();
-            deadObjectCount.incrementAndGet();
+            representation.onObjectDied(objectNumber);
             ModelEvents.markedForPurging();
         }
     }
@@ -93,23 +92,24 @@ public final class BranchingMemoryModel implements MemoryModel {
     private void registerForCleaning(StaticObject object) {
         if (!object.isCleanerRegistered()) {
             object.markCleanerRegistered();
-            cleaner.register(object, new MarkObjectForPurging(object.getObjectNumber(), deadObjectCount));
+            cleaner.register(object, new MarkDead(object.getObjectNumber(), representation));
             ModelEvents.cleanerRegistered();
         }
     }
 
-    // makes each thread's first clock
-    private final ClockFactory clocks;
-
-    public BranchingMemoryModel(EspressoContext context, ClockFactory clocks) {
+    private BranchingMemoryModel(EspressoContext context, BranchingRepresentation representation) {
         this.context = context;
-        this.deadObjectCount = new AtomicLong(0);
-        this.clocks = clocks;
+        this.representation = representation;
+    }
+
+    /** The branching model with its versions kept as a commit DAG. */
+    public static BranchingMemoryModel withDag(EspressoContext context, ClockFactory clocks) {
+        return new BranchingMemoryModel(context, new DagRepresentation(clocks));
     }
 
     @Override
     public void dispose() {
-        VersioningStats.report("branching", cleaner);
+        representation.dispose(cleaner);
     }
 
     @Override
@@ -118,8 +118,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     public MemoryView newThreadView() {
-        Clock start = clocks.start(nextThreadId.getAndIncrement());
-        return new BranchingView(this::bindThreadSyncState, deadObjectCount, new Commit.Committer(start));
+        return representation.newView(this::bindThreadSyncState, nextThreadId.getAndIncrement());
     }
 
     private SyncState newThreadSyncState(StaticObject thread) {
@@ -129,10 +128,9 @@ public final class BranchingMemoryModel implements MemoryModel {
         // store the state on the thread object itself
         context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);
 
-        // register that when the thread object is cleaned away, we also drop
-        // the reference count of the terminalHead.
-        // The Commit itself will be GC'd but we need to not lose transitive refCounts
-        cleaner.register(thread, () -> state.set(null));
+        // once the thread object is collected nothing can join it, so the representation may let go of
+        // what its state holds
+        cleaner.register(thread, () -> representation.onThreadDied(state));
         return state;
     }
 
@@ -172,7 +170,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     @Override
     public int pendingWriteCount() {
         MemoryView v = context.getLanguage().getThreadLocalState().peekMemoryView();
-        return v == null ? 0 : ((BranchingView) v).stagingSize();
+        return v == null ? 0 : ((BranchingView) v).pendingWriteCount();
     }
 
     // --- Ordinary field / array access: stage and read on the calling thread's view. ---
@@ -188,7 +186,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
-        currentView().stageField(holder, field, value);
+        currentView().writeField(holder, field, value);
         holder.markHasVersionedWrite();
         registerForCleaning(holder);
     }
@@ -234,13 +232,9 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void onThreadEnd() {
-        // Commit the final staging and record the final commit for join,
-        // before the terminating notify that wakes joiners.
-        // We have nowhere to push, but the node needs to become visible to other
-        // threads via the thread sync state.
-        // The SyncState will be tidied away and the commit decrefed once the
-        // thread object is GC'd
-        currentView().commit();
+        // the thread's own state takes its last writes for a join to pull, before the terminating notify
+        // wakes any joiner, and the representation lets go of them once the thread object is collected
+        currentView().end();
     }
 
     @Override
