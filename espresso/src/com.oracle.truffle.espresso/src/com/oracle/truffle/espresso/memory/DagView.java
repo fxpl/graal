@@ -23,8 +23,6 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.lang.Integer;
-import java.lang.ref.Reference;
-import java.lang.ref.ReferenceQueue;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -59,10 +57,8 @@ public final class DagView implements BranchingView {
     // during VM bootstrap, before the Thread exists. Never read directly, always through state().
     private CommitSyncState unboundOrState;
     private final Supplier<SyncState<?>> bindState;
-    private final Map<ObjectNumber, WorkingObject> workingObjects = new HashMap<>(); // versioned objects this view has accessed, as this view sees them
-    private final Map<ObjectNumber, WorkingObject> writtenObjects = new HashMap<>(); // ...of which written since the last commit
-    private final Map<ObjectNumber, WorkingArray> workingArrays = new HashMap<>(); // versioned arrays this view has accessed, as this view sees them
-    private final Map<ObjectNumber, WorkingArray> writtenArrays = new HashMap<>(); // ...of which written since the last commit
+    // this thread's working copies, with its uncommitted writes marked
+    private final Workspace workspace = new Workspace();
 
     private ConflictReport pendingConflict; // found by a synchronisation action, raised at the next safe point
 
@@ -81,9 +77,6 @@ public final class DagView implements BranchingView {
     private final AtomicLong deadObjectCount;
     private long deadSetSizeAtLastPurge;
 
-    // objects in workingObjects or workingArrays, so their entries can be dropped when they die
-    private final Map<ObjectNumber, StagedReference> trackedObjects = new HashMap<>();
-    private final ReferenceQueue<StaticObject> deadQueue = new ReferenceQueue<>();
 
     // commits visited by the last read walk, to pre-size the next walk's visited set
     private int lastWalkSize = 16;
@@ -124,79 +117,25 @@ public final class DagView implements BranchingView {
     }
 
     boolean stagingEmpty() {
-        return writtenObjects.isEmpty() && writtenArrays.isEmpty();
+        return !workspace.hasStaged();
     }
 
     @Override
     public int pendingWriteCount() {
-        int writes = 0;
-        for (WorkingObject w : writtenObjects.values()) {
-            writes += w.written.size();
-        }
-        for (WorkingArray a : writtenArrays.values()) {
-            writes += a.written.cardinality();
-        }
-        return writes;
-    }
-
-    // We reduce the staging size by removing references to static
-    // objects that have been GC'd.
-    // The memory model cleaner will manage setting that the object is dead
-    // and incrementing the dead count, as that is view independent
-    // and affects all threads and the entire DAG
-    private void emptyDeadQueue() {
-        Reference<?> deadReference;
-        while ((deadReference = deadQueue.poll()) != null) {
-            StagedReference deadObject = (StagedReference) deadReference;
-            ObjectNumber number = deadObject.number;
-            trackedObjects.remove(number);
-            WorkingArray array = workingArrays.remove(number);
-            if (array != null) {
-                writtenArrays.remove(number);
-                ModelEvents.arrayDrained(array.written.cardinality());
-            }
-            workingObjects.remove(number);
-            WorkingObject written = writtenObjects.remove(number);
-            if (written != null) {
-                ModelEvents.stagedFieldsDrained(written.written.size());
-            }
-        }
-    }
-
-    // Track that an object is in the staged objects or arrays, so that it can be dropped from
-    // them when it dies
-    private void track(StaticObject object) {
-        trackedObjects.computeIfAbsent(object.getObjectNumber(), n -> new StagedReference(object, n, deadQueue));
-    }
-
-    private WorkingObject workingObject(StaticObject holder) {
-        WorkingObject w = workingObjects.get(holder.getObjectNumber());
-        if (w == null) {
-            w = new WorkingObject();
-            workingObjects.put(holder.getObjectNumber(), w);
-            track(holder);
-        }
-        return w;
+        return workspace.stagedCounts().total();
     }
 
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
         assert activated : "a write through a view before its thread started";
-        WorkingObject w = workingObject(holder);
-        w.values.put(field, value);
-        if (w.written.add(field)) {
-            writtenObjects.put(holder.getObjectNumber(), w);
-        }
-
-        emptyDeadQueue();
+        workspace.writeField(holder, field, value);
     }
 
     /** The value this view sees: its working value, else the committed value, else version 0 (the raw slot). */
     @Override
     public Object readField(StaticObject holder, Field field) {
         assert activated : "a read through a view before its thread started";
-        WorkingObject w = workingObject(holder);
-        Object value = w.values.get(field);
+        Object value = workspace.workingField(holder, field);
         if (value != null) {
             ModelEvents.workingFieldHit();
             return value;
@@ -208,7 +147,7 @@ public final class DagView implements BranchingView {
         if (value == null) {
             value = field.getRawValue(holder);
         }
-        w.values.put(field, value);
+        workspace.addWorkingField(holder, field, value);
         return value;
     }
 
@@ -289,37 +228,19 @@ public final class DagView implements BranchingView {
             deadSetSizeAtLastPurge = deadCount;
         }
 
-        // before commit, try to clear out anything that is dead from staging
-        emptyDeadQueue();
-
-        // The written fields of each object, plus the written elements of each array, whose written marks
-        // are cleared; the working values stay, as they are now what the head says
-        Map<ObjectNumber, ObjectChanges> changes = new HashMap<>();
-        int fields = 0;
-        for (Map.Entry<ObjectNumber, WorkingObject> e : writtenObjects.entrySet()) {
-            changes.put(e.getKey(), FieldChanges.of(e.getValue()));
-            fields += e.getValue().written.size();
-            e.getValue().written.clear();
-        }
-        writtenObjects.clear();
-        long arrayElements = 0;
-        int arrays = 0;
-        for (Map.Entry<ObjectNumber, WorkingArray> e : writtenArrays.entrySet()) {
-            ArrayChanges a = ArrayChanges.of(e.getValue());   // copies the bits and values
-            changes.put(e.getKey(), a);
-            arrayElements += a.writeCount();
-            arrays++;
-            e.getValue().written.clear();
-        }
-        writtenArrays.clear();
+        // The staged fields of each live object, plus the staged elements of each live array, which are then
+        // no longer staged; the working values stay, as they are now what the head says
+        Map<ObjectNumber, ObjectChanges> changes = workspace.stagedChanges();
+        Workspace.Staged staged = workspace.stagedCounts();
+        workspace.clearStaged();
 
         if (changes.isEmpty()) {
             return;
         }
 
         // staging only grows between commits, so its size now is its peak since the last one
-        ModelEvents.stagingObserved(fields + arrayElements);
-        ModelEvents.committed(fields, arrays, arrayElements);
+        ModelEvents.stagingObserved(staged.total());
+        ModelEvents.committed(staged.fields(), staged.arrays(), staged.elements());
         VersioningStats.countCommit();
 
         Commit head = state().get();
@@ -387,8 +308,7 @@ public final class DagView implements BranchingView {
                 setHead(theirHead);
                 // our working objects and arrays were read from version 0 alone, so may be stale against
                 // the adopted history; with no head we have never committed, so none has written marks
-                workingObjects.clear();
-                workingArrays.clear();
+                workspace.clear();
                 ModelEvents.mergeSkipped(MergeOutcome.ADOPTED);
             } else {
                 ModelEvents.mergeSkipped(MergeOutcome.NOTHING);
@@ -533,19 +453,7 @@ public final class DagView implements BranchingView {
         // No conflicts, so install their writes into our working. This is instead
         // of dropping the value and picking up the new values on read
         for (Commit c : theirsOnly.reversed()) {
-            c.changes().forEach((number, changes) -> {
-                if (changes instanceof FieldChanges f) {
-                    WorkingObject w = workingObjects.get(number);
-                    if (w != null) {
-                        f.applyTo(w);
-                    }
-                } else if (changes instanceof ArrayChanges a) {
-                    WorkingArray working = workingArrays.get(number);
-                    if (working != null) {
-                        a.applyTo(working.storage);
-                    }
-                }
-            });
+            c.changes().forEach(workspace::applyPulled);
         }
 
         if (mineOnly.isEmpty()) {
@@ -620,7 +528,7 @@ public final class DagView implements BranchingView {
     // We do this more general walk, instead of the stop at a first commit for a field, because arrays require
     // writes to all of their indexes, so figuring out which array commits shadow which others is more complicated
     // than collecting history and applying it
-    private WorkingArray createArrayFromHistory(StaticObject array) {
+    private Object createArrayFromHistory(StaticObject array) {
         // a walk: holds the graph's read side, so nothing rewrites the commits it passes
         Commit.GRAPH.readLock().lock();
         try {
@@ -630,7 +538,7 @@ public final class DagView implements BranchingView {
         }
     }
 
-    private WorkingArray buildArrayFromHistory(StaticObject array) {
+    private Object buildArrayFromHistory(StaticObject array) {
         ModelEvents.workingArrayBuilt();
         ObjectNumber number = array.getObjectNumber();
         Object storage = array.copyOfRawArray(array.getKlass().getLanguage());
@@ -638,7 +546,7 @@ public final class DagView implements BranchingView {
         // We have no history of changes yet, so we must be at version 0,
         // so just return the copy
         if (state().get() == null) {
-            return new WorkingArray(storage);
+            return storage;
         }
 
         Set<Commit> order = LinkedHashSet.newLinkedHashSet(lastWalkSize);  // ancestors before descendants
@@ -676,39 +584,33 @@ public final class DagView implements BranchingView {
             }
         }
 
-        return new WorkingArray(storage);
+        return storage;
     }
 
     @Override
     public Object arrayForRead(StaticObject array, int from, int to) {
         assert activated : "a read through a view before its thread started";
-        WorkingArray working = workingArrays.get(array.getObjectNumber());
-        if (working != null) {
-            ModelEvents.workingArrayHit();
-            return working.storage;
-        }
-
-        working = createArrayFromHistory(array);
-        workingArrays.put(array.getObjectNumber(), working);
-        track(array);
-        return working.storage;
+        return arrayStorage(array);
     }
 
     @Override
     public Object arrayForWrite(StaticObject array, int from, int to) {
         assert activated : "a write through a view before its thread started";
-        WorkingArray working = workingArrays.get(array.getObjectNumber());
-        if (working == null) {
-            working = createArrayFromHistory(array);
-            workingArrays.put(array.getObjectNumber(), working);
-            track(array);
-        } else {
-            ModelEvents.workingArrayHit();
-        }
+        Object storage = arrayStorage(array);
+        workspace.writeArray(array, from, to);
+        return storage;
+    }
 
-        working.markWrittenRange(from, to);
-        writtenArrays.put(array.getObjectNumber(), working);
-        return working.storage;
+    // the storage of the thread's working array for array, built from history if it has none
+    private Object arrayStorage(StaticObject array) {
+        Object storage = workspace.workingArray(array);
+        if (storage != null) {
+            ModelEvents.workingArrayHit();
+            return storage;
+        }
+        storage = createArrayFromHistory(array);
+        workspace.addWorkingArray(array, storage);
+        return storage;
     }
 
     // --- Pending conflict (raised at the bytecode safe point, asked through the model) ---

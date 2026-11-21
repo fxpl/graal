@@ -23,4 +23,11 @@
 package com.oracle.truffle.espresso.memory;
 
 final class Snapshot {
+
+    private final Treap<ObjectNumber, ObjectChanges> objects;
+
+    Snapshot(Treap<ObjectNumber, ObjectChanges> objects) {
+        this.objects = objects;
+    }
+
 }

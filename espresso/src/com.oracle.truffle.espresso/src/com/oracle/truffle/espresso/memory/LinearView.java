@@ -22,8 +22,6 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.lang.ref.Reference;
-import java.lang.ref.ReferenceQueue;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -53,15 +51,8 @@ public final class LinearView implements MemoryView {
     private CommitSyncState unboundOrState;
     private final Supplier<SyncState<?>> bindState;
 
-    private final Map<ObjectNumber, WorkingObject> workingObjects = new HashMap<>(); // versioned objects this view has accessed, as this view sees them
-    private final Map<ObjectNumber, WorkingObject> writtenObjects = new HashMap<>(); // ...of which written since the last commit
-    private final Map<ObjectNumber, WorkingArray> workingArrays = new HashMap<>(); // versioned arrays this view has accessed, as this view sees them
-    private final Map<ObjectNumber, WorkingArray> writtenArrays = new HashMap<>(); // ...of which written since the last commit
-
-
-    // objects and arrays in the working set, so their entries can be dropped when they die
-    private final Map<ObjectNumber, StagedReference> trackedObjects = new HashMap<>();
-    private final ReferenceQueue<StaticObject> deadQueue = new ReferenceQueue<>();
+    // this thread's working copies, with its uncommitted writes marked
+    private final Workspace workspace = new Workspace();
 
     private ConflictReport pendingConflict;
 
@@ -97,19 +88,12 @@ public final class LinearView implements MemoryView {
     }
 
     boolean stagingEmpty() {
-        return writtenObjects.isEmpty() && writtenArrays.isEmpty();
+        return !workspace.hasStaged();
     }
 
     // written fields plus written array elements, since the last commit (only for the schedule explorer)
     int stagingSize() {
-        int writes = 0;
-        for (WorkingObject w : writtenObjects.values()) {
-            writes += w.written.size();
-        }
-        for (WorkingArray a : writtenArrays.values()) {
-            writes += a.written.cardinality();
-        }
-        return writes;
+        return workspace.stagedCounts().total();
     }
 
     boolean hasPendingConflict() {
@@ -144,45 +128,9 @@ public final class LinearView implements MemoryView {
         return null;
     }
 
-    // Drop the working entries of objects that have died, so the working set only holds live objects
-    private void emptyDeadQueue() {
-        Reference<?> deadReference;
-        while ((deadReference = deadQueue.poll()) != null) {
-            StagedReference deadObject = (StagedReference) deadReference;
-            ObjectNumber number = deadObject.number;
-            trackedObjects.remove(number);
-            WorkingArray array = workingArrays.remove(number);
-            if (array != null) {
-                writtenArrays.remove(number);
-                ModelEvents.arrayDrained(array.written.cardinality());
-            }
-            workingObjects.remove(number);
-            WorkingObject written = writtenObjects.remove(number);
-            if (written != null) {
-                ModelEvents.stagedFieldsDrained(written.written.size());
-            }
-        }
-    }
-
-    // Track that an object or array is in the working set, so that it can be dropped from it when it dies
-    private void track(StaticObject object) {
-        trackedObjects.computeIfAbsent(object.getObjectNumber(), n -> new StagedReference(object, n, deadQueue));
-    }
-
-    private WorkingObject workingObject(StaticObject holder) {
-        WorkingObject w = workingObjects.get(holder.getObjectNumber());
-        if (w == null) {
-            w = new WorkingObject();
-            workingObjects.put(holder.getObjectNumber(), w);
-            track(holder);
-        }
-        return w;
-    }
-
     Object readField(StaticObject holder, Field field) {
         assert activated : "a read through a view before its thread started";
-        WorkingObject w = workingObject(holder);
-        Object value = w.values.get(field);
+        Object value = workspace.workingField(holder, field);
         if (value != null) {
             ModelEvents.workingFieldHit();
             return value;
@@ -195,25 +143,19 @@ public final class LinearView implements MemoryView {
         if (value == null) {
             value = field.getRawValue(holder);
         }
-        w.values.put(field, value);
+        workspace.addWorkingField(holder, field, value);
         return value;
     }
 
     void stageField(StaticObject holder, Field field, Object value) {
         assert activated : "a write through a view before its thread started";
-        WorkingObject w = workingObject(holder);
-        w.values.put(field, value);
-        if (w.written.add(field)) {
-            writtenObjects.put(holder.getObjectNumber(), w);
-        }
-
-        emptyDeadQueue();
+        workspace.writeField(holder, field, value);
     }
 
     // Build the working copy of an array: version 0 (the raw array), then every commit on the chain from
     // the root up to our base, oldest first, so the last writer of each element wins. Arrays need a whole
     // copy up front, as the bytecodes, intrinsics and natives index the storage directly.
-    private WorkingArray createArrayFromHistory(StaticObject array) {
+    private Object createArrayFromHistory(StaticObject array) {
         ModelEvents.workingArrayBuilt();
         ObjectNumber number = array.getObjectNumber();
         Object storage = array.copyOfRawArray(array.getKlass().getLanguage());
@@ -231,32 +173,31 @@ public final class LinearView implements MemoryView {
                 changes.applyTo(storage);
             }
         }
-        return new WorkingArray(storage);
+        return storage;
     }
 
-    private WorkingArray workingArray(StaticObject array) {
-        WorkingArray working = workingArrays.get(array.getObjectNumber());
-        if (working != null) {
+    // the storage of the thread's working array for array, built from history if it has none
+    private Object arrayStorage(StaticObject array) {
+        Object storage = workspace.workingArray(array);
+        if (storage != null) {
             ModelEvents.workingArrayHit();
-            return working;
+            return storage;
         }
-        working = createArrayFromHistory(array);
-        workingArrays.put(array.getObjectNumber(), working);
-        track(array);
-        return working;
+        storage = createArrayFromHistory(array);
+        workspace.addWorkingArray(array, storage);
+        return storage;
     }
 
     Object arrayForRead(StaticObject array, int from, int to) {
         assert activated : "a read through a view before its thread started";
-        return workingArray(array).storage;
+        return arrayStorage(array);
     }
 
     Object arrayForWrite(StaticObject array, int from, int to) {
         assert activated : "a write through a view before its thread started";
-        WorkingArray working = workingArray(array);
-        working.markWrittenRange(from, to);
-        writtenArrays.put(array.getObjectNumber(), working);
-        return working.storage;
+        Object storage = arrayStorage(array);
+        workspace.writeArray(array, from, to);
+        return storage;
     }
 
     ConflictingLocations pull() {
@@ -298,25 +239,21 @@ public final class LinearView implements MemoryView {
             if (mayConflict) {
                 curr.changes().forEach((number, changes) -> {
                     if (changes instanceof FieldChanges f) {
-                        WorkingObject mine = writtenObjects.get(number);
-                        if (mine != null) {
-                            Set<Field> written = mine.written;
-                            for (Field field : f.fields()) {
-                                if (!written.contains(field)) {
-                                    continue;
-                                }
-                                if (field.isResolvedByTheirs()) {
-                                    takenFromTheirs.computeIfAbsent(number, n -> new HashSet<>()).add(field);
-                                } else {
-                                    fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
-                                }
+                        Set<Field> written = workspace.stagedFields(number);
+                        for (Field field : f.fields()) {
+                            if (!written.contains(field)) {
+                                continue;
+                            }
+                            if (field.isResolvedByTheirs()) {
+                                takenFromTheirs.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                            } else {
+                                fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
                             }
                         }
                     } else if (changes instanceof ArrayChanges a) {
-                        WorkingArray mine = writtenArrays.get(number);
-                        if (mine != null && mine.written.intersects(a.written())) {
-                            BitSet both = (BitSet) mine.written.clone();
-                            both.and(a.written());
+                        BitSet both = workspace.stagedElements(number);
+                        both.and(a.written());
+                        if (!both.isEmpty()) {
                             arrayConflicts.computeIfAbsent(number, n -> new BitSet()).or(both);
                         }
                     }
@@ -336,11 +273,7 @@ public final class LinearView implements MemoryView {
 
         // no conflicts, so now drop our writes to fields that take theirs, from staging and from push's copy
         takenFromTheirs.forEach((number, fields) -> {
-            WorkingObject mine = writtenObjects.get(number);
-            mine.written.removeAll(fields);
-            if (mine.written.isEmpty()) {
-                writtenObjects.remove(number);
-            }
+            workspace.unstage(number, fields);
             if (collected.get(number) instanceof FieldChanges staged) {
                 staged.values().keySet().removeAll(fields);
                 if (staged.fields().isEmpty()) {
@@ -352,19 +285,7 @@ public final class LinearView implements MemoryView {
         // Apply while our base is still held: it bounds compression, so nothing at or below it can be
         // absorbed into a commit in history, whose changes would then differ from those checked above
         for (Commit c : history.reversed()) {
-            c.changes().forEach((number, changes) -> {
-                if (changes instanceof FieldChanges f) {
-                    WorkingObject w = workingObjects.get(number);
-                    if (w != null) {
-                        f.applyTo(w);
-                    }
-                } else if (changes instanceof ArrayChanges a) {
-                    WorkingArray working = workingArrays.get(number);
-                    if (working != null) {
-                        a.applyTo(working.storage);
-                    }
-                }
-            });
+            c.changes().forEach(workspace::applyPulled);
         }
 
         // Move our base to the head, then drop the pin: our state's reference now keeps it alive
@@ -376,59 +297,32 @@ public final class LinearView implements MemoryView {
         return ConflictingLocations.NONE;
     }
 
-    /** Purge dead objects from the head commit (non-recursive) and from staging. */
+    /** Purge dead objects from the head commit (non-recursive); the workspace drops its own as it collects. */
     private void purgeDead() {
         long deadCount = deadObjectCount.get();
         if (state().get() != null && deadCount > deadSetSizeAtLastPurge) {
             state().get().purgeObjects();
             deadSetSizeAtLastPurge = deadCount;
         }
-        emptyDeadQueue();
     }
 
     /** The staged writes as the changes of a commit; staging itself is left as it is (see emptyChanges) */
     private Map<ObjectNumber, ObjectChanges> collectChanges() {
 
-        // The written fields of each object, plus the written elements of each array, copied: the written
-        // marks stay until the commit is appended, as a conflict must leave staging untouched
-        Map<ObjectNumber, ObjectChanges> changes = new HashMap<>();
-        for (Map.Entry<ObjectNumber, WorkingObject> e : writtenObjects.entrySet()) {
-            WorkingObject object = e.getValue();
-            changes.put(e.getKey(), FieldChanges.of(object));
-        }
-
-        for (Map.Entry<ObjectNumber, WorkingArray> e : writtenArrays.entrySet()) {
-            WorkingArray array = e.getValue();
-            changes.put(e.getKey(), ArrayChanges.of(array));
-        }
-
-        return changes;
+        // The staged fields of each live object, plus the staged elements of each live array, copied: they
+        // stay staged until the commit is appended, as a conflict must leave staging untouched
+        return workspace.stagedChanges();
     }
 
-    // Clear the written marks once the commit holding them is appended. Both kinds of write are counted
-    // here for the stats: staging only grows between commits, so its size now is also its peak
+    // Clear staging once the commit holding it is appended. Both kinds of write are counted here for the
+    // stats: staging only grows between commits, so its size now is also its peak
     private void emptyChanges() {
-        int fields = 0;
-        for (Map.Entry<ObjectNumber, WorkingObject> e : writtenObjects.entrySet()) {
-            WorkingObject object = e.getValue();
-            fields += object.written.size();
-            object.written.clear();
-        }
-        writtenObjects.clear();
+        Workspace.Staged staged = workspace.stagedCounts();
+        workspace.clearStaged();
 
-        long arrayElements = 0;
-        int arrays = 0;
-        for (Map.Entry<ObjectNumber, WorkingArray> e : writtenArrays.entrySet()) {
-            WorkingArray array = e.getValue();
-            arrayElements += array.written.cardinality();
-            arrays++;
-            array.written.clear();
-        }
-        writtenArrays.clear();
-
-        if (fields > 0 || arrays > 0 || arrayElements > 0) {
-            ModelEvents.stagingObserved(fields + arrayElements);
-            ModelEvents.committed(fields, arrays, arrayElements);
+        if (staged.fields() > 0 || staged.arrays() > 0 || staged.elements() > 0) {
+            ModelEvents.stagingObserved(staged.total());
+            ModelEvents.committed(staged.fields(), staged.arrays(), staged.elements());
         }
     }
 

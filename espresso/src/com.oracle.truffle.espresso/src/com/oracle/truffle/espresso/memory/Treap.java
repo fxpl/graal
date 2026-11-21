@@ -83,6 +83,27 @@ final class Treap<K extends Comparable<K>, V> {
                 }
             }
         }
+
+        static <K extends Comparable<K>, V> V get(Node<K, V> node, K key) {
+            if (node == null) {
+                return null;
+            }
+
+            int compare = key.compareTo(node.key);
+
+            if (compare == 0) {
+                // key == node.key
+                return node.value;
+
+            } else if (compare < 0) {
+                // key < node.key
+                return get(node.left, key);
+
+            } else {
+                // key > node.key
+                return get(node.right, key);
+            }
+        }
     }
 
     private final Node<K, V> root;
@@ -105,5 +126,9 @@ final class Treap<K extends Comparable<K>, V> {
 
     Treap<K, V> put(K key, V value) {
         return new Treap<>(Node.put(root, key, value));
+    }
+
+    V get(K key) {
+        return Node.get(root, key);
     }
 }

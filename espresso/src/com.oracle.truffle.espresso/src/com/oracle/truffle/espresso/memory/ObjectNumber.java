@@ -3,7 +3,7 @@ package com.oracle.truffle.espresso.memory;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 
-public class ObjectNumber {
+public class ObjectNumber implements Comparable<ObjectNumber> {
     final long threadId;
     final long count;
     volatile boolean dead;
@@ -31,6 +31,13 @@ public class ObjectNumber {
     @Override
     public int hashCode() {
         return 31 * Long.hashCode(threadId) + Long.hashCode(count);
+    }
+
+    // by the allocating thread, then by allocation order within it, consistent with equals
+    @Override
+    public int compareTo(ObjectNumber other) {
+        int byThread = Long.compare(threadId, other.threadId);
+        return byThread != 0 ? byThread : Long.compare(count, other.count);
     }
 
     public static ObjectNumber objectNumberForThread(long threadId) {

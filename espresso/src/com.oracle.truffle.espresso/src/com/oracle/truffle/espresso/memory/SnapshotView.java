@@ -45,11 +45,25 @@ final class SnapshotView implements BranchingView {
 
     private ConflictReport pendingConflict;
 
-    // private Treap<ObjectNumber, ObjectChanges> snapshot;
+    // this thread's working copies, with its uncommitted writes marked
+    private final Workspace workspace = new Workspace();
 
     SnapshotView(Supplier<SyncState<?>> bindState, VectorClock start) {
         this.bindState = bindState;
         this.clock = start;
+    }
+
+    /** This thread's sync state, bound on first use, which holds the thread's snapshot. */
+    private SnapshotSyncState state() {
+        SnapshotSyncState s = unboundOrState;
+        if (s == null) {
+            SyncState<?> bound = bindState.get();
+            assert bound != null : "binding a view produced no sync state";
+            // every sync state under this view's model was made by SnapshotRepresentation, so it holds snapshots
+            s = (SnapshotSyncState) bound;
+            unboundOrState = s;
+        }
+        return s;
     }
 
     @Override
@@ -66,7 +80,7 @@ final class SnapshotView implements BranchingView {
     // into the working copy only, the snapshot changes when the write leaves the thread
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
-        throw EspressoError.unimplemented("SnapshotView.writeField");
+        workspace.writeField(holder, field, value);
     }
 
     @Override
