@@ -40,7 +40,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 public final class LinearView implements MemoryView {
 
     // The global history's sync state: its commit is the head of the chain
-    private final SyncState global;
+    private final CommitSyncState global;
 
     // A count shared between views for the number of objects purged,
     // and the number we saw at the last purge
@@ -50,8 +50,8 @@ public final class LinearView implements MemoryView {
     // This thread's sync state, shared with its Thread object: its commit is the commit the thread is
     // on. Null until first use: the view can be created during VM bootstrap, before the Thread exists.
     // Never read directly, always through state().
-    private SyncState unboundOrState;
-    private final Supplier<SyncState> bindState;
+    private CommitSyncState unboundOrState;
+    private final Supplier<SyncState<?>> bindState;
 
     private final Map<ObjectNumber, WorkingObject> workingObjects = new HashMap<>(); // versioned objects this view has accessed, as this view sees them
     private final Map<ObjectNumber, WorkingObject> writtenObjects = new HashMap<>(); // ...of which written since the last commit
@@ -76,7 +76,7 @@ public final class LinearView implements MemoryView {
     // makes and folds into this thread's commits on the global history, stamping each with this thread
     private final Commit.Committer committer;
 
-    public LinearView(Supplier<SyncState> bindState, SyncState global, AtomicLong deadObjectCount, Commit.Committer committer) {
+    public LinearView(Supplier<SyncState<?>> bindState, CommitSyncState global, AtomicLong deadObjectCount, Commit.Committer committer) {
         this.bindState = bindState;
         this.deadObjectCount = deadObjectCount;
         this.global = global;
@@ -84,11 +84,13 @@ public final class LinearView implements MemoryView {
     }
 
     /** This thread's sync state, bound on first use. */
-    private SyncState state() {
-        SyncState s = unboundOrState;
+    private CommitSyncState state() {
+        CommitSyncState s = unboundOrState;
         if (s == null) {
-            s = bindState.get();
-            assert s != null : "binding a view produced no sync state";
+            SyncState<?> bound = bindState.get();
+            assert bound != null : "binding a view produced no sync state";
+            // every sync state under linear was made by LinearMemoryModel, so it holds commits
+            s = (CommitSyncState) bound;
             unboundOrState = s;
         }
         return s;
@@ -125,7 +127,7 @@ public final class LinearView implements MemoryView {
     }
 
     private Object getLastCommittedValue(ObjectNumber number, Field field) {
-        Commit c = state().commit;
+        Commit c = state().get();
         int visited = 0;
         while (c != null) {
             // get parents before changes as a concurrent absorb swaps changes then parents
@@ -217,7 +219,7 @@ public final class LinearView implements MemoryView {
         Object storage = array.copyOfRawArray(array.getKlass().getLanguage());
 
         List<Commit> chain = new ArrayList<>();   // newest first
-        Commit c = state().commit;
+        Commit c = state().get();
         while (c != null) {
             // get parents before changes as a concurrent absorb swaps changes then parents
             Set<Commit> parents = c.parents();
@@ -267,14 +269,14 @@ public final class LinearView implements MemoryView {
         // staged; if none conflict, install them into the working set oldest first and move our base
         // to the head.
 
-        SyncState baseState = state();
-        Commit base = baseState.commit;
+        CommitSyncState baseState = state();
+        Commit base = baseState.get();
 
         // Take the head and pin it under the lock: once a push moves the global head on, our head is
         // held only by its child, and compression could absorb it before we pinned it
         Commit head;
         synchronized (global) {
-            head = global.commit;
+            head = global.get();
             if (head == base) {
                 return ConflictingLocations.NONE;
             }
@@ -377,8 +379,8 @@ public final class LinearView implements MemoryView {
     /** Purge dead objects from the head commit (non-recursive) and from staging. */
     private void purgeDead() {
         long deadCount = deadObjectCount.get();
-        if (state().commit != null && deadCount > deadSetSizeAtLastPurge) {
-            state().commit.purgeObjects();
+        if (state().get() != null && deadCount > deadSetSizeAtLastPurge) {
+            state().get().purgeObjects();
             deadSetSizeAtLastPurge = deadCount;
         }
         emptyDeadQueue();
@@ -446,11 +448,11 @@ public final class LinearView implements MemoryView {
             return ConflictingLocations.NONE;
         }
 
-        SyncState baseState = state();
+        CommitSyncState baseState = state();
         Commit newGlobal;
 
         synchronized (global) {
-            if (global.commit != baseState.commit) {
+            if (global.get() != baseState.get()) {
                 conflicts = pull(changes);   // hopefully only a commit or two
                 if (!conflicts.isEmpty() || changes.isEmpty()) {
                     return conflicts;
@@ -461,7 +463,7 @@ public final class LinearView implements MemoryView {
             // global's keeps it alive): if no other thread is on it, the global's is then its only
             // reference and extend folds into it, which is safe as no pull can pin it while we hold the
             // lock. A new commit holds old as its parent, so old stays alive when the global moves on.
-            Commit old = global.commit;
+            Commit old = global.get();
             baseState.set(null);
             newGlobal = old == null ? committer.first(changes) : committer.extend(old, changes);
             global.set(newGlobal);      // no-op when it folded

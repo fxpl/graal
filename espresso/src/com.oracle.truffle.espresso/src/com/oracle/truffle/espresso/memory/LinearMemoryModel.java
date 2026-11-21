@@ -37,7 +37,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 public final class LinearMemoryModel implements MemoryModel {
 
-    private final SyncState global = new SyncState(SyncState.Kind.GLOBAL);
+    private final CommitSyncState global = new CommitSyncState(SyncState.Kind.GLOBAL);
 
     private final EspressoContext context;
     private volatile boolean active = false;
@@ -78,20 +78,25 @@ public final class LinearMemoryModel implements MemoryModel {
         return new LinearView(this::bindThreadSyncState, global, deadObjectCount, new Commit.Committer(start));
     }
 
-    private SyncState newThreadSyncState(StaticObject thread) {
-        SyncState state = new SyncState(SyncState.Kind.THREAD);
+    @Override
+    public SyncState<?> newSyncState(SyncState.Kind kind) {
+        return new CommitSyncState(kind);
+    }
+
+    private SyncState<?> newThreadSyncState(StaticObject thread) {
+        SyncState<?> state = newSyncState(SyncState.Kind.THREAD);
         VersioningStats.describeThread(state, thread);
         context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);
         cleaner.register(thread, () -> state.set(null));
         return state;
     }
 
-    private SyncState bindThreadSyncState() {
+    private SyncState<?> bindThreadSyncState() {
         StaticObject thread = context.getCurrentPlatformThread();
         assert thread != null : "binding a view before its thread is registered";
 
         Object existing = context.getMeta().java_lang_Thread_0syncState.getHiddenObject(thread);
-        if (existing instanceof SyncState s) {
+        if (existing instanceof SyncState<?> s) {
             return s;
         }
         return newThreadSyncState(thread);
@@ -253,7 +258,7 @@ public final class LinearMemoryModel implements MemoryModel {
     @Override
     public Object onVolatileRead(StaticObject holder, Field field) {
         LinearView view = currentView();
-        SyncState state = holder.volatileSyncState(field);
+        SyncState<?> state = holder.volatileSyncState(field);
         ConflictingLocations conflict;
         Object value = null;
         // pull, then read the value (readVolatileField)
@@ -268,7 +273,7 @@ public final class LinearMemoryModel implements MemoryModel {
     @Override
     public void onVolatileWrite(StaticObject holder, Field field, Object value) {
         LinearView view = currentView();
-        SyncState state = holder.volatileSyncState(field);
+        SyncState<?> state = holder.volatileSyncState(field);
         ConflictingLocations conflict;
         // stage the value like any write, then push it; the push pulls first, so a volatile write
         // unordered with ours conflicts (the JLS counts it as a data race)
@@ -297,7 +302,7 @@ public final class LinearMemoryModel implements MemoryModel {
 
     // pull, test, then write and push, all atomic on the location's sync state; the read comes first, so
     // the write is informed by the last one. matches reads the location after the pull, typed by the caller.
-    private boolean compareAndSet(SyncState state, BooleanSupplier matches, Runnable write) {
+    private boolean compareAndSet(SyncState<?> state, BooleanSupplier matches, Runnable write) {
         LinearView view = currentView();
         ConflictingLocations conflict;
         boolean swapped;
@@ -314,7 +319,7 @@ public final class LinearMemoryModel implements MemoryModel {
     }
 
     // as compareAndSet, returning the value read rather than whether it matched
-    private <T> T compareAndExchange(SyncState state, Supplier<T> read, Predicate<T> matches, Runnable write) {
+    private <T> T compareAndExchange(SyncState<?> state, Supplier<T> read, Predicate<T> matches, Runnable write) {
         LinearView view = currentView();
         ConflictingLocations conflict;
         T witness;
@@ -338,7 +343,7 @@ public final class LinearMemoryModel implements MemoryModel {
         // is a hook the caller hands over whole, so the model does the element access here, inside the
         // sync state's lock, through the view's storage.
         LinearView view = currentView();
-        SyncState state = array.volatileArraySyncState();
+        SyncState<?> state = array.volatileArraySyncState();
         ConflictingLocations conflict;
         Object value;
         synchronized (state) {
@@ -353,7 +358,7 @@ public final class LinearMemoryModel implements MemoryModel {
     public void onVolatileArrayWrite(StaticObject array, int index, Object value) {
         // as onVolatileWrite, on the one sync state all the array's elements share
         LinearView view = currentView();
-        SyncState state = array.volatileArraySyncState();
+        SyncState<?> state = array.volatileArraySyncState();
         ConflictingLocations conflict;
         synchronized (state) {
             // the model does the element write itself, through the barrier (see onVolatileArrayRead)

@@ -64,7 +64,7 @@ final class VersioningStats {
 
     // What each sync state belongs to, null until described (linear's global state never is). Weak, so a
     // sync state whose object died drops out on its own. The names are strings, so they keep no owner alive.
-    private static final Map<SyncState, String> names = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<SyncState<?>, String> names = Collections.synchronizedMap(new WeakHashMap<>());
 
     // Which thread made each commit node, and how many commits that thread had made by then ("main #12").
     // Weak, like names, so a released commit drops out.
@@ -82,21 +82,21 @@ final class VersioningStats {
     }
 
     /** {@code state} is a lock or volatile state of {@code owner}, named by its class and identity. */
-    static void describeObject(SyncState state, StaticObject owner) {
+    static void describeObject(SyncState<?> state, StaticObject owner) {
         if (NAMING) {
             names.put(state, owner.getKlass().getExternalName() + "@" + Integer.toHexString(System.identityHashCode(owner)));
         }
     }
 
     /** {@code state} is {@code field}'s volatile state on the object {@code lock} is the lock state of. */
-    static void describeField(SyncState state, SyncState lock, Field field) {
+    static void describeField(SyncState<?> state, SyncState<?> lock, Field field) {
         if (NAMING) {
             names.put(state, names.get(lock) + "." + field.getNameAsString());
         }
     }
 
     /** {@code state} is {@code klass}'s initialisation state. */
-    static void describeClass(SyncState state, Klass klass) {
+    static void describeClass(SyncState<?> state, Klass klass) {
         if (NAMING) {
             names.put(state, klass.getExternalName());
         }
@@ -107,7 +107,7 @@ final class VersioningStats {
      * The name is read from its raw slot. {@code Thread.name} is volatile, and a modelled read would pull,
      * binding this same state again.
      */
-    static void describeThread(SyncState state, StaticObject thread) {
+    static void describeThread(SyncState<?> state, StaticObject thread) {
         if (NAMING) {
             Meta meta = thread.getKlass().getMeta();
             names.put(state, meta.toHostString((StaticObject) meta.java_lang_Thread_name.getRawValue(thread)));
@@ -118,7 +118,7 @@ final class VersioningStats {
      * {@code commit} is a new node made by the thread whose state is {@code thread}, labelled with the
      * thread's name and its commit count, "main #12", or "main #12 merge" for a merge made after it.
      */
-    static void describeCommit(Commit commit, SyncState thread, boolean merge) {
+    static void describeCommit(Commit commit, SyncState<?> thread, boolean merge) {
         if (NAMING) {
             commitsMade.put(commit, names.get(thread) + " #" + threadCommits.get()[0] + (merge ? " merge" : ""));
         }
@@ -175,11 +175,11 @@ final class VersioningStats {
     private static void emitSyncStates() {
         Map<SyncState.Kind, long[]> counts = new EnumMap<>(SyncState.Kind.class);
         Map<SyncState.Kind, Set<Commit>> held = new EnumMap<>(SyncState.Kind.class);
-        synchronized (SyncState.ALL) {
-            for (SyncState s : SyncState.ALL) {
+        synchronized (CommitSyncState.ALL) {
+            for (CommitSyncState s : CommitSyncState.ALL) {
                 long[] n = counts.computeIfAbsent(s.kind, k -> new long[2]);
                 n[0]++;
-                Commit c = s.commit;
+                Commit c = s.get();
                 if (c != null) {
                     n[1]++;
                     held.computeIfAbsent(s.kind, k -> new HashSet<>()).add(c);
@@ -229,14 +229,14 @@ final class VersioningStats {
      * reachable commits have it as a parent. Those two are every reference a commit should have, so its
      * ref count less them is a reference nobody can account for (or, below zero, one released twice).
      */
-    private record Reachable(Map<Commit, Integer> depth, Map<Commit, List<SyncState>> holders, Map<Commit, Integer> children) {
+    private record Reachable(Map<Commit, Integer> depth, Map<Commit, List<CommitSyncState>> holders, Map<Commit, Integer> children) {
 
         static Reachable walk() {
             Map<Commit, Integer> depth = new HashMap<>();
-            Map<Commit, List<SyncState>> holders = new HashMap<>();
-            synchronized (SyncState.ALL) {
-                for (SyncState s : SyncState.ALL) {
-                    Commit c = s.commit;
+            Map<Commit, List<CommitSyncState>> holders = new HashMap<>();
+            synchronized (CommitSyncState.ALL) {
+                for (CommitSyncState s : CommitSyncState.ALL) {
+                    Commit c = s.get();
                     if (c != null) {
                         measureDepth(c, depth);
                         holders.computeIfAbsent(c, k -> new ArrayList<>()).add(s);
@@ -276,7 +276,7 @@ final class VersioningStats {
             StringJoiner parents = new StringJoiner(", ", "[", "]");
             c.parents().forEach(p -> parents.add(String.valueOf(ids.get(p))));
             StringJoiner holders = new StringJoiner(", ", "[", "]");
-            for (SyncState s : reachable.holders().getOrDefault(c, List.of())) {
+            for (CommitSyncState s : reachable.holders().getOrDefault(c, List.of())) {
                 String owner = names.get(s);
                 holders.add("{\"kind\": \"" + s.kind.name().toLowerCase() + "\", \"owner\": " + (owner == null ? "null" : quote(owner)) + "}");
             }

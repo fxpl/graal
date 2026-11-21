@@ -306,6 +306,11 @@ public interface MemoryModel {
         throw new UnsupportedOperationException("this memory model does not track object death");
     }
 
+    /** A new state for a synchronisation object of {@code kind}, holding the kind of version this model keeps. */
+    default SyncState<?> newSyncState(SyncState.Kind kind) {
+        throw new UnsupportedOperationException("this memory model keeps no versions");
+    }
+
     /** Turn versioning on. Called once, after context bootstrap completes and before user code runs. */
     default void activate() {
     }

@@ -244,20 +244,20 @@ public class StaticObject implements TruffleObject, Cloneable {
     @TruffleBoundary
     private synchronized ObjectSyncState createObjectSyncState() {
         if (objectSyncState == null) {
-            objectSyncState = ObjectSyncState.createFor(this, getKlass().getContext().getMemoryModel().getCleaner());
+            objectSyncState = ObjectSyncState.createFor(this, getKlass().getContext().getMemoryModel());
         }
         return objectSyncState;
     }
 
-    public final SyncState lockSyncState() {
+    public final SyncState<?> lockSyncState() {
         return getObjectSyncState().getLockSyncState();
     }
 
-    public final SyncState volatileSyncState(Field field) {
+    public final SyncState<?> volatileSyncState(Field field) {
         return getObjectSyncState().getVolatileSyncState(field);
     }
 
-    public final SyncState volatileArraySyncState() {
+    public final SyncState<?> volatileArraySyncState() {
         assert isArray();
         return getObjectSyncState().getVolatileArraySyncState();
     }

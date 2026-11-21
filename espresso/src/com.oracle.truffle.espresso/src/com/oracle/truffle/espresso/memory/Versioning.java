@@ -80,7 +80,7 @@ public final class Versioning {
     }
 
     /** {@code state} is {@code klass}'s initialisation state, named so the stats' graph dump can say so. */
-    public static void describeClassInit(SyncState state, Klass klass) {
+    public static void describeClassInit(SyncState<?> state, Klass klass) {
         VersioningStats.describeClass(state, klass);
     }
 

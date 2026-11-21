@@ -44,8 +44,13 @@ final class DagRepresentation implements BranchingRepresentation {
     }
 
     @Override
-    public BranchingView newView(Supplier<SyncState> bindState, int threadId) {
+    public BranchingView newView(Supplier<SyncState<?>> bindState, int threadId) {
         return new DagView(bindState, deadObjectCount, new Commit.Committer(clocks.start(threadId)));
+    }
+
+    @Override
+    public SyncState<?> newSyncState(SyncState.Kind kind) {
+        return new CommitSyncState(kind);
     }
 
     @Override
@@ -55,7 +60,7 @@ final class DagRepresentation implements BranchingRepresentation {
 
     // the state lets go of its commit, so the commits only it kept alive are released
     @Override
-    public void onThreadDied(SyncState state) {
+    public void onThreadDied(SyncState<?> state) {
         state.set(null);
     }
 

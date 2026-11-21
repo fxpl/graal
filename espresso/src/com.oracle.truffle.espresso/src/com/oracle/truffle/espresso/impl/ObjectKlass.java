@@ -180,7 +180,7 @@ public final class ObjectKlass extends Klass implements AttributedElement {
     // endregion
 
     // Add sync state to track the class init history
-    private final SyncState syncState;
+    private final SyncState<?> syncState;
 
     @Override
     public Attribute[] getAttributes() {
@@ -247,7 +247,7 @@ public final class ObjectKlass extends Klass implements AttributedElement {
         }
 
         this.syncState = getLanguage().isVersionedMemorySelected() && !StaticObject.isNull(classLoader)
-                        ? new SyncState(SyncState.Kind.CLASS_INIT) : null;
+                        ? getContext().getMemoryModel().newSyncState(SyncState.Kind.CLASS_INIT) : null;
         if (syncState != null) {
             Versioning.describeClassInit(syncState, this);
         }
@@ -508,7 +508,7 @@ public final class ObjectKlass extends Klass implements AttributedElement {
         threadState.markClassInitialiserAsPulledFrom(this);
     }
 
-    public SyncState getClassInitSyncState() {
+    public SyncState<?> getClassInitSyncState() {
         assert syncState != null : "class init sync state is null";
         return syncState;
     }

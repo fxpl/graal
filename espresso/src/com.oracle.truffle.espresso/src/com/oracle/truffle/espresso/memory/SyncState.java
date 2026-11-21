@@ -22,20 +22,15 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.Collections;
-import java.util.Set;
-import java.util.WeakHashMap;
-
 /**
  * The state for one synchronisation object (a lock, a volatile field, a class's initialisation, a
- * thread, or linear's global history): a commit, {@code null} until the first push. In branching a pull
- * merges this commit into the acting thread and a push replaces it with the thread's head; a thread's
- * own state holds its head. In linear every pull and push goes through the single global state, whose
- * commit is the head of the chain, and a thread's own state holds the commit it is on. The commit is
- * reference counted on the state's behalf, through {@link #set}. Accessed under the lock for locks, and
- * under {@code synchronized} on this object otherwise.
+ * thread, or linear's global history): the version released to it, {@code null} until the first push,
+ * and the clock of the thread that released it. What a version is, and how a state takes and lets go of
+ * one, belongs to the subclass the model's representation makes ({@link CommitSyncState},
+ * {@link SnapshotSyncState}). Accessed under the lock for locks, and under {@code synchronized} on this
+ * object otherwise.
  */
-public final class SyncState {
+public abstract class SyncState<V> {
 
     public enum Kind {
         THREAD,
@@ -45,42 +40,17 @@ public final class SyncState {
         GLOBAL
     }
 
-    Commit commit;
-    // the clock of the thread that last set commit, so a pull can tell it already has it without walking
+    // the clock of the thread that last set the version, so a pull can tell it already has it
     Clock clock;
     final Kind kind;
 
-    // every live state, so compression can find the commits they hold, held weakly so dead states drop out
-    static final Set<SyncState> ALL = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
-
-    public SyncState(Kind kind) {
+    SyncState(Kind kind) {
         this.kind = kind;
-        ALL.add(this);
     }
 
-    /**
-     * Point this state at {@code c} (or at nothing), taking this state's reference to it and releasing
-     * the one it held. The new reference is taken before the old one is released, so moving to a
-     * commit that the old one keeps alive never drops it to zero; setting the commit it already holds
-     * does nothing.
-     */
-    void set(Commit c) {
-        Commit old = commit;
-        if (c == old) {
-            return;
-        }
-        if (c != null) {
-            c.incRef();
-        }
-        // under the graph's read side, so compression never sees a state halfway through moving
-        Commit.GRAPH.readLock().lock();
-        try {
-            commit = c;
-        } finally {
-            Commit.GRAPH.readLock().unlock();
-        }
-        if (old != null) {
-            old.decRef();
-        }
-    }
+    /** The version this state holds, or null if nothing has been released to it. */
+    abstract V get();
+
+    /** Hold {@code next} (or nothing) in place of the version held now. */
+    abstract void set(V next);
 }

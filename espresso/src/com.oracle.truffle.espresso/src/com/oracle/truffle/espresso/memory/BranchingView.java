@@ -51,10 +51,10 @@ interface BranchingView extends MemoryView {
     int pendingWriteCount();
 
     /** Merge in what {@code from} holds, reporting the locations both sides wrote with no order between them. */
-    ConflictingLocations pull(SyncState from);
+    ConflictingLocations pull(SyncState<?> from);
 
     /** Hand what this view holds, its own writes included, to {@code to}. */
-    void push(SyncState to);
+    void push(SyncState<?> to);
 
     /** The thread has finished, so its writes become what a join of it pulls. */
     void end();

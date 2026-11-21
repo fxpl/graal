@@ -57,8 +57,8 @@ public final class DagView implements BranchingView {
 
     // This thread's branch, shared with its Thread object. Null until first use: the view can be created
     // during VM bootstrap, before the Thread exists. Never read directly, always through state().
-    private SyncState unboundOrState;
-    private final Supplier<SyncState> bindState;
+    private CommitSyncState unboundOrState;
+    private final Supplier<SyncState<?>> bindState;
     private final Map<ObjectNumber, WorkingObject> workingObjects = new HashMap<>(); // versioned objects this view has accessed, as this view sees them
     private final Map<ObjectNumber, WorkingObject> writtenObjects = new HashMap<>(); // ...of which written since the last commit
     private final Map<ObjectNumber, WorkingArray> workingArrays = new HashMap<>(); // versioned arrays this view has accessed, as this view sees them
@@ -94,21 +94,27 @@ public final class DagView implements BranchingView {
     // makes and folds into this thread's commits, stamping each with this thread
     private final Commit.Committer committer;
 
-    public DagView(Supplier<SyncState> bindState, AtomicLong deadObjectCount, Commit.Committer committer) {
+    public DagView(Supplier<SyncState<?>> bindState, AtomicLong deadObjectCount, Commit.Committer committer) {
         this.bindState = bindState;
         this.deadObjectCount = deadObjectCount;
         this.committer = committer;
     }
 
     /** This thread's sync state, bound on first use. */
-    private SyncState state() {
-        SyncState s = unboundOrState;
+    private CommitSyncState state() {
+        CommitSyncState s = unboundOrState;
         if (s == null) {
-            s = bindState.get();
-            assert s != null : "binding a view produced no sync state";
+            SyncState<?> bound = bindState.get();
+            assert bound != null : "binding a view produced no sync state";
+            s = commits(bound);
             unboundOrState = s;
         }
         return s;
+    }
+
+    // every sync state under this view's model was made by DagRepresentation, so it holds commits
+    private static CommitSyncState commits(SyncState<?> state) {
+        return (CommitSyncState) state;
     }
 
     private void setHead(Commit c) {
@@ -196,7 +202,7 @@ public final class DagView implements BranchingView {
             return value;
         }
 
-        if (state().commit != null) {
+        if (state().get() != null) {
             value = getLastCommittedValue(holder.getObjectNumber(), field);
         }
         if (value == null) {
@@ -233,10 +239,10 @@ public final class DagView implements BranchingView {
             Integer.compare(commit2.generation(), commit1.generation())
         );
 
-        visited.add(state().commit);
+        visited.add(state().get());
 
         Object found = null;
-        Commit current = state().commit;
+        Commit current = state().get();
         while (current != null) {
             runRefCountAbsorption(current);
 
@@ -278,8 +284,8 @@ public final class DagView implements BranchingView {
         // before merging the changes into the head, first try to
         // purge any dead objects from the head commit (non-recursive)
         long deadCount = deadObjectCount.get();
-        if (state().commit != null && deadCount > deadSetSizeAtLastPurge) {
-            state().commit.purgeObjects();
+        if (state().get() != null && deadCount > deadSetSizeAtLastPurge) {
+            state().get().purgeObjects();
             deadSetSizeAtLastPurge = deadCount;
         }
 
@@ -316,7 +322,7 @@ public final class DagView implements BranchingView {
         ModelEvents.committed(fields, arrays, arrayElements);
         VersioningStats.countCommit();
 
-        Commit head = state().commit;
+        Commit head = state().get();
         Commit next = head == null ? committer.first(changes) : committer.extend(head, changes);
         if (next != head) {
             VersioningStats.describeCommit(next, state(), false);
@@ -334,7 +340,7 @@ public final class DagView implements BranchingView {
 
     // absorb into our head and on up through its new parents
     private void runRefCountAbsorptionRecursively() {
-        Commit head = state().commit;
+        Commit head = state().get();
         if (head == null) {
             return;
         }
@@ -348,7 +354,7 @@ public final class DagView implements BranchingView {
      * by both branches (empty means none). Staging must be empty — every sync action (lock
      * acquire, join, volatile read/write) commits first.
      */
-    ConflictingLocations merge(SyncState theirState) {
+    ConflictingLocations merge(CommitSyncState theirState) {
         // a walk: holds the graph's read side for the whole merge, so nothing rewrites the commits it
         // colours or installs from; anything that rewrites the graph runs after the unlock
         ConflictingLocations conflicts;
@@ -359,7 +365,7 @@ public final class DagView implements BranchingView {
             Commit.GRAPH.readLock().unlock();
         }
         // a clean pull takes in their clock, so a later pull of what they had can skip the walk
-        if (conflicts.isEmpty() && theirState.commit != null) {
+        if (conflicts.isEmpty() && theirState.get() != null) {
             committer.join(theirState.clock);
         }
         // our head may have moved, and collapsing takes the write side, so only now the read side is released
@@ -368,10 +374,10 @@ public final class DagView implements BranchingView {
         return conflicts;
     }
 
-    private ConflictingLocations mergeHeads(SyncState theirState) {
-        Commit theirHead = theirState.commit;
+    private ConflictingLocations mergeHeads(CommitSyncState theirState) {
+        Commit theirHead = theirState.get();
         assert stagingEmpty() : "merging with uncommitted writes";
-        Commit myHead = state().commit;
+        Commit myHead = state().get();
         if (myHead == null) {
             // either pickup the other commit as head (there is nothing to merge)
             // or the genuinely is no operation to do here
@@ -552,7 +558,7 @@ public final class DagView implements BranchingView {
         }
 
         // create the merge of the parents, holding theirs for each resolved field so every walk finds the same value
-        Commit mergeCommit = committer.merge(state().commit, theirHead, resolved);
+        Commit mergeCommit = committer.merge(state().get(), theirHead, resolved);
         ModelEvents.mergeCommitted();
         VersioningStats.describeCommit(mergeCommit, state(), true);
         setHead(mergeCommit);
@@ -573,9 +579,9 @@ public final class DagView implements BranchingView {
 
     // pull from another commit and report any conflicting locations
     @Override
-    public ConflictingLocations pull(SyncState from) {
+    public ConflictingLocations pull(SyncState<?> from) {
         commitStaging();
-        return merge(from);
+        return merge(commits(from));
     }
 
     // the thread's last commit, which its own state then holds for a join to pull
@@ -590,13 +596,14 @@ public final class DagView implements BranchingView {
 
     // commit, compress and push the changes to the 'to' location
     @Override
-    public void push(SyncState to) {
+    public void push(SyncState<?> pushedTo) {
+        CommitSyncState to = commits(pushedTo);
         // let go of to's reference first: if to held our head, the head may then be exclusive to us
         // and the commit can fold into it
-        Commit old = to.commit;
+        Commit old = to.get();
         to.set(null);
         commitStaging();
-        to.set(state().commit);
+        to.set(state().get());
         to.clock = committer.clock();
         // after the lock has moved, so the compression sees it holding our head
         runRefCountAbsorptionRecursively();
@@ -630,14 +637,14 @@ public final class DagView implements BranchingView {
 
         // We have no history of changes yet, so we must be at version 0,
         // so just return the copy
-        if (state().commit == null) {
+        if (state().get() == null) {
             return new WorkingArray(storage);
         }
 
         Set<Commit> order = LinkedHashSet.newLinkedHashSet(lastWalkSize);  // ancestors before descendants
         Set<Commit> visited = HashSet.newHashSet(lastWalkSize);
         Deque<Commit> heads = new ArrayDeque<>();
-        heads.push(state().commit);
+        heads.push(state().get());
 
         while (!heads.isEmpty()) {
             Commit c = heads.peek();

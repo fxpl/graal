@@ -107,6 +107,11 @@ public final class BranchingMemoryModel implements MemoryModel {
         return new BranchingMemoryModel(context, new DagRepresentation(clocks));
     }
 
+    /** The branching model with its versions kept as snapshots, which always keep vector clocks. */
+    public static BranchingMemoryModel withSnapshots(EspressoContext context) {
+        return new BranchingMemoryModel(context, new SnapshotRepresentation());
+    }
+
     @Override
     public void dispose() {
         representation.dispose(cleaner);
@@ -121,8 +126,13 @@ public final class BranchingMemoryModel implements MemoryModel {
         return representation.newView(this::bindThreadSyncState, nextThreadId.getAndIncrement());
     }
 
-    private SyncState newThreadSyncState(StaticObject thread) {
-        SyncState state = new SyncState(SyncState.Kind.THREAD);
+    @Override
+    public SyncState<?> newSyncState(SyncState.Kind kind) {
+        return representation.newSyncState(kind);
+    }
+
+    private SyncState<?> newThreadSyncState(StaticObject thread) {
+        SyncState<?> state = newSyncState(SyncState.Kind.THREAD);
         VersioningStats.describeThread(state, thread);
 
         // store the state on the thread object itself
@@ -156,12 +166,12 @@ public final class BranchingMemoryModel implements MemoryModel {
      * thread, after activation). A spawned thread finds the state its parent pushed into at spawn; main,
      * or a thread spawned before versioning was on, gets a fresh one attached to its Thread.
      */
-    private SyncState bindThreadSyncState() {
+    private SyncState<?> bindThreadSyncState() {
         StaticObject thread = context.getCurrentPlatformThread();
         assert thread != null : "binding a view before its thread is registered";
 
         Object existing = context.getMeta().java_lang_Thread_0syncState.getHiddenObject(thread);
-        if (existing instanceof SyncState s) {
+        if (existing instanceof SyncState<?> s) {
             return s;
         }
         return newThreadSyncState(thread);
@@ -242,7 +252,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // This thread detected that `joined` terminated, so pull the final
         // commit the joined thread stored on its Thread object. Absent if it never committed anything.
         Object finalSyncState = context.getMeta().java_lang_Thread_0syncState.getHiddenObject(joined);
-        if (!(finalSyncState instanceof SyncState state)) {
+        if (!(finalSyncState instanceof SyncState<?> state)) {
             return;
         }
         BranchingView view = currentView();
@@ -255,14 +265,14 @@ public final class BranchingMemoryModel implements MemoryModel {
         // child begins. First mark what the child can now reach, so the push carries it.
         Versioning.onSpawn(childThread);
         BranchingView view = currentView();
-        SyncState childState = newThreadSyncState(childThread);
+        SyncState<?> childState = newThreadSyncState(childThread);
         view.push(childState);
     }
 
     @Override
     public void onMonitorEnter(StaticObject lock) {
         // pull from the lock
-        SyncState state = lock.lockSyncState();
+        SyncState<?> state = lock.lockSyncState();
         BranchingView view = currentView();
         handleConflicts(view.pull(state), view, MemoryModel.monitorSyncLabel(context, lock, true));
     }
@@ -271,7 +281,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     public void onMonitorExit(StaticObject lock) {
         // push to the lock
         BranchingView view = currentView();
-        SyncState state = lock.lockSyncState();
+        SyncState<?> state = lock.lockSyncState();
         view.push(state);
     }
 
@@ -282,7 +292,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // field (synchronised on the sync state) so value and commit are read together, consistent
         // against a concurrent volatile write to the same field.
         BranchingView view = currentView();
-        SyncState state = holder.volatileSyncState(field);
+        SyncState<?> state = holder.volatileSyncState(field);
         ConflictingLocations conflict;
         Object value;
         synchronized (state) {
@@ -301,7 +311,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // is a conflict there: the JLS counts two volatile writes without happens-before as a data race.
         // Atomic per field.
         BranchingView view = currentView();
-        SyncState state = holder.volatileSyncState(field);
+        SyncState<?> state = holder.volatileSyncState(field);
         ConflictingLocations conflicts;
         synchronized (state) {
             writeVolatileField(holder, field, value);
@@ -331,7 +341,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     // pull, test, then write and push, all atomic on the location's sync state; the read comes first, so
     // the write is informed by the last one. matches reads the location after the pull, typed by the caller.
-    private boolean compareAndSet(SyncState state, BooleanSupplier matches, Runnable write) {
+    private boolean compareAndSet(SyncState<?> state,BooleanSupplier matches, Runnable write) {
         BranchingView view = currentView();
         ConflictingLocations conflicts;
         boolean swapped;
@@ -348,7 +358,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     }
 
     // as compareAndSet, returning the value read rather than whether it matched
-    private <T> T compareAndExchange(SyncState state, Supplier<T> read, Predicate<T> matches, Runnable write) {
+    private <T> T compareAndExchange(SyncState<?> state,Supplier<T> read, Predicate<T> matches, Runnable write) {
         BranchingView view = currentView();
         ConflictingLocations conflicts;
         T witness;
@@ -372,7 +382,7 @@ public final class BranchingMemoryModel implements MemoryModel {
         // is a hook the caller hands over whole, so the model does the element access here, inside the
         // sync state's lock, through the view's storage.
         BranchingView view = currentView();
-        SyncState state = array.volatileArraySyncState();
+        SyncState<?> state = array.volatileArraySyncState();
         ConflictingLocations conflict;
         Object value;
         synchronized (state) {
@@ -387,7 +397,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     public void onVolatileArrayWrite(StaticObject array, int index, Object value) {
         // as onVolatileWrite, on the one sync state all the array's elements share
         BranchingView view = currentView();
-        SyncState state = array.volatileArraySyncState();
+        SyncState<?> state = array.volatileArraySyncState();
         ConflictingLocations conflicts;
         synchronized (state) {
             // the model does the element write itself, through the barrier (see onVolatileArrayRead)
@@ -459,7 +469,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     public void onClassInitialized(ObjectKlass klass) {
         // Class-init release: pull from the class's init sync state, then push to it.
         BranchingView view = currentView();
-        SyncState state = klass.getClassInitSyncState();
+        SyncState<?> state = klass.getClassInitSyncState();
         ConflictingLocations conflicts;
         synchronized (state) {
             conflicts = view.pull(state);
@@ -474,7 +484,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     public void onClassInitUse(ObjectKlass klass) {
         // Class-init acquire: pull from the class's init sync state, no push.
         BranchingView view = currentView();
-        SyncState state = klass.getClassInitSyncState();
+        SyncState<?> state = klass.getClassInitSyncState();
         ConflictingLocations conflicts;
         synchronized (state) {
             conflicts = view.pull(state);

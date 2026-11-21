@@ -69,13 +69,13 @@ final class SeenSetCompression {
             // collect the seen sets for all of the entry commits pointed
             // to by sync states (locks, threads, etc.)
             Map<Commit, SeenSet> seenBy = new HashMap<>();
-            synchronized (SyncState.ALL) {
+            synchronized (CommitSyncState.ALL) {
                 // each sync state pointing at a commit gets the next bit position for this run
                 int position = 0;
-                for (SyncState s : SyncState.ALL) {
-                    if (s.commit != null) {
+                for (CommitSyncState s : CommitSyncState.ALL) {
+                    if (s.get() != null) {
                         // To syncstates maybe be pointing at the same commit
-                        seenBy.merge(s.commit, SeenSet.of(position), SeenSet::union);
+                        seenBy.merge(s.get(), SeenSet.of(position), SeenSet::union);
                         position++;
                     }
                 }

@@ -22,7 +22,6 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.lang.ref.Cleaner;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.oracle.truffle.espresso.impl.Field;
@@ -30,23 +29,29 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 public final class ObjectSyncState {
 
-  final SyncState lock = new SyncState(SyncState.Kind.LOCK);
-  final ConcurrentHashMap<Field, SyncState> volatiles = new ConcurrentHashMap<>();
+  // the model whose kind of sync state this object's states are
+  private final MemoryModel model;
+  final SyncState<?> lock;
+  final ConcurrentHashMap<Field, SyncState<?>> volatiles = new ConcurrentHashMap<>();
   // an array's volatile and atomic accesses: one state shared by all its elements
-  final SyncState volatileArray = new SyncState(SyncState.Kind.VOLATILE);
+  final SyncState<?> volatileArray;
 
-  private ObjectSyncState() {}
+  private ObjectSyncState(MemoryModel model) {
+      this.model = model;
+      this.lock = model.newSyncState(SyncState.Kind.LOCK);
+      this.volatileArray = model.newSyncState(SyncState.Kind.VOLATILE);
+  }
 
-  /** A fresh holder for {@code owner}; {@code cleaner} releases every commit it holds once {@code owner} dies. */
-  public static ObjectSyncState createFor(StaticObject owner, Cleaner cleaner) {
-      ObjectSyncState state = new ObjectSyncState();
+  /** A fresh holder for {@code owner}, whose states the model releases once {@code owner} dies. */
+  public static ObjectSyncState createFor(StaticObject owner, MemoryModel model) {
+      ObjectSyncState state = new ObjectSyncState(model);
       VersioningStats.describeObject(state.lock, owner);
       VersioningStats.describeObject(state.volatileArray, owner);
-      cleaner.register(owner, state::releaseSyncStates);
+      model.getCleaner().register(owner, state::releaseSyncStates);
       return state;
   }
 
-  private static void release(SyncState s) {
+  private static void release(SyncState<?> s) {
       if (s != null) {
           s.set(null);
       }
@@ -58,20 +63,20 @@ public final class ObjectSyncState {
       volatiles.values().forEach(ObjectSyncState::release);
   }
 
-  public SyncState getLockSyncState() {
+  public SyncState<?> getLockSyncState() {
       return lock;
   }
 
-  public SyncState getVolatileSyncState(Field f) {
+  public SyncState<?> getVolatileSyncState(Field f) {
       // only run the construction of a new SyncState if there is nothing there
       return volatiles.computeIfAbsent(f, k -> {
-          SyncState state = new SyncState(SyncState.Kind.VOLATILE);
+          SyncState<?> state = model.newSyncState(SyncState.Kind.VOLATILE);
           VersioningStats.describeField(state, lock, f);
           return state;
       });
   }
 
-  public SyncState getVolatileArraySyncState() {
+  public SyncState<?> getVolatileArraySyncState() {
       return volatileArray;
   }
 
