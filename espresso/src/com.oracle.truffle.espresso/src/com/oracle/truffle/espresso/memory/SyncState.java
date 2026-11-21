@@ -24,9 +24,9 @@ package com.oracle.truffle.espresso.memory;
 
 /**
  * The state for one synchronisation object (a lock, a volatile field, a class's initialisation, a
- * thread, or linear's global history): the version released to it, {@code null} until the first push,
- * and the clock of the thread that released it. What a version is, and how a state takes and lets go of
- * one, belongs to the subclass the model's representation makes ({@link CommitSyncState},
+ * thread, or linear's global history): the version released to it and the clock of the thread that
+ * released it. What a version is, what a state holds before the first push, and how a state takes and lets
+ * go of a version, belong to the subclass the model's representation makes ({@link CommitSyncState},
  * {@link SnapshotSyncState}). Accessed under the lock for locks, and under {@code synchronized} on this
  * object otherwise.
  */
@@ -48,9 +48,12 @@ public abstract class SyncState<V> {
         this.kind = kind;
     }
 
-    /** The version this state holds, or null if nothing has been released to it. */
+    /** The version this state holds, which before the first push is whatever the subclass starts with. */
     abstract V get();
 
     /** Hold {@code next} (or nothing) in place of the version held now. */
     abstract void set(V next);
+
+    /** The owner of this state has been collected, so nothing will pull from it again and it lets go of what it holds. */
+    abstract void release();
 }

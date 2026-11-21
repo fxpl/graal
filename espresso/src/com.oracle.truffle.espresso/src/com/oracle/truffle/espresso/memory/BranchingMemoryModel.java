@@ -138,9 +138,8 @@ public final class BranchingMemoryModel implements MemoryModel {
         // store the state on the thread object itself
         context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);
 
-        // once the thread object is collected nothing can join it, so the representation may let go of
-        // what its state holds
-        cleaner.register(thread, () -> representation.onThreadDied(state));
+        // once the thread object is collected nothing can join it, so its state lets go of what it holds
+        cleaner.register(thread, state::release);
         return state;
     }
 

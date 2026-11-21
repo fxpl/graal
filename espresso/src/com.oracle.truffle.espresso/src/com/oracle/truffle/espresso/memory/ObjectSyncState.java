@@ -53,7 +53,7 @@ public final class ObjectSyncState {
 
   private static void release(SyncState<?> s) {
       if (s != null) {
-          s.set(null);
+          s.release();
       }
   }
 

@@ -87,7 +87,7 @@ public final class LinearMemoryModel implements MemoryModel {
         SyncState<?> state = newSyncState(SyncState.Kind.THREAD);
         VersioningStats.describeThread(state, thread);
         context.getMeta().java_lang_Thread_0syncState.setHiddenObject(thread, state);
-        cleaner.register(thread, () -> state.set(null));
+        cleaner.register(thread, state::release);
         return state;
     }
 

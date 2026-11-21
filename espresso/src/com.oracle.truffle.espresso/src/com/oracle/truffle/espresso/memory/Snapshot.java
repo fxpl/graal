@@ -24,10 +24,12 @@ package com.oracle.truffle.espresso.memory;
 
 final class Snapshot {
 
+    // the snapshot of nothing written, which every snapshot grows from
+    static final Snapshot EMPTY = new Snapshot(Treap.empty());
+
     private final Treap<ObjectNumber, ObjectChanges> objects;
 
-    Snapshot(Treap<ObjectNumber, ObjectChanges> objects) {
+    private Snapshot(Treap<ObjectNumber, ObjectChanges> objects) {
         this.objects = objects;
     }
-
 }

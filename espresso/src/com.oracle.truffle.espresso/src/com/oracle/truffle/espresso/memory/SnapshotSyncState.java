@@ -29,7 +29,8 @@ package com.oracle.truffle.espresso.memory;
  */
 final class SnapshotSyncState extends SyncState<Snapshot> {
 
-    private Snapshot snapshot;
+    // nothing released to it yet is the snapshot of nothing written
+    private Snapshot snapshot = Snapshot.EMPTY;
 
     SnapshotSyncState(Kind kind) {
         super(kind);
@@ -43,5 +44,10 @@ final class SnapshotSyncState extends SyncState<Snapshot> {
     @Override
     void set(Snapshot next) {
         snapshot = next;
+    }
+
+    // nothing is counted, so the snapshot is collected with this state once nothing else holds it
+    @Override
+    void release() {
     }
 }

@@ -50,6 +50,12 @@ final class CommitSyncState extends SyncState<Commit> {
         return commit;
     }
 
+    // letting go of the commit releases this state's reference, so commits only it kept alive are released too
+    @Override
+    void release() {
+        set(null);
+    }
+
     /**
      * Point this state at {@code c} (or at nothing), taking this state's reference to it and releasing
      * the one it held. The new reference is taken before the old one is released, so moving to a

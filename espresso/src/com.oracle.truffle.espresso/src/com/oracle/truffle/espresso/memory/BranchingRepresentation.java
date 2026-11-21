@@ -40,9 +40,6 @@ interface BranchingRepresentation {
     /** Object {@code number} has been collected, and is already marked dead. */
     void onObjectDied(ObjectNumber number);
 
-    /** The thread whose sync state is {@code state} has been collected, so nothing will join it now. */
-    void onThreadDied(SyncState<?> state);
-
     /** The run is over and every guest thread has ended, so report what is kept. */
     void dispose(Cleaner cleaner);
 }

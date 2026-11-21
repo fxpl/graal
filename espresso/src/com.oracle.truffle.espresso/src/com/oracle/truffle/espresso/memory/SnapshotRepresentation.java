@@ -48,11 +48,6 @@ final class SnapshotRepresentation implements BranchingRepresentation {
     public void onObjectDied(ObjectNumber number) {
     }
 
-    // nothing is reference counted, so what the state held is collected once nothing else holds it
-    @Override
-    public void onThreadDied(SyncState<?> state) {
-    }
-
     // nothing to report yet
     @Override
     public void dispose(Cleaner cleaner) {

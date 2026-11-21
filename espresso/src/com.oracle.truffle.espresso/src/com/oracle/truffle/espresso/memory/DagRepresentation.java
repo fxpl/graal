@@ -58,12 +58,6 @@ final class DagRepresentation implements BranchingRepresentation {
         deadObjectCount.incrementAndGet();
     }
 
-    // the state lets go of its commit, so the commits only it kept alive are released
-    @Override
-    public void onThreadDied(SyncState<?> state) {
-        state.set(null);
-    }
-
     @Override
     public void dispose(Cleaner cleaner) {
         VersioningStats.report("branching", cleaner);

@@ -74,12 +74,30 @@ final class SnapshotView implements BranchingView {
     // the working value, else the snapshot's, else version 0 in the raw slot
     @Override
     public Object readField(StaticObject holder, Field field) {
-        throw EspressoError.unimplemented("SnapshotView.readField");
+        assert activated : "a read through a view before its thread started";
+        Object value = workspace.workingField(holder, field);
+        if (value != null) {
+            ModelEvents.workingFieldHit();
+            return value;
+        }
+
+        if (state().get() != null) {
+            // Snapshot s = state().get();
+            // s.  holder.getObjectNumber(), field;
+        }
+
+        if (value == null) {
+            value = field.getRawValue(holder);
+        }
+
+        workspace.addWorkingField(holder, field, value);
+        return value;
     }
 
     // into the working copy only, the snapshot changes when the write leaves the thread
     @Override
     public void writeField(StaticObject holder, Field field, Object value) {
+        assert activated : "a write through a view before its thread started";
         workspace.writeField(holder, field, value);
     }
 
