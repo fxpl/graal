@@ -22,6 +22,9 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.Map;
+import java.util.function.BiConsumer;
+
 final class Treap<K extends Comparable<K>, V> {
 
     static final class Node<K extends Comparable<K>, V> {
@@ -104,6 +107,103 @@ final class Treap<K extends Comparable<K>, V> {
                 return get(node.right, key);
             }
         }
+
+        // a tree cut at a key, the keys below it and above it, with the key's own value if the tree held it
+        record Split<K extends Comparable<K>, V>(Node<K, V> below, V value, Node<K, V> above) {
+        }
+
+        // cutting at the root's own key copies nothing, which is what keeps a union of same-shaped trees cheap
+        static <K extends Comparable<K>, V> Split<K, V> split(Node<K, V> node, K key) {
+            if (node == null) {
+                return new Split<>(null, null, null);
+            }
+
+            int compare = key.compareTo(node.key);
+
+            if (compare == 0) {
+                // key == node.key
+                return new Split<>(node.left, node.value, node.right);
+
+            } else if (compare < 0) {
+                // key < node.key, so this node and its right subtree are above the key
+                Split<K, V> s = split(node.left, key);
+                return new Split<>(s.below(), s.value(), copyIfChanged(node, s.above(), node.right, node.value));
+
+            } else {
+                // key > node.key, so this node and its left subtree are below the key
+                Split<K, V> s = split(node.right, key);
+                return new Split<>(copyIfChanged(node, node.left, s.below(), node.value), s.value(), s.above());
+            }
+        }
+
+        // Mine and theirs together. The higher of the two roots goes on top, the other tree is split at its key,
+        // and each side is unioned with the matching side of the split. A key both hold with different values
+        // goes to the resolver, and a key only theirs holds is taken.
+        static <K extends Comparable<K>, V> Node<K, V> union(Node<K, V> mine, Node<K, V> theirs, Resolver<K, V> resolver) {
+            if (mine == theirs || theirs == null) {
+                // the same subtree on both sides, kept whole without a look inside, or nothing of theirs here
+                return mine;
+            }
+            if (mine == null) {
+                // all of this subtree is theirs alone
+                forEach(theirs, resolver::taken);
+                return theirs;
+            }
+
+            if (mine.priority >= theirs.priority) {
+                // my root stays on top, so their tree is split at its key
+                Split<K, V> s = split(theirs, mine.key);
+                Node<K, V> left = union(mine.left, s.below(), resolver);
+                Node<K, V> right = union(mine.right, s.above(), resolver);
+                V value = s.value() == null || s.value() == mine.value ? mine.value : resolver.resolve(mine.key, mine.value, s.value());
+                // a result equal to their node is their node, so a puller converges on nodes others already hold
+                // and later unions with them find the same subtree on both sides
+                if (mine.key.compareTo(theirs.key) == 0 && left == theirs.left && right == theirs.right && value == theirs.value) {
+                    return theirs;
+                }
+                return copyIfChanged(mine, left, right, value);
+
+            } else {
+                // their root goes on top, so my tree is split at its key
+                Split<K, V> s = split(mine, theirs.key);
+                Node<K, V> left = union(s.below(), theirs.left, resolver);
+                Node<K, V> right = union(s.above(), theirs.right, resolver);
+                V value;
+                if (s.value() == null) {
+                    resolver.taken(theirs.key, theirs.value);
+                    value = theirs.value;
+                } else {
+                    value = s.value() == theirs.value ? theirs.value : resolver.resolve(theirs.key, s.value(), theirs.value);
+                }
+                return copyIfChanged(theirs, left, right, value);
+            }
+        }
+
+        static <K extends Comparable<K>, V> void forEach(Node<K, V> node, BiConsumer<K, V> action) {
+            if (node == null) {
+                return;
+            }
+            forEach(node.left, action);
+            action.accept(node.key, node.value);
+            forEach(node.right, action);
+        }
+
+        // node with these children and value, or node itself when none changed, so unchanged subtrees stay shared
+        static <K extends Comparable<K>, V> Node<K, V> copyIfChanged(Node<K, V> node, Node<K, V> left, Node<K, V> right, V value) {
+            if (left == node.left && right == node.right && value == node.value) {
+                return node;
+            }
+            return new Node<>(node.key, value, left, right);
+        }
+    }
+
+    /** How a union settles the keys it meets, supplied by the caller, who alone knows what the values mean. */
+    interface Resolver<K, V> {
+        /** The value to keep for a key both trees hold with different values, mine and theirs. */
+        V resolve(K key, V mine, V theirs);
+
+        /** A key only theirs holds, which the union takes as it is. */
+        void taken(K key, V theirs);
     }
 
     private final Node<K, V> root;
@@ -128,7 +228,22 @@ final class Treap<K extends Comparable<K>, V> {
         return new Treap<>(Node.put(root, key, value));
     }
 
+    // every entry put into one new treap, built node by node so only the result is wrapped
+    Treap<K, V> putAll(Map<K, V> entries) {
+        Node<K, V> result = root;
+        for (Map.Entry<K, V> e : entries.entrySet()) {
+            result = Node.put(result, e.getKey(), e.getValue());
+        }
+        return new Treap<>(result);
+    }
+
     V get(K key) {
         return Node.get(root, key);
+    }
+
+    /** This treap and {@code theirs} together, keeping whatever both share, with {@code resolver} settling the keys that differ. */
+    Treap<K, V> union(Treap<K, V> theirs, Resolver<K, V> resolver) {
+        Node<K, V> result = Node.union(root, theirs.root, resolver);
+        return result == root ? this : result == theirs.root ? theirs : new Treap<>(result);
     }
 }

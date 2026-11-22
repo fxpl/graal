@@ -346,6 +346,31 @@ public final class EspressoOptions {
                     usageSyntax = "epoch|vector") //
     public static final OptionKey<SyncShareClockMode> SyncShareClock = new OptionKey<>(SyncShareClockMode.EPOCH, SYNC_SHARE_CLOCK_OPTION_TYPE);
 
+    /** How the branching model keeps its versions (Sync-as-Share). */
+    public enum SyncShareRepresentationMode {
+        DAG,
+        SNAPSHOT
+    }
+
+    private static final OptionType<SyncShareRepresentationMode> SYNC_SHARE_REPRESENTATION_OPTION_TYPE = new OptionType<>("SyncShareRepresentation",
+                    new Function<String, SyncShareRepresentationMode>() {
+                        @Override
+                        public SyncShareRepresentationMode apply(String s) {
+                            try {
+                                return SyncShareRepresentationMode.valueOf(s.toUpperCase(Locale.ROOT));
+                            } catch (IllegalArgumentException e) {
+                                throw new IllegalArgumentException("--java.SyncShareRepresentation: can be 'dag' or 'snapshot'.");
+                            }
+                        }
+                    });
+
+    @Option(help = "How the branching model keeps its versions: 'dag' (a DAG of commits) or 'snapshot' (snapshots of every object's latest writes, which need --java.SyncShareClock=vector).", //
+                    category = OptionCategory.EXPERT, //
+                    stability = OptionStability.EXPERIMENTAL, //
+                    usageSyntax = "dag|snapshot") //
+    public static final OptionKey<SyncShareRepresentationMode> SyncShareRepresentation = new OptionKey<>(SyncShareRepresentationMode.DAG,
+                    SYNC_SHARE_REPRESENTATION_OPTION_TYPE);
+
     public enum SyncShareVolatileResolutionMode {
         CONFLICT,
         THEIRS_IN_JDK,

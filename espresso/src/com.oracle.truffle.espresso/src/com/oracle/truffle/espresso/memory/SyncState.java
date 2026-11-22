@@ -24,10 +24,10 @@ package com.oracle.truffle.espresso.memory;
 
 /**
  * The state for one synchronisation object (a lock, a volatile field, a class's initialisation, a
- * thread, or linear's global history): the version released to it and the clock of the thread that
- * released it. What a version is, what a state holds before the first push, and how a state takes and lets
- * go of a version, belong to the subclass the model's representation makes ({@link CommitSyncState},
- * {@link SnapshotSyncState}). Accessed under the lock for locks, and under {@code synchronized} on this
+ * thread, or linear's global history): the version released to it, with the clock of the thread that
+ * released it. What a version is, what kind of clock goes with it, what a state holds before the first
+ * push, and how a state takes and lets go of a version, belong to the subclass the model's representation
+ * makes ({@link CommitSyncState}, {@link SnapshotSyncState}). Accessed under the lock for locks, and under {@code synchronized} on this
  * object otherwise.
  */
 public abstract class SyncState<V> {
@@ -40,8 +40,6 @@ public abstract class SyncState<V> {
         GLOBAL
     }
 
-    // the clock of the thread that last set the version, so a pull can tell it already has it
-    Clock clock;
     final Kind kind;
 
     SyncState(Kind kind) {

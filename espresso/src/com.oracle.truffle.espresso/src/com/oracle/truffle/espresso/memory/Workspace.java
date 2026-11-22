@@ -171,8 +171,16 @@ final class Workspace {
         }
     }
 
-    /** Nothing is staged any more, as after a commit, the thread's values left as they are. */
-    void clearStaged() {
+    /**
+     * The staged writes have been committed, so they are counted for the stats and are no longer staged, the
+     * thread's values left as they are. Staging only grows between commits, so its size now is its peak.
+     */
+    void commitStaged() {
+        Staged staged = stagedCounts();
+        if (staged.total() > 0) {
+            ModelEvents.stagingObserved(staged.total());
+            ModelEvents.committed(staged.fields(), staged.arrays(), staged.elements());
+        }
         for (WorkingObject w : stagedObjects.values()) {
             w.written.clear();
         }

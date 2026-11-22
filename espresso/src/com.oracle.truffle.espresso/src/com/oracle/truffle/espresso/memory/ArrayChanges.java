@@ -52,6 +52,11 @@ final class ArrayChanges implements ObjectChanges {
       return new ArrayChanges(values, written);
   }
 
+  // the elements set in written, as when a merge takes some from the other side
+  static ArrayChanges of(Object values, BitSet written) {
+      return new ArrayChanges(values, written);
+  }
+
   BitSet written() {
       return written;
   }

@@ -99,14 +99,14 @@ public final class DagView implements BranchingView {
         if (s == null) {
             SyncState<?> bound = bindState.get();
             assert bound != null : "binding a view produced no sync state";
-            s = commits(bound);
+            s = asCommitState(bound);
             unboundOrState = s;
         }
         return s;
     }
 
     // every sync state under this view's model was made by DagRepresentation, so it holds commits
-    private static CommitSyncState commits(SyncState<?> state) {
+    private static CommitSyncState asCommitState(SyncState<?> state) {
         return (CommitSyncState) state;
     }
 
@@ -231,16 +231,12 @@ public final class DagView implements BranchingView {
         // The staged fields of each live object, plus the staged elements of each live array, which are then
         // no longer staged; the working values stay, as they are now what the head says
         Map<ObjectNumber, ObjectChanges> changes = workspace.stagedChanges();
-        Workspace.Staged staged = workspace.stagedCounts();
-        workspace.clearStaged();
+        workspace.commitStaged();
 
         if (changes.isEmpty()) {
             return;
         }
 
-        // staging only grows between commits, so its size now is its peak since the last one
-        ModelEvents.stagingObserved(staged.total());
-        ModelEvents.committed(staged.fields(), staged.arrays(), staged.elements());
         VersioningStats.countCommit();
 
         Commit head = state().get();
@@ -489,7 +485,7 @@ public final class DagView implements BranchingView {
     @Override
     public ConflictingLocations pull(SyncState<?> from) {
         commitStaging();
-        return merge(commits(from));
+        return merge(asCommitState(from));
     }
 
     // the thread's last commit, which its own state then holds for a join to pull
@@ -505,7 +501,7 @@ public final class DagView implements BranchingView {
     // commit, compress and push the changes to the 'to' location
     @Override
     public void push(SyncState<?> pushedTo) {
-        CommitSyncState to = commits(pushedTo);
+        CommitSyncState to = asCommitState(pushedTo);
         // let go of to's reference first: if to held our head, the head may then be exclusive to us
         // and the commit can fold into it
         Commit old = to.get();

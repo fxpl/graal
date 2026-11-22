@@ -87,4 +87,14 @@ final class VectorClock implements Clock {
         int theirs = v.clock.length > thread ? v.clock[thread] : 0;
         return ours <= theirs;
     }
+
+    /** This clock's owner and own entry, the stamp for writes committed at the event this clock marks. */
+    Epoch epoch() {
+        return new Epoch(thread, clock[thread]);
+    }
+
+    /** Whether this clock has seen the event {@code epoch} marks. */
+    boolean hasSeen(Epoch epoch) {
+        return epoch.thread() < clock.length && clock[epoch.thread()] >= epoch.sequence();
+    }
 }

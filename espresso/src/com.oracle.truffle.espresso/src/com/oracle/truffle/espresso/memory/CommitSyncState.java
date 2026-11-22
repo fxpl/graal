@@ -37,6 +37,9 @@ final class CommitSyncState extends SyncState<Commit> {
 
     private Commit commit;
 
+    // the clock of the thread that last set the commit, so a pull can tell it already has it
+    Clock clock;
+
     // every live state, so compression can find the commits they hold, held weakly so dead states drop out
     static final Set<CommitSyncState> ALL = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 

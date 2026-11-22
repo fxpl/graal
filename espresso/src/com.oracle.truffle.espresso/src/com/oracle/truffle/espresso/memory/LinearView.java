@@ -314,16 +314,9 @@ public final class LinearView implements MemoryView {
         return workspace.stagedChanges();
     }
 
-    // Clear staging once the commit holding it is appended. Both kinds of write are counted here for the
-    // stats: staging only grows between commits, so its size now is also its peak
+    // Clear staging once the commit holding it is appended
     private void emptyChanges() {
-        Workspace.Staged staged = workspace.stagedCounts();
-        workspace.clearStaged();
-
-        if (staged.fields() > 0 || staged.arrays() > 0 || staged.elements() > 0) {
-            ModelEvents.stagingObserved(staged.total());
-            ModelEvents.committed(staged.fields(), staged.arrays(), staged.elements());
-        }
+        workspace.commitStaged();
     }
 
     // In linear every push is an atomic pull then push. To hold the global lock briefly, pull first

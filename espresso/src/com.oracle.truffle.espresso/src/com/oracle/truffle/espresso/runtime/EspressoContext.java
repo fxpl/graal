@@ -462,7 +462,15 @@ public final class EspressoContext implements RuntimeAccess<Klass, Method, Field
                     this.memoryModel = new LinearMemoryModel(this, ClockFactory.of(getLanguage().getSyncShareClockMode()));
                     break;
                 case BRANCHING:
-                    this.memoryModel = BranchingMemoryModel.withDag(this, ClockFactory.of(getLanguage().getSyncShareClockMode()));
+                    if (getLanguage().getSyncShareRepresentation() == EspressoOptions.SyncShareRepresentationMode.SNAPSHOT) {
+                        // a snapshot merge orders each pair of writes by the clocks, which only a vector clock can do
+                        if (getLanguage().getSyncShareClockMode() != EspressoOptions.SyncShareClockMode.VECTOR) {
+                            throw EspressoError.fatal("--java.SyncShareRepresentation=snapshot needs --java.SyncShareClock=vector");
+                        }
+                        this.memoryModel = BranchingMemoryModel.withSnapshots(this);
+                    } else {
+                        this.memoryModel = BranchingMemoryModel.withDag(this, ClockFactory.of(getLanguage().getSyncShareClockMode()));
+                    }
                     break;
                 default:
                     throw EspressoError.shouldNotReachHere("Unknown memory model: " + getLanguage().getMemoryModelMode());

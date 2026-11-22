@@ -32,6 +32,10 @@ final class SnapshotSyncState extends SyncState<Snapshot> {
     // nothing released to it yet is the snapshot of nothing written
     private Snapshot snapshot = Snapshot.EMPTY;
 
+    // the clock of the thread that last set the snapshot, null until then, which a merge needs to order
+    // each pair of writes, and which for a thread's own state is that thread's clock
+    VectorClock clock;
+
     SnapshotSyncState(Kind kind) {
         super(kind);
     }
