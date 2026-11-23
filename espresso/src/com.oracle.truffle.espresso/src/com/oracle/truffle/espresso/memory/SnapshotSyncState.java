@@ -22,6 +22,10 @@
  */
 package com.oracle.truffle.espresso.memory;
 
+import java.util.Collections;
+import java.util.Set;
+import java.util.WeakHashMap;
+
 /**
  * A sync state holding a {@link Snapshot}. Snapshots are immutable and nothing counts references to
  * them, so the state only keeps the one released to it, and what it let go of is collected once nothing
@@ -36,8 +40,16 @@ final class SnapshotSyncState extends SyncState<Snapshot> {
     // each pair of writes, and which for a thread's own state is that thread's clock
     VectorClock clock;
 
+    // every live state, for the snapshots report at exit, held weakly so dead states drop out. Only kept when
+    // that report is recorded, which a recording begun with the host VM decides before this class loads
+    static final Set<SnapshotSyncState> ALL = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+    private static final boolean IS_REGISTERED = new ModelEvents.Snapshots().isEnabled();
+
     SnapshotSyncState(Kind kind) {
         super(kind);
+        if (IS_REGISTERED) {
+            ALL.add(this);
+        }
     }
 
     @Override

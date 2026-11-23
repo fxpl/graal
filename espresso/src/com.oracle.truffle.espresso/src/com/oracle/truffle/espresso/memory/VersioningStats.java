@@ -33,6 +33,7 @@ import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -122,6 +123,44 @@ final class VersioningStats {
         if (NAMING) {
             commitsMade.put(commit, names.get(thread) + " #" + threadCommits.get()[0] + (merge ? " merge" : ""));
         }
+    }
+
+    /**
+     * Report the snapshots the snapshot representation leaves, once, as the context closes and after every
+     * guest thread has ended. {@code cleaner} is the model's, which releases dead owners' sync states.
+     */
+    static void reportSnapshots(Cleaner cleaner) {
+        ModelEvents.Snapshots e = new ModelEvents.Snapshots();
+        if (!e.isEnabled()) {
+            return;
+        }
+        // release the sync states of objects that have died, so only those still reachable are counted
+        quiesce(cleaner);
+        List<SnapshotSyncState> states;
+        synchronized (SnapshotSyncState.ALL) {
+            states = new ArrayList<>(SnapshotSyncState.ALL);
+        }
+        // a snapshot held by several states counts once, and a node shared by several snapshots counts once
+        Set<Snapshot> distinct = Collections.newSetFromMap(new IdentityHashMap<>());
+        long holding = 0;
+        for (SnapshotSyncState s : states) {
+            if (s.get() != Snapshot.EMPTY) {
+                holding++;
+                distinct.add(s.get());
+            }
+        }
+        Set<Object> nodes = Collections.newSetFromMap(new IdentityHashMap<>());
+        long entries = 0;
+        for (Snapshot snapshot : distinct) {
+            entries += snapshot.size();
+            snapshot.addNodesTo(nodes);
+        }
+        e.live = states.size();
+        e.holding = holding;
+        e.distinct = distinct.size();
+        e.entries = entries;
+        e.nodes = nodes.size();
+        e.commit();
     }
 
     /**

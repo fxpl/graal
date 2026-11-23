@@ -162,6 +162,30 @@ final class ModelEvents {
         }
     }
 
+    /** A purge of dead objects' changes from a view's version, from its start to its end. */
+    @Name(PREFIX + "Purge") @Label("Purge") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)
+    static final class Purge extends Event {
+    }
+
+    /** A commit of a thread's staged writes into its version, from the version's change to its end. */
+    @Name(PREFIX + "Committing") @Label("Committing") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)
+    static final class Committing extends Event {
+    }
+
+    /** A read that found no working value, answered from the thread's snapshot or from version 0. */
+    @Name(PREFIX + "SnapshotRead") @Label("Snapshot read") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)
+    static final class SnapshotRead extends Event {
+        @Label("Found a value in the snapshot") boolean found;
+    }
+
+    static void snapshotRead(boolean found) {
+        SnapshotRead e = new SnapshotRead();
+        if (e.isEnabled()) {
+            e.found = found;
+            e.commit();
+        }
+    }
+
     @Name(PREFIX + "StagedFieldsDrained") @Label("Staged fields drained") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)
     static final class StagedFieldsDrained extends Event {
         @Label("Staged writes dropped") long fields;
@@ -325,6 +349,8 @@ final class ModelEvents {
         NOTHING,        // they had no head, no walk
         SAME,           // the same head, no walk
         EPOCH_INCLUDED, // one thread made both heads, theirs first, so already ours, no walk
+        CLOCK_INCLUDED, // snapshots, my clock has seen theirs, so already ours, no union
+        CLOCK_FAST_FORWARD, // snapshots, their clock has seen mine, so we took their snapshot, no union
         INCLUDED,       // walked, theirs was already in our history
         CONFLICT,       // walked, both sides wrote a location
         FAST_FORWARD,   // walked, ours was in their history, so we took their head
@@ -367,6 +393,16 @@ final class ModelEvents {
         @Label("Live") long live;
         @Label("Holding a commit") long holding;
         @Label("Distinct commits held") long distinct;
+    }
+
+    // The snapshots left at the end, emitted once as the context closes
+    @Name(PREFIX + "Snapshots") @Label("Snapshots") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)
+    static final class Snapshots extends Event {
+        @Label("Live sync states") long live;
+        @Label("Holding a non-empty snapshot") long holding;
+        @Label("Distinct snapshots held") long distinct;
+        @Label("Entries summed over the distinct snapshots") long entries;
+        @Label("Distinct treap nodes reachable") long nodes;
     }
 
     @Name(PREFIX + "LiveGraph") @Label("Live graph") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)

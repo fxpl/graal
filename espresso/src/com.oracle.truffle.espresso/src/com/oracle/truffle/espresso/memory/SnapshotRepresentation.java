@@ -23,6 +23,7 @@
 package com.oracle.truffle.espresso.memory;
 
 import java.lang.ref.Cleaner;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 /**
@@ -33,9 +34,12 @@ import java.util.function.Supplier;
  */
 final class SnapshotRepresentation implements BranchingRepresentation {
 
+    // objects collected so far, which each view compares with the count at its own last purge
+    private final AtomicLong deadObjectCount = new AtomicLong();
+
     @Override
     public BranchingView newView(Supplier<SyncState<?>> bindState, int threadId) {
-        return new SnapshotView(bindState, VectorClock.start(threadId));
+        return new SnapshotView(bindState, deadObjectCount, VectorClock.start(threadId));
     }
 
     @Override
@@ -43,13 +47,15 @@ final class SnapshotRepresentation implements BranchingRepresentation {
         return new SnapshotSyncState(kind);
     }
 
-    // a dead object can never be read again, so its entries only cost memory, and are not yet dropped
+    // a dead object can never be read again, so its entries only cost memory, and each view drops them once enough have died
     @Override
     public void onObjectDied(ObjectNumber number) {
+        deadObjectCount.incrementAndGet();
     }
 
-    // nothing to report yet
+    // how many snapshots are left and how much they share, for the stats
     @Override
     public void dispose(Cleaner cleaner) {
+        VersioningStats.reportSnapshots(cleaner);
     }
 }

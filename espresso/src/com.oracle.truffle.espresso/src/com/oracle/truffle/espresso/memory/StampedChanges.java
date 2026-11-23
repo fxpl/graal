@@ -33,6 +33,6 @@ sealed interface StampedChanges permits StampedFieldChanges, StampedArrayChanges
     record Write(Object value, Epoch epoch) {
     }
 
-    /** New changes holding the writes of {@code older} and of these, these winning where both wrote. Neither is modified. */
-    StampedChanges createFoldWithOlder(StampedChanges older);
+    /** New changes holding these writes updated with {@code newer}'s, newer winning where both wrote. Neither is modified. */
+    StampedChanges updateWith(StampedChanges newer);
 }

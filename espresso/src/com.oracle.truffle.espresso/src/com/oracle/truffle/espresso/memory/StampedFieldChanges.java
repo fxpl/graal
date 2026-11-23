@@ -60,12 +60,13 @@ final class StampedFieldChanges implements StampedChanges {
     }
 
     @Override
-    public StampedChanges createFoldWithOlder(StampedChanges older) {
-        if (!(older instanceof StampedFieldChanges o)) {
+    public StampedChanges updateWith(StampedChanges newer) {
+        if (!(newer instanceof StampedFieldChanges n)) {
             throw EspressoError.shouldNotReachHere("an object's changes are always of one kind");
         }
-        Map<Field, Write> folded = new HashMap<>(o.writes);
-        folded.putAll(writes);
-        return new StampedFieldChanges(Map.copyOf(folded));
+        // these writes, with the fields newer wrote replaced
+        Map<Field, Write> updated = new HashMap<>(writes);
+        updated.putAll(n.writes);
+        return new StampedFieldChanges(Map.copyOf(updated));
     }
 }

@@ -92,20 +92,20 @@ final class StampedArrayChanges implements StampedChanges {
     }
 
     @Override
-    public StampedChanges createFoldWithOlder(StampedChanges older) {
-        if (!(older instanceof StampedArrayChanges o)) {
+    public StampedChanges updateWith(StampedChanges newer) {
+        if (!(newer instanceof StampedArrayChanges n)) {
             throw EspressoError.shouldNotReachHere("an object's changes are always of one kind");
         }
-        Object folded = Array.newInstance(values.getClass().getComponentType(), epochs.length);
-        // the older writes first, then these over them
-        copyWritten(o.epochs, o.values, folded);
-        copyWritten(epochs, values, folded);
-        Epoch[] foldedEpochs = o.epochs.clone();
-        for (int i = 0; i < epochs.length; i++) {
-            if (epochs[i] != null) {
-                foldedEpochs[i] = epochs[i];
+        Object updated = Array.newInstance(values.getClass().getComponentType(), epochs.length);
+        // these writes first, then newer's over them
+        copyWritten(epochs, values, updated);
+        copyWritten(n.epochs, n.values, updated);
+        Epoch[] updatedEpochs = epochs.clone();
+        for (int i = 0; i < n.epochs.length; i++) {
+            if (n.epochs[i] != null) {
+                updatedEpochs[i] = n.epochs[i];
             }
         }
-        return new StampedArrayChanges(folded, foldedEpochs);
+        return new StampedArrayChanges(updated, updatedEpochs);
     }
 }

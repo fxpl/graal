@@ -24,9 +24,11 @@ package com.oracle.truffle.espresso.memory;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.memory.ModelEvents.MergeOutcome;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
@@ -55,8 +57,14 @@ final class SnapshotView implements BranchingView {
     // this thread's working copies, with its uncommitted writes marked
     private final Workspace workspace = new Workspace();
 
-    SnapshotView(Supplier<SyncState<?>> bindState, VectorClock start) {
+    // A count shared between views for the number of objects purged,
+    // and the number we saw at the last purge
+    private final AtomicLong deadObjectCount;
+    private long deadSetSizeAtLastPurge;
+
+    SnapshotView(Supplier<SyncState<?>> bindState, AtomicLong deadObjectCount, VectorClock start) {
         this.bindState = bindState;
+        this.deadObjectCount = deadObjectCount;
         this.start = start;
     }
 
@@ -105,6 +113,7 @@ final class SnapshotView implements BranchingView {
         Snapshot snapshot = state().get();
         StampedChanges.Write write = snapshot.get(holder.getObjectNumber()) instanceof StampedFieldChanges f ? f.get(field) : null;
         value = write == null ? null : write.value();
+        ModelEvents.snapshotRead(write != null);
 
         if (value == null) {
             value = field.getRawValue(holder);
@@ -169,9 +178,30 @@ final class SnapshotView implements BranchingView {
             return;
         }
 
+        ModelEvents.Committing span = new ModelEvents.Committing();
+        span.begin();
         state().clock = clock().tick();
 
-        state().set(state().get().withChanges(changes, clock().epoch()));
+        state().set(state().get().withChangesAt(changes, clock().epoch()));
+        span.commit();
+    }
+
+    // the share of a snapshot that must have died since the last purge before it is walked
+    private static final double PURGE_FRACTION = 0.125;
+
+    // drop dead objects from this thread's snapshot, once enough have died to be worth walking it
+    private void purgeDead() {
+        long deadCount = deadObjectCount.get();
+        Snapshot snapshot = state().get();
+        // deaths are counted across the program, so this overstates how much of the snapshot is dead
+        if (deadCount - deadSetSizeAtLastPurge < snapshot.size() * PURGE_FRACTION) {
+            return;
+        }
+        ModelEvents.Purge span = new ModelEvents.Purge();
+        span.begin();
+        state().set(snapshot.withoutDead());
+        span.commit();
+        deadSetSizeAtLastPurge = deadCount;
     }
 
     // put the working writes into this thread's snapshot, then hand it to the sync state
@@ -179,6 +209,8 @@ final class SnapshotView implements BranchingView {
     public void push(SyncState<?> pushTo) {
         SnapshotSyncState to = asSnapshotState(pushTo);
         commitStaging();
+        // before the hand over, so the sync state is given a purged snapshot
+        purgeDead();
 
         to.set(state().get());
         to.clock = clock();
@@ -190,9 +222,17 @@ final class SnapshotView implements BranchingView {
         SnapshotSyncState from = asSnapshotState(pullFrom);
         commitStaging();
 
-        if (from.get() == Snapshot.EMPTY ||
-            from.get() == state().get() ||
-            from.clock.happensBefore(state().clock)) {
+        if (from.get() == Snapshot.EMPTY) {
+            ModelEvents.mergeSkipped(MergeOutcome.NOTHING);
+            return ConflictingLocations.NONE;
+        }
+        if (from.get() == state().get()) {
+            ModelEvents.mergeSkipped(MergeOutcome.SAME);
+            return ConflictingLocations.NONE;
+        }
+        if (from.clock.happensBefore(state().clock)) {
+            // I have seen everything they have
+            ModelEvents.mergeSkipped(MergeOutcome.CLOCK_INCLUDED);
             return ConflictingLocations.NONE;
         }
 
@@ -200,19 +240,45 @@ final class SnapshotView implements BranchingView {
             state().set(from.get());
             state().clock = state().clock.join(from.clock).tick();
             workspace.clear();
+            // their snapshot may hold objects that have died since it was pushed
+            purgeDead();
+            ModelEvents.mergeSkipped(MergeOutcome.CLOCK_FAST_FORWARD);
             return ConflictingLocations.NONE;
         }
 
+        // the merge span holds the union as its walk, as the DAG's holds its colouring walk
+        ModelEvents.Merge event = new ModelEvents.Merge();
+        event.begin();
+        ModelEvents.MergeWalk walk = new ModelEvents.MergeWalk();
+        walk.begin();
         Snapshot.Merged merged = state().get().merge(from.get(), clock(), from.clock);
+        walk.commit();
+
         if (merged.hasConflicts()) {
+            recordMerge(event, MergeOutcome.CONFLICT, merged);
             return merged.conflicts();
         }
 
         merged.taken().forEach(workspace::applyPulled);
         state().set(merged.snapshot());
         state().clock = clock().join(from.clock).tick();
+        // after the merge, which may have brought back objects that died since their snapshot was pushed
+        purgeDead();
 
+        recordMerge(event, MergeOutcome.MERGED, merged);
         return ConflictingLocations.NONE;
+    }
+
+    // visited counts objects here, not the DAG's commits, both those resolved and those taken whole, so that as
+    // for the DAG what is in both is visited less the two sides, and there is no side only mine holds to count
+    private static void recordMerge(ModelEvents.Merge event, MergeOutcome outcome, Snapshot.Merged merged) {
+        if (event.shouldCommit()) {
+            event.outcome = outcome.name();
+            event.visited = merged.resolved() + merged.theirsOnly();
+            event.mineOnly = 0;
+            event.theirsOnly = merged.theirsOnly();
+            event.commit();
+        }
     }
 
     // put the working writes into this thread's snapshot, which its own state holds for a join

@@ -301,7 +301,10 @@ public final class LinearView implements MemoryView {
     private void purgeDead() {
         long deadCount = deadObjectCount.get();
         if (state().get() != null && deadCount > deadSetSizeAtLastPurge) {
+            ModelEvents.Purge purge = new ModelEvents.Purge();
+            purge.begin();
             state().get().purgeObjects();
+            purge.commit();
             deadSetSizeAtLastPurge = deadCount;
         }
     }

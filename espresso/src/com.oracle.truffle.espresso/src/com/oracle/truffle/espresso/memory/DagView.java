@@ -224,7 +224,10 @@ public final class DagView implements BranchingView {
         // purge any dead objects from the head commit (non-recursive)
         long deadCount = deadObjectCount.get();
         if (state().get() != null && deadCount > deadSetSizeAtLastPurge) {
+            ModelEvents.Purge purge = new ModelEvents.Purge();
+            purge.begin();
             state().get().purgeObjects();
+            purge.commit();
             deadSetSizeAtLastPurge = deadCount;
         }
 
@@ -237,6 +240,8 @@ public final class DagView implements BranchingView {
             return;
         }
 
+        ModelEvents.Committing span = new ModelEvents.Committing();
+        span.begin();
         VersioningStats.countCommit();
 
         Commit head = state().get();
@@ -245,6 +250,7 @@ public final class DagView implements BranchingView {
             VersioningStats.describeCommit(next, state(), false);
         }
         setHead(next);
+        span.commit();
     }
 
     private void runSeenSetCompression() {
