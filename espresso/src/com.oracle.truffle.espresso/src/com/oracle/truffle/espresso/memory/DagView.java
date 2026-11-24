@@ -401,12 +401,12 @@ public final class DagView implements BranchingView {
             return ConflictingLocations.NONE;
         }
 
-        Map<ObjectNumber, Set<Field>> mineFieldsWritten = new HashMap<>();
+        Map<ObjectNumber, BitSet> mineFieldsWritten = new HashMap<>();
         Map<ObjectNumber, BitSet> mineArrayWritten = new HashMap<>();
         for (Commit c : mineOnly) {
             c.changes().forEach((number, changes) -> {
                 if (changes instanceof FieldChanges f) {
-                    mineFieldsWritten.computeIfAbsent(number, n -> new HashSet<>()).addAll(f.fields());
+                    mineFieldsWritten.computeIfAbsent(number, n -> new BitSet()).or(f.written());
                 } else if (changes instanceof ArrayChanges a) {
                     mineArrayWritten.computeIfAbsent(number, n -> new BitSet()).or(a.written());
                 }
@@ -416,23 +416,23 @@ public final class DagView implements BranchingView {
         // First check for conflicts between mine and theirs
         Map<ObjectNumber, FieldChanges> resolved = new HashMap<>();
         if (!mineFieldsWritten.isEmpty() || !mineArrayWritten.isEmpty()) {
-            Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
+            Map<ObjectNumber, ConflictingLocations.FieldSlots> fieldConflicts = new HashMap<>();
             Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
             for (Commit c : theirsOnly) {
                 c.changes().forEach((number, changes) -> {
                     if (changes instanceof FieldChanges f) {
-                        Set<Field> mine = mineFieldsWritten.get(number);
+                        BitSet mine = mineFieldsWritten.get(number);
                         if (mine != null) {
-                            for (Field field : f.fields()) {
-                                if (!mine.contains(field)) {
-                                    continue;
-                                }
+                            // the slots both sides wrote
+                            BitSet both = f.written();
+                            both.and(mine);
+                            for (int slot = both.nextSetBit(0); slot >= 0; slot = both.nextSetBit(slot + 1)) {
+                                Field field = f.field(slot);
                                 if (field.isResolvedByTheirs()) {
                                     // theirsOnly is newest first, so the first value met is the one to take
-                                    FieldChanges taken = resolved.computeIfAbsent(number, n -> FieldChanges.of(new HashMap<>()));
-                                    taken.values().putIfAbsent(field, f.get(field));
+                                    resolved.computeIfAbsent(number, n -> FieldChanges.empty(f.table())).putIfAbsent(field, f.get(field));
                                 } else {
-                                    fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                                    ConflictingLocations.FieldSlots.add(fieldConflicts, number, f.table(), slot);
                                 }
                             }
                         }
@@ -498,6 +498,7 @@ public final class DagView implements BranchingView {
     @Override
     public void end() {
         commitStaging();
+        ModelEvents.threadClock(committer.clock());
 
         // after commit, try to compress the DAG
         runRefCountAbsorptionRecursively();

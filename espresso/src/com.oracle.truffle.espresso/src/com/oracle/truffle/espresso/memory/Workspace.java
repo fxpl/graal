@@ -25,10 +25,8 @@ package com.oracle.truffle.espresso.memory;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.util.BitSet;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
@@ -64,7 +62,7 @@ final class Workspace {
     /** The thread's value for {@code field} of {@code holder}, or null if it has none yet. */
     Object workingField(StaticObject holder, Field field) {
         WorkingObject w = workingObjects.get(holder.getObjectNumber());
-        return w == null ? null : w.values.get(field);
+        return w == null ? null : w.values[field.getSlot()];
     }
 
     /** The storage of the thread's working array for {@code array}, or null if it has none yet. */
@@ -75,7 +73,7 @@ final class Workspace {
 
     /** Bring {@code value}, from the thread's history, in as its value for {@code field} of {@code holder}, not staged. */
     void addWorkingField(StaticObject holder, Field field, Object value) {
-        workingObject(holder).values.put(field, value);
+        workingObject(holder, field).values[field.getSlot()] = value;
     }
 
     /** Bring {@code storage}, built from the thread's history, in as its working array for {@code array}, not staged. */
@@ -103,11 +101,14 @@ final class Workspace {
 
     /** Write {@code value} to {@code field} of {@code holder}, staged until the next commit. */
     void writeField(StaticObject holder, Field field, Object value) {
-        WorkingObject w = workingObject(holder);
-        w.values.put(field, value);
-        if (w.written.add(field)) {
+        WorkingObject w = workingObject(holder, field);
+        int slot = field.getSlot();
+        w.values[slot] = value;
+        // the first staged write to this object puts it among the staged
+        if (w.written.isEmpty()) {
             stagedObjects.put(holder.getObjectNumber(), w);
         }
+        w.written.set(slot);
         dropDead();
     }
 
@@ -129,7 +130,7 @@ final class Workspace {
     Staged stagedCounts() {
         int fields = 0;
         for (WorkingObject w : stagedObjects.values()) {
-            fields += w.written.size();
+            fields += w.written.cardinality();
         }
         long elements = 0;
         for (WorkingArray a : stagedArrays.values()) {
@@ -147,10 +148,10 @@ final class Workspace {
         return changes;
     }
 
-    /** The staged fields of object {@code number}, empty if none. */
-    Set<Field> stagedFields(ObjectNumber number) {
+    /** The slots of the staged fields of object {@code number}, copied, empty if none. */
+    BitSet stagedFields(ObjectNumber number) {
         WorkingObject w = stagedObjects.get(number);
-        return w == null ? Set.of() : Collections.unmodifiableSet(w.written);
+        return w == null ? new BitSet() : (BitSet) w.written.clone();
     }
 
     /** The staged elements of array {@code number}, copied, empty if none. */
@@ -159,13 +160,13 @@ final class Workspace {
         return a == null ? new BitSet() : (BitSet) a.written.clone();
     }
 
-    /** {@code fields} of object {@code number} are no longer staged, the thread's values for them left as they are. */
-    void unstage(ObjectNumber number, Set<Field> fields) {
+    /** The fields in {@code slots} of object {@code number} are no longer staged, the thread's values for them left as they are. */
+    void unstage(ObjectNumber number, BitSet slots) {
         WorkingObject w = stagedObjects.get(number);
         if (w == null) {
             return;
         }
-        w.written.removeAll(fields);
+        w.written.andNot(slots);
         if (w.written.isEmpty()) {
             stagedObjects.remove(number);
         }
@@ -215,16 +216,16 @@ final class Workspace {
             workingObjects.remove(number);
             WorkingObject staged = stagedObjects.remove(number);
             if (staged != null) {
-                ModelEvents.stagedFieldsDrained(staged.written.size());
+                ModelEvents.stagedFieldsDrained(staged.written.cardinality());
             }
         }
     }
 
-    // the thread's working object for holder, started empty if it has none
-    private WorkingObject workingObject(StaticObject holder) {
+    // the thread's working object for holder, started empty, laid out by field's table, if it has none
+    private WorkingObject workingObject(StaticObject holder, Field field) {
         WorkingObject w = workingObjects.get(holder.getObjectNumber());
         if (w == null) {
-            w = new WorkingObject();
+            w = new WorkingObject(WorkingObject.tableOf(holder, field));
             workingObjects.put(holder.getObjectNumber(), w);
             track(holder);
         }

@@ -22,7 +22,6 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -47,7 +46,7 @@ public final class ConflictReport {
 
     public String message() {
         String what = Stream.concat(
-                        locations.fields().values().stream().flatMap(Set::stream).map(ConflictReport::describe),
+                        locations.fields().values().stream().flatMap(ConflictingLocations.FieldSlots::fields).map(ConflictReport::describe),
                         locations.arrays().entrySet().stream().map(e -> "array " + e.getKey() + " at indices " + e.getValue()))
                         .sorted().collect(Collectors.joining(", "));
         return "Sync-as-Share conflict: incompatible concurrent update to " + what + ", caught at " + action + " in " + userCodeLocation;

@@ -29,10 +29,6 @@ package com.oracle.truffle.espresso.memory;
  */
 sealed interface StampedChanges permits StampedFieldChanges, StampedArrayChanges {
 
-    /** One write, with the epoch of the commit that made it. */
-    record Write(Object value, Epoch epoch) {
-    }
-
     /** New changes holding these writes updated with {@code newer}'s, newer winning where both wrote. Neither is modified. */
     StampedChanges updateWith(StampedChanges newer);
 }

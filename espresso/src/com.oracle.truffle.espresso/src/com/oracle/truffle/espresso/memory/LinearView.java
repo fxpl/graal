@@ -26,7 +26,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -225,9 +224,9 @@ public final class LinearView implements MemoryView {
         }
 
         List<Commit> history = new ArrayList<>();
-        Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
+        Map<ObjectNumber, ConflictingLocations.FieldSlots> fieldConflicts = new HashMap<>();
         Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
-        Map<ObjectNumber, Set<Field>> takenFromTheirs = new HashMap<>();
+        Map<ObjectNumber, BitSet> takenFromTheirs = new HashMap<>();
         boolean mayConflict = !stagingEmpty();
 
         Commit curr = head;
@@ -239,15 +238,15 @@ public final class LinearView implements MemoryView {
             if (mayConflict) {
                 curr.changes().forEach((number, changes) -> {
                     if (changes instanceof FieldChanges f) {
-                        Set<Field> written = workspace.stagedFields(number);
-                        for (Field field : f.fields()) {
-                            if (!written.contains(field)) {
-                                continue;
-                            }
+                        // the slots both this commit and staging wrote
+                        BitSet both = workspace.stagedFields(number);
+                        both.and(f.written());
+                        for (int slot = both.nextSetBit(0); slot >= 0; slot = both.nextSetBit(slot + 1)) {
+                            Field field = f.field(slot);
                             if (field.isResolvedByTheirs()) {
-                                takenFromTheirs.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                                takenFromTheirs.computeIfAbsent(number, n -> new BitSet()).set(slot);
                             } else {
-                                fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                                ConflictingLocations.FieldSlots.add(fieldConflicts, number, f.table(), slot);
                             }
                         }
                     } else if (changes instanceof ArrayChanges a) {
@@ -272,11 +271,11 @@ public final class LinearView implements MemoryView {
         ModelEvents.pulled(history.size());
 
         // no conflicts, so now drop our writes to fields that take theirs, from staging and from push's copy
-        takenFromTheirs.forEach((number, fields) -> {
-            workspace.unstage(number, fields);
+        takenFromTheirs.forEach((number, slots) -> {
+            workspace.unstage(number, slots);
             if (collected.get(number) instanceof FieldChanges staged) {
-                staged.values().keySet().removeAll(fields);
-                if (staged.fields().isEmpty()) {
+                staged.remove(slots);
+                if (staged.isEmpty()) {
                     collected.remove(number);
                 }
             }
@@ -325,6 +324,11 @@ public final class LinearView implements MemoryView {
     // In linear every push is an atomic pull then push. To hold the global lock briefly, pull first
     // (taking the lock only to read the head), then under the lock pull again if the head has moved
     // since (usually a commit or two) and append our commit
+    // the thread's clock as it ends, for the stats
+    void reportClock() {
+        ModelEvents.threadClock(committer.clock());
+    }
+
     ConflictingLocations push() {
         purgeDead();
 

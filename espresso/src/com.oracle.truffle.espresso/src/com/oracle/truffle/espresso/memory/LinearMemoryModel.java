@@ -212,6 +212,7 @@ public final class LinearMemoryModel implements MemoryModel {
 
     @Override
     public void onThreadEnd() {
+        currentView().reportClock();
         ConflictingLocations conflicts = currentView().push();
         if (!conflicts.isEmpty()) {
             // A dying thread cannot act on a conflict, so it is left on the thread for every joiner to

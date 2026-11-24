@@ -172,6 +172,20 @@ final class ModelEvents {
     static final class Committing extends Event {
     }
 
+    /** A thread's clock as the thread ends, its length growing with every thread it has heard of. */
+    @Name(PREFIX + "ThreadClock") @Label("Thread clock") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)
+    static final class ThreadClock extends Event {
+        @Label("Entries") int entries;
+    }
+
+    static void threadClock(Clock clock) {
+        ThreadClock e = new ThreadClock();
+        if (e.isEnabled()) {
+            e.entries = clock.entries();
+            e.commit();
+        }
+    }
+
     /** A read that found no working value, answered from the thread's snapshot or from version 0. */
     @Name(PREFIX + "SnapshotRead") @Label("Snapshot read") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)
     static final class SnapshotRead extends Event {

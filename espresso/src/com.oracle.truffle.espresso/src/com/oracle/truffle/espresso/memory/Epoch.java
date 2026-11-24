@@ -44,6 +44,12 @@ record Epoch(int thread, int sequence) implements Clock {
         return this;
     }
 
+    // one thread's counter, whatever the number of threads
+    @Override
+    public int entries() {
+        return 1;
+    }
+
     /** Exact within one thread, and false for another thread's epoch, which says nothing either way. */
     @Override
     public boolean happensBefore(Clock other) {

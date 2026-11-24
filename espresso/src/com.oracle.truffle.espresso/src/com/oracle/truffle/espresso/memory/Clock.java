@@ -41,4 +41,7 @@ interface Clock {
      * the caller walks.
      */
     boolean happensBefore(Clock other);
+
+    /** How many counters this clock holds, which every tick copies and every join and comparison walks. */
+    int entries();
 }

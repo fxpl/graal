@@ -24,7 +24,7 @@ package com.oracle.truffle.espresso.memory;
 
 import java.util.BitSet;
 import java.util.Map;
-import java.util.Set;
+import java.util.stream.Stream;
 
 import com.oracle.truffle.espresso.impl.Field;
 
@@ -32,9 +32,22 @@ import com.oracle.truffle.espresso.impl.Field;
  * The locations written on both sides of a merge: for each object the fields, and for each array the
  * indices, both sides wrote.
  */
-record ConflictingLocations(Map<ObjectNumber, Set<Field>> fields, Map<ObjectNumber, BitSet> arrays) {
+record ConflictingLocations(Map<ObjectNumber, FieldSlots> fields, Map<ObjectNumber, BitSet> arrays) {
 
     static final ConflictingLocations NONE = new ConflictingLocations(Map.of(), Map.of());
+
+    /** An object's fields by slot, with its field table to name them. */
+    record FieldSlots(Field[] table, BitSet slots) {
+        // mark the field in slot of object number, starting the object's slots if it has none
+        static void add(Map<ObjectNumber, FieldSlots> conflicts, ObjectNumber number, Field[] table, int slot) {
+            conflicts.computeIfAbsent(number, n -> new FieldSlots(table, new BitSet())).slots().set(slot);
+        }
+
+        // the fields named, for the report
+        Stream<Field> fields() {
+            return slots.stream().mapToObj(slot -> table[slot]);
+        }
+    }
 
     boolean isEmpty() {
         return fields.isEmpty() && arrays.isEmpty();

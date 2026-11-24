@@ -22,67 +22,140 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
+import java.util.BitSet;
+import java.util.function.BiConsumer;
 
 import com.oracle.truffle.espresso.impl.Field;
 
-/** The writes to an object's fields: each field written, with its (boxed) value. */
+/** The writes to an object's fields, laid out as the object is, by each field's slot, with their (boxed) values. */
 final class FieldChanges implements ObjectChanges {
 
-    private final Map<Field, Object> values;
+    // the holder's field table, the class's own, which maps a slot back to its field
+    private final Field[] table;
+    // each slot's written value, null where it was not written (guest null is StaticObject.NULL)
+    private final Object[] values;
 
-    private FieldChanges(Map<Field, Object> values) {
+    private FieldChanges(Field[] table, Object[] values) {
+        this.table = table;
         this.values = values;
     }
 
     /** The written fields of {@code w}, with their values. */
     static FieldChanges of(WorkingObject w) {
-        Map<Field, Object> written = HashMap.newHashMap(w.written.size());
-        for (Field field : w.written) {
-            written.put(field, w.values.get(field));
+        Object[] written = new Object[w.table.length];
+        for (int slot = w.written.nextSetBit(0); slot >= 0; slot = w.written.nextSetBit(slot + 1)) {
+            written[slot] = w.values[slot];
         }
-        return new FieldChanges(written);
+        return new FieldChanges(w.table, written);
     }
 
-    /** These values, as written to their fields. */
-    static FieldChanges of(Map<Field, Object> values) {
-        return new FieldChanges(values);
+    /** The writes in {@code values}, by slot of {@code table}, null where unwritten. Takes ownership of values. */
+    static FieldChanges of(Field[] table, Object[] values) {
+        return new FieldChanges(table, values);
+    }
+
+    /** No writes yet to an object laid out by {@code table}, for writes chosen one by one. */
+    static FieldChanges empty(Field[] table) {
+        return new FieldChanges(table, new Object[table.length]);
+    }
+
+    Field[] table() {
+        return table;
     }
 
     /** The value written to {@code field}, or null if it was not written. */
     Object get(Field field) {
-        return values.get(field);
+        return values[field.getSlot()];
     }
 
-    Set<Field> fields() {
-        return values.keySet();
+    /** Write {@code value} to {@code field}, unless it is already written. */
+    void putIfAbsent(Field field, Object value) {
+        if (values[field.getSlot()] == null) {
+            values[field.getSlot()] = value;
+        }
     }
 
-    Map<Field, Object> values() {
-        return values;
+    /** The field in {@code slot}. */
+    Field field(int slot) {
+        return table[slot];
+    }
+
+    /** The written slots, a new set the caller may change. */
+    BitSet written() {
+        BitSet written = new BitSet(values.length);
+        for (int slot = 0; slot < values.length; slot++) {
+            if (values[slot] != null) {
+                written.set(slot);
+            }
+        }
+        return written;
+    }
+
+    boolean isEmpty() {
+        for (Object value : values) {
+            if (value != null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Each written field with its value, in slot order. */
+    void forEachWritten(BiConsumer<Field, Object> action) {
+        for (int slot = 0; slot < values.length; slot++) {
+            if (values[slot] != null) {
+                action.accept(table[slot], values[slot]);
+            }
+        }
+    }
+
+    /** The writes to {@code slots} are dropped. */
+    void remove(BitSet slots) {
+        for (int slot = slots.nextSetBit(0); slot >= 0; slot = slots.nextSetBit(slot + 1)) {
+            values[slot] = null;
+        }
     }
 
     /** Write these values into {@code w}'s working values (its written marks are left alone). */
     void applyTo(WorkingObject w) {
-        w.values.putAll(values);
+        assert w.table.length == table.length : "changes laid out differently from the working object";
+        for (int slot = 0; slot < values.length; slot++) {
+            if (values[slot] != null) {
+                w.values[slot] = values[slot];
+            }
+        }
     }
 
     @Override
     public ObjectChanges createFoldWithOlder(ObjectChanges older) {
-        Map<Field, Object> folded = new HashMap<>(((FieldChanges) older).values);
-        folded.putAll(values);
-        return new FieldChanges(folded);
+        // the older writes, then these over them
+        Object[] folded = ((FieldChanges) older).values.clone();
+        overlay(values, folded);
+        return new FieldChanges(table, folded);
     }
 
     @Override
     public void putAll(ObjectChanges newer) {
-        values.putAll(((FieldChanges) newer).values);
+        overlay(((FieldChanges) newer).values, values);
     }
 
     @Override
     public long writeCount() {
-        return values.size();
+        long count = 0;
+        for (Object value : values) {
+            if (value != null) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // the written slots of from copied into to
+    private static void overlay(Object[] from, Object[] to) {
+        for (int slot = 0; slot < from.length; slot++) {
+            if (from[slot] != null) {
+                to[slot] = from[slot];
+            }
+        }
     }
 }

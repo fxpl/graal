@@ -48,6 +48,12 @@ final class VectorClock implements Clock {
         return new VectorClock(thread);
     }
 
+    // one counter for every thread this clock has heard of, up to the highest id
+    @Override
+    public int entries() {
+        return clock.length;
+    }
+
     @Override
     public VectorClock tick() {
         VectorClock c = new VectorClock(thread, clock.clone());

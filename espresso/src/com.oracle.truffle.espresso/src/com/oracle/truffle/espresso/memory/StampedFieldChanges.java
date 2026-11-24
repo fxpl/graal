@@ -22,41 +22,73 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.HashMap;
-import java.util.Map;
-
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.meta.EspressoError;
 
-/** An object's latest field writes in a {@link Snapshot}, each stamped with the epoch of the commit that made it. */
+/**
+ * An object's latest field writes in a {@link Snapshot}, laid out as the object is, by each field's slot,
+ * each stamped with the epoch of the commit that made it.
+ */
 final class StampedFieldChanges implements StampedChanges {
 
-    private final Map<Field, Write> writes;
+    // the holder's field table, the class's own, which maps a slot back to its field
+    private final Field[] table;
+    // each slot's latest value, null where it was never written
+    private final Object[] values;
+    // the epoch of each slot's latest write, null where it was never written
+    private final Epoch[] epochs;
 
-    private StampedFieldChanges(Map<Field, Write> writes) {
-        this.writes = writes;
+    private StampedFieldChanges(Field[] table, Object[] values, Epoch[] epochs) {
+        this.table = table;
+        this.values = values;
+        this.epochs = epochs;
     }
 
     /** The values of {@code changes}, each stamped with {@code epoch}, the epoch of the commit making them. */
     static StampedFieldChanges of(FieldChanges changes, Epoch epoch) {
-        Map<Field, Write> stamped = HashMap.newHashMap(changes.values().size());
-        changes.values().forEach((field, value) -> stamped.put(field, new Write(value, epoch)));
-        return new StampedFieldChanges(Map.copyOf(stamped));
+        Field[] table = changes.table();
+        Object[] values = new Object[table.length];
+        Epoch[] epochs = new Epoch[table.length];
+        changes.forEachWritten((field, value) -> {
+            values[field.getSlot()] = value;
+            epochs[field.getSlot()] = epoch;
+        });
+        return new StampedFieldChanges(table, values, epochs);
     }
 
-    /** Writes already chosen, each keeping its own epoch, as when a merge takes some from each side. */
-    static StampedFieldChanges of(Map<Field, Write> writes) {
-        return new StampedFieldChanges(Map.copyOf(writes));
+    /** Writes already chosen, each keeping its own epoch, as when a merge takes some from each side. Takes ownership of both arrays. */
+    static StampedFieldChanges of(Field[] table, Object[] values, Epoch[] epochs) {
+        return new StampedFieldChanges(table, values, epochs);
     }
 
-    /** The latest write to {@code field}, or null if there is none. */
-    Write get(Field field) {
-        return writes.get(field);
+    Field[] table() {
+        return table;
     }
 
-    /** Every field's latest write, which cannot be modified. */
-    Map<Field, Write> writes() {
-        return writes;
+    /** The latest value written to {@code field}, or null if it was never written. */
+    Object value(Field field) {
+        return values[field.getSlot()];
+    }
+
+    /** Each slot's latest value, which must not be modified. */
+    Object[] values() {
+        return values;
+    }
+
+    /** Each slot's latest write epoch, null where unwritten, which must not be modified. */
+    Epoch[] epochs() {
+        return epochs;
+    }
+
+    /** The number of fields written. */
+    int writeCount() {
+        int count = 0;
+        for (Epoch epoch : epochs) {
+            if (epoch != null) {
+                count++;
+            }
+        }
+        return count;
     }
 
     @Override
@@ -64,9 +96,15 @@ final class StampedFieldChanges implements StampedChanges {
         if (!(newer instanceof StampedFieldChanges n)) {
             throw EspressoError.shouldNotReachHere("an object's changes are always of one kind");
         }
-        // these writes, with the fields newer wrote replaced
-        Map<Field, Write> updated = new HashMap<>(writes);
-        updated.putAll(n.writes);
-        return new StampedFieldChanges(Map.copyOf(updated));
+        // these writes, with the slots newer wrote replaced
+        Object[] updatedValues = values.clone();
+        Epoch[] updatedEpochs = epochs.clone();
+        for (int slot = 0; slot < n.epochs.length; slot++) {
+            if (n.epochs[slot] != null) {
+                updatedValues[slot] = n.values[slot];
+                updatedEpochs[slot] = n.epochs[slot];
+            }
+        }
+        return new StampedFieldChanges(table, updatedValues, updatedEpochs);
     }
 }

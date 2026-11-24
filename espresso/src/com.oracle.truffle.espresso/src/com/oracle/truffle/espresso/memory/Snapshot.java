@@ -25,12 +25,9 @@ package com.oracle.truffle.espresso.memory;
 import java.lang.reflect.Array;
 import java.util.BitSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import com.oracle.truffle.espresso.impl.Field;
-import com.oracle.truffle.espresso.memory.StampedChanges.Write;
 import com.oracle.truffle.espresso.meta.EspressoError;
 
 final class Snapshot {
@@ -66,7 +63,7 @@ final class Snapshot {
         int[] arrays = {0};
         Treap<ObjectNumber, StampedChanges> live = objects.removeIf(ObjectNumber::isDead, (number, changes) -> {
             if (changes instanceof StampedFieldChanges f) {
-                fieldWrites[0] += f.writes().size();
+                fieldWrites[0] += f.writeCount();
             } else {
                 arrays[0]++;
             }
@@ -127,7 +124,7 @@ final class Snapshot {
     private static final class ClockResolver implements Treap.Resolver<ObjectNumber, StampedChanges> {
         private final VectorClock myClock;
         private final VectorClock theirClock;
-        final Map<ObjectNumber, Set<Field>> fieldConflicts = new HashMap<>();
+        final Map<ObjectNumber, ConflictingLocations.FieldSlots> fieldConflicts = new HashMap<>();
         final Map<ObjectNumber, BitSet> arrayConflicts = new HashMap<>();
         // the values taken from their side, which the puller's working copies then take too
         final Map<ObjectNumber, ObjectChanges> taken = new HashMap<>();
@@ -157,40 +154,42 @@ final class Snapshot {
         }
 
         private StampedChanges resolveFields(ObjectNumber number, StampedFieldChanges m, StampedFieldChanges t) {
-            Map<Field, Write> mine = m.writes();
+            Epoch[] mine = m.epochs();
+            Epoch[] theirs = t.epochs();
+            assert mine.length == theirs.length : "one object's changes laid out by two tables";
             // only made once something is taken
-            Map<Field, Object> takenValues = null;
-            // whether every field so far comes out as theirs, and how many of my fields they also wrote
+            Object[] takenValues = null;
+            // whether every field so far comes out as theirs
             boolean isAllTheirs = true;
-            int alsoMine = 0;
             boolean isConflicted = false;
-            for (Map.Entry<Field, Write> e : t.writes().entrySet()) {
-                Field field = e.getKey();
-                Write theirWrite = e.getValue();
-                Write myWrite = mine.get(field);
-                if (myWrite != null) {
-                    alsoMine++;
+            for (int slot = 0; slot < mine.length; slot++) {
+                Epoch myEpoch = mine[slot];
+                Epoch theirEpoch = theirs[slot];
+                if (theirEpoch == null) {
+                    // they never wrote it, so a field only I wrote is not theirs
+                    isAllTheirs &= myEpoch == null;
+                    continue;
                 }
-                if (myWrite == null) {
-                    // only they wrote it, so it is taken
-                } else if (myWrite.equals(theirWrite)) {
+                if (myEpoch != null && myEpoch.equals(theirEpoch)) {
                     // the same write, which is as much theirs as mine
                     continue;
-                } else if (myClock.hasSeen(theirWrite.epoch())) {
+                }
+                if (myEpoch != null && myClock.hasSeen(theirEpoch)) {
                     // I have seen theirs, so mine is newer and the result is not all theirs
                     isAllTheirs = false;
                     continue;
-                } else if (!theirClock.hasSeen(myWrite.epoch()) && !field.isResolvedByTheirs()) {
+                }
+                if (myEpoch != null && !theirClock.hasSeen(myEpoch) && !t.table()[slot].isResolvedByTheirs()) {
                     // neither has seen the other's write
-                    fieldConflicts.computeIfAbsent(number, n -> new HashSet<>()).add(field);
+                    ConflictingLocations.FieldSlots.add(fieldConflicts, number, t.table(), slot);
                     isConflicted = true;
                     continue;
                 }
-                // theirs is newer, or the field takes theirs regardless
+                // only they wrote it, they have seen mine, or the field takes theirs regardless
                 if (takenValues == null) {
-                    takenValues = new HashMap<>();
+                    takenValues = new Object[theirs.length];
                 }
-                takenValues.put(field, theirWrite.value());
+                takenValues[slot] = t.values()[slot];
             }
 
             // a conflict throws the merge away, so there is nothing to build
@@ -198,10 +197,10 @@ final class Snapshot {
                 return m;
             }
             if (takenValues != null) {
-                taken.put(number, FieldChanges.of(takenValues));
+                taken.put(number, FieldChanges.of(t.table(), takenValues));
             }
-            // all theirs, with no field only I wrote, is their changes, so the union can keep their node
-            if (isAllTheirs && alsoMine == mine.size()) {
+            // every field as theirs is their changes, so the union can keep their node
+            if (isAllTheirs) {
                 return t;
             }
             // nothing taken is my changes
@@ -209,11 +208,15 @@ final class Snapshot {
                 return m;
             }
             // a mix, so only now built, my writes with the taken ones over them
-            Map<Field, Write> result = new HashMap<>(mine);
-            for (Field field : takenValues.keySet()) {
-                result.put(field, t.get(field));
+            Object[] values = m.values().clone();
+            Epoch[] epochs = mine.clone();
+            for (int slot = 0; slot < takenValues.length; slot++) {
+                if (takenValues[slot] != null) {
+                    values[slot] = takenValues[slot];
+                    epochs[slot] = theirs[slot];
+                }
             }
-            return StampedFieldChanges.of(result);
+            return StampedFieldChanges.of(m.table(), values, epochs);
         }
 
         private StampedChanges resolveElements(ObjectNumber number, StampedArrayChanges m, StampedArrayChanges t) {
@@ -286,9 +289,8 @@ final class Snapshot {
         public void taken(ObjectNumber number, StampedChanges theirs) {
             theirsOnly++;
             if (theirs instanceof StampedFieldChanges t) {
-                Map<Field, Object> values = HashMap.newHashMap(t.writes().size());
-                t.writes().forEach((field, write) -> values.put(field, write.value()));
-                taken.put(number, FieldChanges.of(values));
+                // a copy, as field changes can be modified and the snapshot's values cannot
+                taken.put(number, FieldChanges.of(t.table(), t.values().clone()));
             } else if (theirs instanceof StampedArrayChanges t) {
                 BitSet written = new BitSet();
                 for (int i = 0; i < t.epochs().length; i++) {

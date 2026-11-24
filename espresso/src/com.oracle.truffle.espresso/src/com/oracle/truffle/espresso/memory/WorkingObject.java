@@ -22,19 +22,41 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.BitSet;
 
 import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.ObjectKlass;
+import com.oracle.truffle.espresso.meta.EspressoError;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
- * A view's copy of the fields of a versioned object it has accessed: the value it sees for each field
- * it has read or written, and the fields written since the view last committed.
+ * A view's copy of the fields of a versioned object it has accessed, laid out as the object is, by each
+ * field's slot: the value it sees for each field it has read or written, and the fields written since the
+ * view last committed.
  */
 final class WorkingObject {
 
-    final Map<Field, Object> values = new HashMap<>();
-    final Set<Field> written = new HashSet<>();
+    // the holder's field table, the class's own, which maps a slot back to its field
+    final Field[] table;
+    // the value the view sees in each slot, null until read or written (guest null is StaticObject.NULL)
+    final Object[] values;
+    // the slots written since the view last committed
+    final BitSet written = new BitSet();
+
+    WorkingObject(Field[] table) {
+        this.table = table;
+        this.values = new Object[table.length];
+    }
+
+    // the field table holder's fields index, its class's statics for a static field and its instance fields otherwise
+    static Field[] tableOf(StaticObject holder, Field field) {
+        assert field.getSlot() >= 0 : "an extension field reached the model";
+        if (field.isStatic()) {
+            return field.getDeclaringKlass().getStaticFieldTable();
+        }
+        if (holder.getKlass() instanceof ObjectKlass k) {
+            return k.getFieldTable();
+        }
+        throw EspressoError.shouldNotReachHere("a field of an object with no instance fields");
+    }
 }
