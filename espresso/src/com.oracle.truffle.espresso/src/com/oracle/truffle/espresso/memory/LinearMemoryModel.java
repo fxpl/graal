@@ -60,10 +60,12 @@ public final class LinearMemoryModel implements MemoryModel {
         this.context = context;
         this.deadObjectCount = new AtomicLong(0);
         this.clocks = clocks;
+        VersioningStats.startSampling();
     }
 
     @Override
     public void dispose() {
+        VersioningStats.stopSampling();
         VersioningStats.report("linear", cleaner);
     }
 

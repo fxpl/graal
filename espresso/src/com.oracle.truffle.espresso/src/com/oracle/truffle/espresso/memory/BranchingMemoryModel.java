@@ -100,6 +100,7 @@ public final class BranchingMemoryModel implements MemoryModel {
     private BranchingMemoryModel(EspressoContext context, BranchingRepresentation representation) {
         this.context = context;
         this.representation = representation;
+        VersioningStats.startSampling();
     }
 
     /** The branching model with its versions kept as a commit DAG. */
@@ -114,6 +115,7 @@ public final class BranchingMemoryModel implements MemoryModel {
 
     @Override
     public void dispose() {
+        VersioningStats.stopSampling();
         representation.dispose(cleaner);
     }
 

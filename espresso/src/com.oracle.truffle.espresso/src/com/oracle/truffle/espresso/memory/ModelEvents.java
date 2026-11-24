@@ -399,6 +399,24 @@ final class ModelEvents {
     static final class MergeWalk extends Event {
     }
 
+    // The state during the run, emitted at the period a recording sets
+
+    /**
+     * What the sync states hold at one moment, for watching it grow and shrink over a run. States whose
+     * owner has died count until the GC has cleared them.
+     */
+    @Name(PREFIX + "Sample") @Label("Sample") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)
+    static final class Sample extends Event {
+        @Label("Live sync states") long live;
+        @Label("Live thread states") long threads;
+        @Label("Distinct clocks held") long clocks;
+        @Label("Entries summed over the distinct clocks") long clockEntries;
+        @Label("Longest clock held") long longestClock;
+        @Label("Distinct versions held") long versions;
+        @Label("Entries summed over the distinct snapshots") long snapshotEntries;
+        @Label("Distinct treap nodes reachable") long snapshotNodes;
+    }
+
     // The state left at the end, emitted once as the context closes
 
     @Name(PREFIX + "SyncStates") @Label("Sync states") @Category({"Espresso", "Sync-as-Share"}) @Enabled(false) @StackTrace(false)

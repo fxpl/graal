@@ -47,6 +47,8 @@ import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
+import jdk.jfr.FlightRecorder;
+
 /**
  * The state a versioned model leaves at the end of a run, reported once as the context closes. What
  * happens during the run is reported as it happens, by {@link ModelEvents}.
@@ -123,6 +125,64 @@ final class VersioningStats {
         if (NAMING) {
             commitsMade.put(commit, names.get(thread) + " #" + threadCommits.get()[0] + (merge ? " merge" : ""));
         }
+    }
+
+    // the hook a recording calls at the Sample event's period, registered while a model runs
+    private static final Runnable SAMPLER = VersioningStats::sample;
+
+    /** Emit a {@link ModelEvents.Sample} at the period a recording sets, until {@link #stopSampling}. */
+    static void startSampling() {
+        FlightRecorder.addPeriodicEvent(ModelEvents.Sample.class, SAMPLER);
+    }
+
+    static void stopSampling() {
+        FlightRecorder.removePeriodicEvent(SAMPLER);
+    }
+
+    // What the sync states hold now. It runs on the recorder's own thread while guest threads keep setting
+    // their states, so each state is read once and the counts are of what each held at its read
+    private static void sample() {
+        ModelEvents.Sample e = new ModelEvents.Sample();
+        if (!e.isEnabled()) {
+            return;
+        }
+        List<SyncState<?>> states = new ArrayList<>();
+        synchronized (CommitSyncState.ALL) {
+            states.addAll(CommitSyncState.ALL);
+        }
+        synchronized (SnapshotSyncState.ALL) {
+            states.addAll(SnapshotSyncState.ALL);
+        }
+        // a clock or version held by several states counts once
+        Set<Clock> clocks = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<Object> versions = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (SyncState<?> s : states) {
+            if (s.kind == SyncState.Kind.THREAD) {
+                e.threads++;
+            }
+            Clock clock = s instanceof CommitSyncState c ? c.clock : s instanceof SnapshotSyncState n ? n.clock : null;
+            if (clock != null && clocks.add(clock)) {
+                e.clockEntries += clock.entries();
+                e.longestClock = Math.max(e.longestClock, clock.entries());
+            }
+            Object version = s.get();
+            if (version != null && version != Snapshot.EMPTY) {
+                versions.add(version);
+            }
+        }
+        // the snapshots' entries, and their nodes with a node shared by several snapshots counted once
+        Set<Object> nodes = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Object version : versions) {
+            if (version instanceof Snapshot snapshot) {
+                e.snapshotEntries += snapshot.size();
+                snapshot.addNodesTo(nodes);
+            }
+        }
+        e.live = states.size();
+        e.clocks = clocks.size();
+        e.versions = versions.size();
+        e.snapshotNodes = nodes.size();
+        e.commit();
     }
 
     /**

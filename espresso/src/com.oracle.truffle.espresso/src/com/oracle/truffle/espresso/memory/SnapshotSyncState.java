@@ -40,10 +40,11 @@ final class SnapshotSyncState extends SyncState<Snapshot> {
     // each pair of writes, and which for a thread's own state is that thread's clock
     VectorClock clock;
 
-    // every live state, for the snapshots report at exit, held weakly so dead states drop out. Only kept when
-    // that report is recorded, which a recording begun with the host VM decides before this class loads
+    // every live state, for the snapshots report at exit and the samples during the run, held weakly so dead
+    // states drop out. Only kept when either is recorded, which a recording begun with the host VM decides
+    // before this class loads
     static final Set<SnapshotSyncState> ALL = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
-    private static final boolean IS_REGISTERED = new ModelEvents.Snapshots().isEnabled();
+    private static final boolean IS_REGISTERED = new ModelEvents.Snapshots().isEnabled() || new ModelEvents.Sample().isEnabled();
 
     SnapshotSyncState(Kind kind) {
         super(kind);
