@@ -188,7 +188,7 @@ public final class DagView implements BranchingView {
             // parents before changes: a concurrent absorb swaps changes then parents, so new parents
             // guarantee the new changes are seen too
             Set<Commit> parents = current.parents();
-            found = current.changesTo(number) instanceof FieldChanges f ? f.get(field) : null;
+            found = current.changesTo(number) instanceof FieldChanges f ? ValueVersion.unwrap(f.get(field)) : null;
             if (found != null) {
                 break;
             }

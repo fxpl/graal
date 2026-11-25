@@ -26,6 +26,7 @@ import java.lang.reflect.Array;
 import java.util.BitSet;
 
 import com.oracle.truffle.espresso.meta.EspressoError;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /** An array's latest element writes in a {@link Snapshot}, each stamped with the epoch of the commit that made it. */
 final class StampedArrayChanges implements StampedChanges {
@@ -78,6 +79,15 @@ final class StampedArrayChanges implements StampedChanges {
 
     /** Copy the written elements into {@code storage}, a working array of the same length. */
     void applyTo(Object storage) {
+        // a reference array's elements are held weakly, so they are unwrapped one by one into the strong storage
+        if (storage instanceof StaticObject[] s && values instanceof Object[] versions) {
+            for (int i = 0; i < epochs.length; i++) {
+                if (epochs[i] != null) {
+                    s[i] = ValueVersion.unwrapReference(versions[i]);
+                }
+            }
+            return;
+        }
         copyWritten(epochs, values, storage);
     }
 

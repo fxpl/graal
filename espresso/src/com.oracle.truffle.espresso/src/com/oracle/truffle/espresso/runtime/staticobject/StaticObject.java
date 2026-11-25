@@ -23,6 +23,8 @@
 package com.oracle.truffle.espresso.runtime.staticobject;
 
 import java.lang.reflect.Array;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 import com.oracle.truffle.api.CompilerDirectives;
@@ -92,6 +94,10 @@ public class StaticObject implements TruffleObject, Cloneable {
     // some thread has written this object through the memory model (until then every field is at version 0)
     private boolean hasVersionedWrite;
     private boolean isCleanerRegistered;
+    // the values this object's fields or elements hold in any version, held strongly here because
+    // versions hold them weakly, so they die with this object
+    // created on the first pin, as most objects never have a reference written through the model
+    private volatile Set<StaticObject> pins;
 
     // region Constructors
     protected StaticObject(Klass klass, ObjectNumber objectNumber) {
@@ -609,6 +615,8 @@ public class StaticObject implements TruffleObject, Cloneable {
         this.objectNumber = objectNumber;
         this.hasVersionedWrite = false;
         this.isCleanerRegistered = false;
+        // the copy has no versions yet, and must not share the original's set
+        this.pins = null;
         // a fresh copy, which nothing else can reach yet (unless the model is still off)
         this.shared = builtBeforeVersioning(getKlass());
         this.versioned = false;
@@ -631,6 +639,24 @@ public class StaticObject implements TruffleObject, Cloneable {
 
     public void markCleanerRegistered() {
         isCleanerRegistered = true;
+    }
+
+    // keeps value alive for as long as this object is, for a version that holds it weakly
+    public void pin(StaticObject value) {
+        Set<StaticObject> p = pins;
+        if (p == null) {
+            p = createPins();
+        }
+        p.add(value);
+    }
+
+    // outlined with truffle boundary to keep the host monitor out of compiled code
+    @TruffleBoundary
+    private synchronized Set<StaticObject> createPins() {
+        if (pins == null) {
+            pins = ConcurrentHashMap.newKeySet();
+        }
+        return pins;
     }
 
     // region Factory interface.

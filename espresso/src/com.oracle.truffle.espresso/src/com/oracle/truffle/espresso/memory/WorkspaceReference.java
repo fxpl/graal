@@ -22,16 +22,19 @@
  */
 package com.oracle.truffle.espresso.memory;
 
-import java.lang.ref.PhantomReference;
 import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
-class StagedReference extends PhantomReference<StaticObject> {
+// a working object's or array's reference to its object, queued when the object dies
+// weak rather than phantom so a commit can reach the object, which has no finalizer, so it is
+// queued at the same point either way
+class WorkspaceReference extends WeakReference<StaticObject> {
 
     final ObjectNumber number;
 
-    StagedReference(StaticObject referent, ObjectNumber number, ReferenceQueue<StaticObject> queue) {
+    WorkspaceReference(StaticObject referent, ObjectNumber number, ReferenceQueue<StaticObject> queue) {
         super(referent, queue);
         this.number = number;
     }

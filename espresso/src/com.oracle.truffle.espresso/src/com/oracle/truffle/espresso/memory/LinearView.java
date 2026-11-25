@@ -116,7 +116,7 @@ public final class LinearView implements MemoryView {
             // get parents before changes as a concurrent absorb swaps changes then parents
             Set<Commit> parents = c.parents();
             visited++;
-            Object value = c.changesTo(number) instanceof FieldChanges f ? f.get(field) : null;
+            Object value = c.changesTo(number) instanceof FieldChanges f ? ValueVersion.unwrap(f.get(field)) : null;
             if (value != null) {
                 ModelEvents.readWalked(visited, true);
                 return value;
@@ -308,14 +308,6 @@ public final class LinearView implements MemoryView {
         }
     }
 
-    /** The staged writes as the changes of a commit; staging itself is left as it is (see emptyChanges) */
-    private Map<ObjectNumber, ObjectChanges> collectChanges() {
-
-        // The staged fields of each live object, plus the staged elements of each live array, copied: they
-        // stay staged until the commit is appended, as a conflict must leave staging untouched
-        return workspace.stagedChanges();
-    }
-
     // Clear staging once the commit holding it is appended
     private void emptyChanges() {
         workspace.commitStaged();
@@ -337,7 +329,8 @@ public final class LinearView implements MemoryView {
             return conflicts;
         }
 
-        Map<ObjectNumber, ObjectChanges> changes = collectChanges();
+        // copied, they stay staged until the commit is appended, as a conflict must leave staging untouched
+        Map<ObjectNumber, ObjectChanges> changes = workspace.stagedChanges();
         if (changes.isEmpty()) {
             return ConflictingLocations.NONE;
         }

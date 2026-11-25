@@ -40,11 +40,12 @@ final class FieldChanges implements ObjectChanges {
         this.values = values;
     }
 
-    /** The written fields of {@code w}, with their values. */
+    /** The written fields of {@code w}, with their values, objects and arrays held weakly. */
     static FieldChanges of(WorkingObject w) {
         Object[] written = new Object[w.table.length];
         for (int slot = w.written.nextSetBit(0); slot >= 0; slot = w.written.nextSetBit(slot + 1)) {
-            written[slot] = w.values[slot];
+            // the object w copies pins the value at commit, so the version need not keep it alive
+            written[slot] = ValueVersion.wrap(w.values[slot]);
         }
         return new FieldChanges(w.table, written);
     }
@@ -116,12 +117,12 @@ final class FieldChanges implements ObjectChanges {
         }
     }
 
-    /** Write these values into {@code w}'s working values (its written marks are left alone). */
+    /** Write these values into {@code w}'s working values, which hold them strongly (its written marks are left alone). */
     void applyTo(WorkingObject w) {
         assert w.table.length == table.length : "changes laid out differently from the working object";
         for (int slot = 0; slot < values.length; slot++) {
             if (values[slot] != null) {
-                w.values[slot] = values[slot];
+                w.values[slot] = ValueVersion.unwrap(values[slot]);
             }
         }
     }

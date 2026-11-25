@@ -32,9 +32,12 @@ final class WorkingArray {
 
     final Object storage;
     final BitSet written = new BitSet();
+    // the array this is a copy of, held weakly, queued when it dies so this copy is dropped
+    final WorkspaceReference object;
 
-    WorkingArray(Object storage) {
+    WorkingArray(Object storage, WorkspaceReference object) {
         this.storage = storage;
+        this.object = object;
     }
 
     void markWrittenRange(int from, int to) {

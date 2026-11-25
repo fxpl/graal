@@ -25,6 +25,8 @@ package com.oracle.truffle.espresso.memory;
 import java.lang.reflect.Array;
 import java.util.BitSet;
 
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+
 final class ArrayChanges implements ObjectChanges {
   Object changes;
   BitSet written;
@@ -46,8 +48,17 @@ final class ArrayChanges implements ObjectChanges {
   }
 
   static ArrayChanges of(WorkingArray w) {
-      Object values = Array.newInstance(w.storage.getClass().getComponentType(), Array.getLength(w.storage));
       BitSet written = (BitSet) w.written.clone();
+      // a reference array's version is an Object[] so it can hold its elements weakly, the array w copies
+      // pins them at commit
+      if (w.storage instanceof StaticObject[] storage) {
+          Object[] versions = new Object[storage.length];
+          for (int i = written.nextSetBit(0); i >= 0; i = written.nextSetBit(i + 1)) {
+              versions[i] = ValueVersion.wrap(storage[i]);
+          }
+          return new ArrayChanges(versions, written);
+      }
+      Object values = Array.newInstance(w.storage.getClass().getComponentType(), Array.getLength(w.storage));
       copyWritten(written, w.storage, values);
       return new ArrayChanges(values, written);
   }
@@ -62,6 +73,13 @@ final class ArrayChanges implements ObjectChanges {
   }
 
   void applyTo(Object storage) {
+      // a reference array's elements are held weakly, so they are unwrapped one by one into the strong storage
+      if (storage instanceof StaticObject[] s && changes instanceof Object[] versions) {
+          for (int i = written.nextSetBit(0); i >= 0; i = written.nextSetBit(i + 1)) {
+              s[i] = ValueVersion.unwrapReference(versions[i]);
+          }
+          return;
+      }
       copyWritten(written, changes, storage);
   }
 

@@ -111,7 +111,7 @@ final class SnapshotView implements BranchingView {
         }
 
         Snapshot snapshot = state().get();
-        value = snapshot.get(holder.getObjectNumber()) instanceof StampedFieldChanges f ? f.value(field) : null;
+        value = snapshot.get(holder.getObjectNumber()) instanceof StampedFieldChanges f ? ValueVersion.unwrap(f.value(field)) : null;
         ModelEvents.snapshotRead(value != null);
 
         if (value == null) {

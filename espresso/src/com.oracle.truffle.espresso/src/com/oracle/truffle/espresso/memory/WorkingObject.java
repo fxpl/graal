@@ -42,10 +42,13 @@ final class WorkingObject {
     final Object[] values;
     // the slots written since the view last committed
     final BitSet written = new BitSet();
+    // the object this is a copy of, held weakly, queued when it dies so this copy is dropped
+    final WorkspaceReference object;
 
-    WorkingObject(Field[] table) {
+    WorkingObject(Field[] table, WorkspaceReference object) {
         this.table = table;
         this.values = new Object[table.length];
+        this.object = object;
     }
 
     // the field table holder's fields index, its class's statics for a static field and its instance fields otherwise
